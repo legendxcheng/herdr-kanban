@@ -1,0 +1,12 @@
+Herdr Kanban — Windows x64
+
+双击同目录的 setup.exe 安装包进行安装。
+首次安装可以选择目录；同一 Windows 用户重复安装或升级时，会自动读取上次安装目录。
+更新前请正常退出 Herdr Kanban，完成安装后再打开。
+
+使用环境：Windows 10/11 x64。无需安装 Node.js、Rust 或 Python。
+若系统缺少 Microsoft Edge WebView2 Runtime，安装器会联网下载并安装它。
+Herdr 与 Codex CLI 需要自行安装配置；此安装包不包含它们，也不包含账户登录信息。
+
+任务数据库保存在 %APPDATA%\herdr-kanban\kanban.db，更新程序会保留它。
+此版本通过手动下载并运行新版安装包更新，不含自动检查更新功能。

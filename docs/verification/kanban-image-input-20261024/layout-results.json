@@ -1,0 +1,65 @@
+[
+  {
+    "dialog": {
+      "height": 552,
+      "width": 720,
+      "x": 90,
+      "y": 24
+    },
+    "height": 600,
+    "saveVisible": true,
+    "thumbnails": [
+      {
+        "height": 120,
+        "width": 120
+      },
+      {
+        "height": 120,
+        "width": 120
+      }
+    ],
+    "width": 900
+  },
+  {
+    "dialog": {
+      "height": 670.125,
+      "width": 720,
+      "x": 280,
+      "y": 64.9375
+    },
+    "height": 800,
+    "saveVisible": true,
+    "thumbnails": [
+      {
+        "height": 120,
+        "width": 120
+      },
+      {
+        "height": 120,
+        "width": 120
+      }
+    ],
+    "width": 1280
+  },
+  {
+    "dialog": {
+      "height": 670.125,
+      "width": 720,
+      "x": 600,
+      "y": 204.9375
+    },
+    "height": 1080,
+    "saveVisible": true,
+    "thumbnails": [
+      {
+        "height": 120,
+        "width": 120
+      },
+      {
+        "height": 120,
+        "width": 120
+      }
+    ],
+    "width": 1920
+  }
+]

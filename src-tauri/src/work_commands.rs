@@ -1,0 +1,208 @@
+use crate::terminal::{Output, TerminalManager};
+use crate::{models::DispatchRecord, workflow::Workflow};
+use std::sync::Arc;
+use tauri::{Emitter, State};
+
+#[tauri::command]
+pub async fn start_task(
+    app: State<'_, Arc<Workflow>>,
+    handle: tauri::AppHandle,
+    task_id: String,
+    operation_id: String,
+) -> Result<crate::lifecycle::Flow, String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.submit_start(
+            &task_id,
+            &operation_id,
+            Arc::new(move |event| {
+                let _ = handle.emit("task-start-changed", event);
+            }),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn complete_task(
+    app: State<'_, Arc<Workflow>>,
+    manager: State<'_, Arc<TerminalManager>>,
+    task_id: String,
+    operation_id: String,
+) -> Result<crate::lifecycle::Outcome, String> {
+    let app = app.inner().clone();
+    manager.close_task(&task_id);
+    tauri::async_runtime::spawn_blocking(move || app.complete_task(&task_id, &operation_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn recover_lifecycle(
+    app: State<'_, Arc<Workflow>>,
+    task_id: String,
+    operation_id: String,
+) -> Result<(), String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || app.recover_lifecycle(&task_id, &operation_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn herdr_list_agents(
+    app: State<'_, Arc<Workflow>>,
+    project_id: String,
+) -> Result<Vec<crate::agent_status::AgentChoice>, String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || app.list_agents(&project_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn dispatch_to_herdr(
+    app: State<'_, Arc<Workflow>>,
+    task_id: String,
+    agent_name: String,
+    prompt_text: String,
+    operation_id: String,
+    prompt_json: Option<String>,
+) -> Result<DispatchRecord, String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let saved: String = app
+            .db
+            .lock()
+            .map_err(|e| e.to_string())?
+            .query_row(
+                "SELECT prompt_json FROM tasks WHERE id=?1",
+                [&task_id],
+                |r| r.get(0),
+            )
+            .map_err(|_| "task.missing")?;
+        let document = prompt_json.as_deref().unwrap_or(&saved);
+        if !crate::images::document_images(document)?.is_empty()
+            || !crate::images::document_images(&saved)?.is_empty()
+        {
+            return app.dispatch_document(&task_id, &agent_name, document, &operation_id);
+        }
+        app.dispatch(&task_id, &agent_name, &prompt_text, &operation_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn resolve_dispatch(
+    app: State<'_, Arc<Workflow>>,
+    task_id: String,
+    operation_id: String,
+    sent: bool,
+    evidence: String,
+) -> Result<(), String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.resolve(&task_id, &operation_id, sent, &evidence)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn repair_binding(
+    app: State<'_, Arc<Workflow>>,
+    manager: State<'_, Arc<TerminalManager>>,
+    task_id: String,
+    pane_id: String,
+) -> Result<(), String> {
+    let app = app.inner().clone();
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.repair(&task_id, &pane_id)?;
+        manager.close_task(&task_id);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn terminal_open(
+    app: State<'_, Arc<Workflow>>,
+    manager: State<'_, Arc<TerminalManager>>,
+    task_id: String,
+    connection_id: String,
+    cols: u16,
+    rows: u16,
+    output: tauri::ipc::Channel<Output>,
+) -> Result<String, String> {
+    let app = app.inner().clone();
+    let manager = manager.inner().clone();
+    manager.select(&connection_id, &task_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let sink = Arc::new(move |packet| output.send(packet).is_ok());
+        match manager.open(
+            app,
+            &crate::herdr::Cli::from_env(),
+            &task_id,
+            &connection_id,
+            cols,
+            rows,
+            sink,
+        ) {
+            Ok(()) => Ok(connection_id),
+            Err(e) => {
+                manager.close(&connection_id);
+                Err(e)
+            }
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn terminal_close(manager: State<'_, Arc<TerminalManager>>, connection_id: String) {
+    manager.close(&connection_id);
+}
+#[tauri::command]
+pub async fn terminal_input(
+    app: State<'_, Arc<Workflow>>,
+    manager: State<'_, Arc<TerminalManager>>,
+    connection_id: String,
+    data: String,
+) -> Result<(), String> {
+    let app = app.inner().clone();
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.input(&app, &connection_id, &data))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn terminal_scroll(
+    app: State<'_, Arc<Workflow>>,
+    manager: State<'_, Arc<TerminalManager>>,
+    connection_id: String,
+    event: crate::terminal::ScrollEvent,
+) -> Result<(), String> {
+    let app = app.inner().clone();
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.scroll(&app, &connection_id, event))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn terminal_resize(
+    manager: State<'_, Arc<TerminalManager>>,
+    connection_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.resize(&connection_id, cols, rows))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub fn terminal_ack(manager: State<'_, Arc<TerminalManager>>, connection_id: String, bytes: usize) {
+    manager.ack(&connection_id, bytes);
+}

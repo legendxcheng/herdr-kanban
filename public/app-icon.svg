@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="surface" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#303934"/>
+      <stop offset="1" stop-color="#171C19"/>
+    </linearGradient>
+    <linearGradient id="cards" x1="112" y1="120" x2="400" y2="392" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#83E7B3"/>
+      <stop offset="0.5" stop-color="#3ECF8E"/>
+      <stop offset="1" stop-color="#24B575"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="url(#surface)"/>
+  <rect x="18" y="18" width="476" height="476" rx="110" stroke="#94B6A2" stroke-opacity="0.18" stroke-width="4"/>
+  <g fill="url(#cards)">
+    <rect x="112" y="120" width="72" height="160" rx="18"/>
+    <rect x="112" y="304" width="72" height="88" rx="18"/>
+    <rect x="220" y="220" width="72" height="72" rx="18"/>
+    <rect x="328" y="120" width="72" height="88" rx="18"/>
+    <rect x="328" y="232" width="72" height="160" rx="18"/>
+  </g>
+</svg>

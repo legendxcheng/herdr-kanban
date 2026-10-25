@@ -1,0 +1,39 @@
+{
+  "passed": true,
+  "coverage": "Real Windows Tauri/WebView2, Rust IPC and isolated SQLite; Herdr unavailable; no dispatch",
+  "run_dir": "E:\\ContextSwitcher\\.scratch\\file-search\\native-20261024-163900",
+  "repo_search_ms": 21.57,
+  "repo_results": [
+    {
+      "rel_path": "kanban/src/MentionPopover.tsx",
+      "abs_path": "E:/ContextSwitcher/kanban/src/MentionPopover.tsx"
+    },
+    {
+      "rel_path": "kanban/scripts/verify-mention-popover.cjs",
+      "abs_path": "E:/ContextSwitcher/kanban/scripts/verify-mention-popover.cjs"
+    }
+  ],
+  "saved": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "mention",
+            "attrs": {
+              "kind": "file",
+              "label": ".scratch/probe/check.ts",
+              "ref": "C:/Users/Administrator.DESKTOP-09JQGNK/AppData/Local/Temp/kanban-file-search-f6mc6x6g/.scratch/probe/check.ts"
+            }
+          },
+          {
+            "type": "text",
+            "text": " "
+          }
+        ]
+      }
+    ]
+  },
+  "errors": []
+}

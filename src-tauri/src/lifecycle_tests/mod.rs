@@ -1,0 +1,253 @@
+use super::*;
+mod images;
+use crate::workflow::{Herdr, SendError};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+#[derive(Default)]
+struct State {
+    panes: BTreeMap<String, (Target, Option<String>)>,
+    created: usize,
+    prepared: Vec<Option<String>>,
+    directories: Vec<String>,
+    sent: Vec<String>,
+    closed: Vec<String>,
+    missing_id: bool,
+    close_error: bool,
+    close_then_error: bool,
+    prepare_error: bool,
+    mismatch: bool,
+    send_error: bool,
+    create_error: bool,
+    lost_create_response: bool,
+    prepare_gate: Option<Arc<(Mutex<bool>, std::sync::Condvar)>>,
+    observe: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+}
+#[derive(Default)]
+struct Fake(Mutex<State>);
+impl Fake {
+    fn observe(&self, phase: &str) {
+        let callback = self.0.lock().unwrap().observe.clone();
+        if let Some(callback) = callback {
+            callback(phase);
+        }
+    }
+}
+fn target(id: &str) -> Target {
+    Target {
+        session: "default".into(),
+        workspace_id: "w1".into(),
+        pane_id: id.into(),
+        terminal_id: format!("term-{id}"),
+        agent: "codex".into(),
+        process_id: format!("pid-{id}"),
+        codex_resume_locks: Vec::new(),
+        title: id.into(),
+        status: "idle".into(),
+    }
+}
+impl Herdr for Fake {
+    fn targets(&self, _: &str) -> Result<Vec<Target>, String> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .panes
+            .values()
+            .map(|(t, _)| t.clone())
+            .collect())
+    }
+    fn available(&self, w: &str, _: &str) -> Result<Vec<Target>, String> {
+        let candidates = self
+            .targets(w)?
+            .into_iter()
+            .filter(|t| matches!(t.status.as_str(), "idle" | "done"))
+            .collect();
+        self.observe("available");
+        Ok(candidates)
+    }
+    fn pane_inventory(
+        &self,
+        w: &str,
+    ) -> Result<Option<Vec<crate::workflow::PaneIdentity>>, String> {
+        Ok(Some(
+            self.targets(w)?
+                .into_iter()
+                .map(|t| crate::workflow::PaneIdentity {
+                    pane_id: t.pane_id,
+                    terminal_id: t.terminal_id,
+                })
+                .collect(),
+        ))
+    }
+    fn create_pane(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Target, String> {
+        check_current()?;
+        let mut s = self.0.lock().unwrap();
+        if s.create_error {
+            return Err("timeout".into());
+        }
+        s.created += 1;
+        let t = target(&format!("created-{}", s.created));
+        s.panes.insert(t.pane_id.clone(), (t.clone(), None));
+        let lost = s.lost_create_response;
+        drop(s);
+        self.observe("created");
+        if lost {
+            return Err("herdr.timeout".into());
+        }
+        Ok(t)
+    }
+    fn prepare_codex(
+        &self,
+        t: &Target,
+        cwd: &str,
+        resume: Option<&str>,
+        _: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Target, String> {
+        self.observe("preparing");
+        check_current()?;
+        let mut s = self.0.lock().unwrap();
+        s.prepared.push(resume.map(str::to_string));
+        s.directories.push(cwd.into());
+        let gate = s.prepare_gate.clone();
+        drop(s);
+        if let Some(gate) = gate {
+            let (lock, wake) = &*gate;
+            let mut released = lock.lock().unwrap();
+            while !*released {
+                released = wake.wait(released).unwrap();
+            }
+        }
+        let mut s = self.0.lock().unwrap();
+        if s.prepare_error {
+            return Err("timeout".into());
+        }
+        let id = if s.mismatch {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            resume
+                .map(str::to_string)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+        };
+        let mut live = t.clone();
+        live.process_id = uuid::Uuid::new_v4().to_string();
+        s.panes.insert(t.pane_id.clone(), (live.clone(), Some(id)));
+        drop(s);
+        self.observe("prepared");
+        Ok(live)
+    }
+    fn session_id(&self, t: &Target) -> Result<Option<String>, String> {
+        let s = self.0.lock().unwrap();
+        let (live, id) = s.panes.get(&t.pane_id).ok_or("binding.missing")?;
+        if !live.same_identity(t) {
+            return Err("binding.identity_changed".into());
+        }
+        let result = if s.missing_id { None } else { id.clone() };
+        drop(s);
+        self.observe("session");
+        Ok(result)
+    }
+    fn pane_exists(&self, t: &Target) -> Result<bool, String> {
+        Ok(self.0.lock().unwrap().panes.contains_key(&t.pane_id))
+    }
+    fn close_pane(
+        &self,
+        t: &Target,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), String> {
+        check_current()?;
+        let mut s = self.0.lock().unwrap();
+        s.closed.push(t.pane_id.clone());
+        if s.close_error {
+            return Err("timeout".into());
+        }
+        s.panes.remove(&t.pane_id);
+        if s.close_then_error {
+            return Err("timeout".into());
+        }
+        Ok(())
+    }
+    fn send(&self, _: &Target, prompt: &str) -> Result<(), SendError> {
+        let mut s = self.0.lock().unwrap();
+        s.sent.push(prompt.into());
+        let send_error = s.send_error;
+        drop(s);
+        self.observe("sent");
+        if send_error {
+            return Err(SendError {
+                message: "timeout".into(),
+                uncertain: true,
+            });
+        }
+        Ok(())
+    }
+    fn find_created(&self, _: &str, _: &str) -> Result<Option<Target>, String> {
+        Ok(None)
+    }
+}
+fn fixture() -> (Workflow, Arc<Fake>) {
+    let db = Connection::open_in_memory().unwrap();
+    crate::db::init(&db).unwrap();
+    db.execute_batch("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) VALUES ('p1','P1','.','workspace','now'),('p2','P2','.','workspace','now');
+        INSERT INTO tasks(id,project_id,name,status,created_at,updated_at) VALUES ('a','p1','A','todo','now','now'),('b','p2','B','todo','now','now');").unwrap();
+    // Historical duplicate association fixture keeps testing cross-project pane ownership.
+    db.execute_batch("DROP INDEX project_workspace_identity; UPDATE projects SET herdr_session='default',workspace_id='w1',sync_status='ready';").unwrap();
+    let fake = Arc::new(Fake::default());
+    (
+        Workflow {
+            db: Arc::new(Mutex::new(db)),
+            herdr: fake.clone(),
+        },
+        fake,
+    )
+}
+
+fn op() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+fn status(app: &Workflow, task: &str) -> String {
+    app.project_context(task).unwrap().2
+}
+fn saved(app: &Workflow, task: &str) -> Option<String> {
+    view(&app.db.lock().unwrap(), task).unwrap().session_id
+}
+
+fn await_start(app: &Workflow, task: &str) -> Flow {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        let flow = view(&app.db.lock().unwrap(), task).unwrap();
+        if flow.state.as_deref() != Some("pending") {
+            return flow;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "background start did not settle"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn set_prompt(app: &Workflow, task: &str, text: &str) {
+    let json = serde_json::json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":text}]}]}).to_string();
+    crate::tasks::update(
+        &app.db.lock().unwrap(),
+        task,
+        "Task",
+        &json,
+        crate::models::TaskPriority::Normal,
+    )
+    .unwrap();
+}
+
+mod allocation;
+mod background_start;
+mod completion;
+mod recovery;

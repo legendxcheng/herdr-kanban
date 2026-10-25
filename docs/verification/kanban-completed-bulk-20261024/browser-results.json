@@ -1,0 +1,94 @@
+{
+  "passed": true,
+  "evidence": "Chromium + real React, simulated API; not native WebView2 or real Herdr",
+  "metrics": [
+    {
+      "viewport": [
+        900,
+        600
+      ],
+      "column": 178,
+      "noOverlap": true,
+      "buttons": [
+        {
+          "label": "一键归档",
+          "width": 26,
+          "inside": true
+        },
+        {
+          "label": "一键删除",
+          "width": 26,
+          "inside": true
+        }
+      ],
+      "bodyWidth": 900
+    },
+    {
+      "viewport": [
+        1280,
+        800
+      ],
+      "column": 198.453125,
+      "noOverlap": true,
+      "buttons": [
+        {
+          "label": "一键归档",
+          "width": 26,
+          "inside": true
+        },
+        {
+          "label": "一键删除",
+          "width": 26,
+          "inside": true
+        }
+      ],
+      "bodyWidth": 1280
+    },
+    {
+      "viewport": [
+        1920,
+        1080
+      ],
+      "column": 340.65625,
+      "noOverlap": true,
+      "buttons": [
+        {
+          "label": "一键归档",
+          "width": 26,
+          "inside": true
+        },
+        {
+          "label": "一键删除",
+          "width": 26,
+          "inside": true
+        }
+      ],
+      "bodyWidth": 1920
+    }
+  ],
+  "dialogs": [
+    "删除当前项目的 2 个已完成任务？任务正文和本地会话记录将被删除，此操作无法撤销。",
+    "删除当前项目的 2 个已完成任务？任务正文和本地会话记录将被删除，此操作无法撤销。"
+  ],
+  "calls": [
+    {
+      "action": "archive",
+      "projectId": "p",
+      "taskIds": [
+        "done-0",
+        "done-1",
+        "done-2",
+        "done-3"
+      ]
+    },
+    {
+      "action": "delete",
+      "projectId": "p",
+      "taskIds": [
+        "done-2",
+        "done-3"
+      ]
+    }
+  ],
+  "errors": []
+}
