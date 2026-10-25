@@ -5,8 +5,9 @@ import * as api from "./api";
 import { ProjectFormDialog } from "./ProjectFormDialog";
 import { Icon } from "./Icon";
 import { WorkspaceRecovery } from "./WorkspaceRecovery";
-import { tr, errorText } from "./i18n";
+import { tr, useLocale } from "./i18n";
 import { notify } from "./Toast";
+import { LanguageSelect } from "./LanguageSelect";
 
 interface ProjectSidebarProps {
   inert?: boolean;
@@ -25,6 +26,7 @@ interface ProjectSidebarProps {
 }
 
 export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, selectedId, onSelect, onChanged, onOverview, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
+  useLocale();
   const [showNew, setShowNew] = useState(false);
   const [editTarget, setEditTarget] = useState<Project | null>(null);
   const dragging = useRef<string | null>(null);
@@ -55,20 +57,20 @@ export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, sele
 
   async function handleDelete(id: string) {
     if (!confirm(tr("workspace.remove_confirm"))) return;
-    try { await api.deleteProject(id); onChanged(); } catch (e) { notify(errorText(e),"error"); }
+    try { await api.deleteProject(id); onChanged(); } catch (e) { notify({ error: String(e) },"error"); }
   }
 
   return (
-    <aside className="sidebar" aria-label="项目导航" inert={inert}>
+    <aside className="sidebar" aria-label={tr("sidebar.navigation")} inert={inert}>
       <div className="sidebar-brand">
         <span className="brand-mark"><img src="/app-icon.svg" width={32} height={32} alt="" /></span>
         <span>herdr<span className="brand-subtitle"> / kanban</span></span>
       </div>
-      <div className="sidebar-intro">把想法变成下一步。</div>
+      <div className="sidebar-intro">{tr("sidebar.intro")}</div>
       <div className="sidebar-header">
-        <h2>项目 <span className="sidebar-count">{projects.length}</span></h2>
+        <h2>{tr("sidebar.projects")} <span className="sidebar-count">{projects.length}</span></h2>
         {onOverview && <button onClick={onOverview} className="btn-icon" aria-label={tr("overview.title")} title={tr("overview.title")}><Icon name="board" /></button>}
-        <button onClick={() => setShowNew(true)} className="btn-icon" aria-label="新建项目" title="新建项目"><Icon name="plus" /></button>
+        <button onClick={() => setShowNew(true)} className="btn-icon" aria-label={tr("project.new")} title={tr("project.new")}><Icon name="plus" /></button>
       </div>
       <div className="project-list" aria-busy={reordering} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setInsertion(null); }}>
         {projects.map((p) => {
@@ -102,8 +104,8 @@ export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, sele
               </span>
             </button>
             <div className="project-actions">
-              <button onClick={() => setEditTarget(p)} className="btn-icon" title="编辑项目" aria-label={`编辑项目 ${p.name}`}><Icon name="edit" size={14} /></button>
-              <button onClick={() => handleDelete(p.id)} className="btn-icon" title="删除项目" aria-label={`删除项目 ${p.name}`}><Icon name="trash" size={14} /></button>
+              <button onClick={() => setEditTarget(p)} className="btn-icon" title={tr("project.edit")} aria-label={`${tr("project.edit")} ${p.name}`}><Icon name="edit" size={14} /></button>
+              <button onClick={() => handleDelete(p.id)} className="btn-icon" title={tr("project.delete")} aria-label={`${tr("project.delete")} ${p.name}`}><Icon name="trash" size={14} /></button>
             </div>
           </div>
           );
@@ -114,8 +116,9 @@ export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, sele
         {syncError && <p className="error" role="alert">{syncError}</p>}
       </div>
       {operations.length > 0 && <div className="workspace-pending"><strong>{tr("workspace.pending_title")}</strong>{operations.map((op) => <WorkspaceRecovery key={op.id} operation={op} onChanged={onChanged} />)}</div>}
-      <button className="sidebar-create btn-secondary" onClick={() => setShowNew(true)}><Icon name="plus" />新建项目</button>
-      <div className="sidebar-footer"><Icon name="terminal" /><div><strong>你的本地工作空间</strong><span>组织任务 · 协作开发</span></div></div>
+      <button className="sidebar-create btn-secondary" onClick={() => setShowNew(true)}><Icon name="plus" />{tr("project.new")}</button>
+      <LanguageSelect />
+      <div className="sidebar-footer"><Icon name="terminal" /><div><strong>{tr("sidebar.local")}</strong><span>{tr("sidebar.footer")}</span></div></div>
 
       {showNew && (
         <ProjectFormDialog

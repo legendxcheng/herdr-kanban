@@ -7,8 +7,10 @@ import { TerminalPanel } from "./TerminalPanel";
 import { useProjectSync } from "./useProjectSync";
 import { TaskOverviewDialog } from "./TaskOverviewDialog";
 import "./App.css";
+import { tr, useLocale } from "./i18n";
 
 export default function App() {
+  useLocale();
   const { projects, gitStatuses, operations, syncing, error, refresh, session, reordering, move } = useProjectSync();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [terminalMaximized, setTerminalMaximized] = useState(false);
@@ -46,9 +48,9 @@ export default function App() {
           <div className="board-workspace">
             <div className="board-main empty-state" inert={terminalMaximized}>
               <span className="empty-state-icon"><Icon name="board" size={32} /></span>
-              <span className="eyebrow">YOUR NEXT IDEA STARTS HERE</span>
-              <h1 className="empty-state-title">从一个项目，开始推进。</h1>
-              <p className="empty-state-desc">在左侧新建项目，整理任务与提示词，<br />将下一步交给你的 Agent。</p>
+              <span className="eyebrow">{tr("app.eyebrow")}</span>
+              <h1 className="empty-state-title">{tr("app.empty_title")}</h1>
+              <p className="empty-state-desc">{tr("app.empty_description")}</p>
             </div>
             <TerminalPanel task={null} maximized={terminalMaximized} onToggleMaximized={toggleTerminalMaximized} />
           </div>

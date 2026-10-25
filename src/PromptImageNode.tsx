@@ -2,13 +2,13 @@ import { Node, mergeAttributes } from "@tiptap/core";
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
 import { useEffect, useRef, useState } from "react";
 import * as api from "./api";
-import { errorText, tr } from "./i18n";
+import { tr, useLocalizedMessage } from "./i18n";
 import { closeHistory } from "@tiptap/pm/history";
 import { ImagePreview } from "./ImagePreview";
 
 function ImageView({ node, extension, editor, deleteNode, selected }: NodeViewProps) {
   const [source, setSource] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useLocalizedMessage();
   const [expanded, setExpanded] = useState(false);
   const thumbnail = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -18,7 +18,7 @@ function ImageView({ node, extension, editor, deleteNode, selected }: NodeViewPr
         const draftId = await extension.options.getDraftId();
         const preview = await api.previewPromptImage(draftId, node.attrs.imageId);
         if (active) setSource(preview);
-      } catch (reason) { if (active) setError(errorText(reason)); }
+      } catch (reason) { if (active) setError(String(reason)); }
     })();
     return () => { active = false; };
   }, [extension, node.attrs.imageId]);

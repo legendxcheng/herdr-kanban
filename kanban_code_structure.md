@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+2026-10-25 中英双语增量：应用仅提供简体中文和 English，侧栏切换即时生效并保存本机偏好；首次使用按系统语言选择中文或英文。覆盖既有界面、错误提示、编辑器和日期；切换保留草稿与终端连接，详见 2.5 节及[双语验收记录](docs/verification/2026-10-25-language-support.md)。更新日期：2026-10-25。
+
 2026-10-25 自动标题增量（GitHub #1）：新建只输入提示词与优先级，先保存摘要标题，再由独立 Codex CLI `gpt-6-luna` 后台命名；编辑冲突、失败兜底、队列限制及退出恢复见 6.2.4。更新日期仍为 2026-10-25；本次验证见[自动标题验收记录](docs/verification/2026-10-25-task-auto-title.md)。
 
 2026-10-25 独立仓库迁移：应用平铺于仓库根目录，开发技能及其规则文档一并迁移，新增需求指向 `legendxcheng/herdr-kanban`。旧仓库 Issue 与历史验收路径保留来源含义；本次迁移范围及验证见[独立仓库迁移记录](docs/verification/2026-10-25-kanban-repository-migration.md)。
@@ -103,7 +105,8 @@ herdr-kanban/
 │  ├─ terminalFontSize.ts           字号快捷键识别、上下限及本机偏好保存
 │  ├─ BindingDialog.tsx            显式修复独占绑定，不发送提示词
 │  ├─ DispatchRecovery.tsx         核实不确定的派发结果
-│  ├─ i18n.ts / locales/           新增界面的稳定翻译键
+│  ├─ i18n.ts / locales/           中英词库、语言订阅、本机偏好、插值与错误显示
+│  ├─ LanguageSelect.tsx          侧栏语言选择；不重建组件树
 │  ├─ dispatchUtils.ts             引用展开为最终提示词文本
 │  └─ Toast.tsx                    全局通知函数与展示容器
 ├─ src-tauri/
@@ -197,6 +200,20 @@ Get-ChildItem -LiteralPath .scratch/kanban-brand-icons -File | Copy-Item -Destin
 本增量不新增业务 IPC 或数据库迁移。任务仍保存在 `%APPDATA%\herdr-kanban\kanban.db`，与安装位置无关。分发不包含 Node/Rust/Python，也不捆绑 Herdr、Codex 或登录信息；当前没有自动更新服务或代码签名。版本修改方法与环境要求见 [打包说明](docs/kanban-packaging.md)，实际验证和限制见 [打包验收记录](docs/verification/2026-10-24-kanban-packaging.md)。
 
 本次完整 BAT Release 打包和打包副本的 81 项前端测试通过；真实 Windows 11 x64 静默安装的 29 项断言覆盖中文/空格自选目录、同版本重装、0.1.1 测试安装器升级、注册表/文件一致、隔离 SQLite 数据保留及安装后进程启动。0.1.1 测试安装器复用同一应用二进制，不代表新业务版本发布。未逐页验收安装向导、快捷方式、干净系统 WebView2 下载或真实 Herdr/Codex 生命周期。
+
+### 2.5 中英语言与本机偏好
+
+`main.tsx → initializeLocale()` 在 React 挂载前读取 `localStorage["kanban.locale"]`。仅接受 `zh-CN` / `en-US`；没有有效偏好时读取 `navigator.language`，所有 `zh-*` 使用简体中文，其他语言使用英文。存储读取异常按系统语言启动，写入异常仍允许本次会话切换；此时不保证重启记忆。
+
+`ProjectSidebar → LanguageSelect → setLocale()` 更新 `document.documentElement.lang`、保存选择，并通知 `useSyncExternalStore` 订阅者。选项固定为“简体中文 / English”。`tr` 支持参数插值，缺词回退英文，未知键原样保留。组件不以语言作为 key，不因切换而重挂载；编辑器、图片节点、弹窗及通知均订阅语言变化。
+
+已有侧栏、空态、三列看板、任务卡片及派发弹窗文案已迁入词库。`useLocalizedMessage`、批量处理反馈与 Toast 保存稳定键、参数及原始诊断，在显示时翻译，避免旧错误停留在切换前的语言。外部 CLI / 文件系统诊断保留原文。任务概况日期及派发核实时间按当前语言格式化；本地日界线与统计口径不变。
+
+`PromptEditor` 使用动态 placeholder，并在语言变化时刷新装饰和无障碍属性，不替换 Tiptap 实例、正文、选择或撤销历史。终端连接 effect 不依赖语言，切换仅更新看板自己的标题和状态。项目名、任务名、提示词、引用/图片名称、已有派发快照和终端输出均保留内容；实际发送的提示词包装格式不随 UI 语言变化。新建任务继续通过已有 `locale` 参数生成纯图片任务兜底标题，不追溯改写旧标题。
+
+`pick_folder` 新增可选 `title` 参数，由前端传入当前语言的窗口标题；旧调用省略时沿用原中文标题。原生选择器的系统按钮由操作系统决定，安装器继续使用既有简体中文 / English 配置。无数据库迁移。
+
+验证：136 项前端、132 项 Rust 常规测试通过，9 项 opt-in live 忽略；前端和 Windows debug 构建通过。Edge + 真实 React/Tiptap/xterm、模拟 IPC 验证双语布局、草稿/错误更新、日期、偏好恢复与终端不重连；独立 Tauri/WebView2 + SQLite 验证切换、进程重启恢复及实际任务保存。真实 Herdr/Codex 终端在本次未连接，详见验收记录。
 
 ## 3. 前端组件与状态归属
 
@@ -360,7 +377,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `terminal_resize` | connectionId、cols、rows | 有界尺寸更新 |
 | `terminal_ack` | connectionId、bytes | 渲染消费确认，释放输出配额 |
 | `terminal_close` | connectionId | 只释放指定查看连接 |
-| `pick_folder` | 无 | 原生目录选择结果；取消返回 null |
+| `pick_folder` | 可选 `title` | 使用当前 UI 语言的标题；省略沿用中文。原生目录选择结果，取消返回 null |
 
 `dispatch_to_herdr` 的 `agentName` 实际传入 `pane_id`，不是 `HerdrAgent.name`。`name` 是 Agent 类型，`title` 用于展示，`pane_id` 才是发送目标。
 
@@ -650,7 +667,7 @@ Approve For Me 下本机 Codex 0.164.0 会额外持有辅助会话写锁。仅�
 | 引用正文大小及根目录 | 仍直接读取引用路径全文；超大或根外引用不在本次范围 |
 | prompt 作为命令行参数 | 仍受 Windows 命令行长度限制；启动前失败不伪装为发送成功 |
 | 预览与发送转换逻辑 | 仍分离，引用读取失败仍进入最终 prompt；非本次重构范围 |
-| CRUD 与既有界面本地化 | 本次新增界面使用稳定键；原有界面未做全站迁移 |
+| CRUD 与既有界面本地化 | 中英切换覆盖原有界面、状态与错误；用户内容、终端输出及外部诊断保留原文。系统原生按钮遵循操作系统语言 |
 
 还有两项配置边界值得保留：`csp` 当前为 null；capabilities 声明 opener/shell 权限，但现有文件读取与进程执行走自定义 Rust 命令。不能把插件权限列表当作这些命令已经具备路径或目标校验的证据。
 

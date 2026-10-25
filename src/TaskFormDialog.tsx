@@ -4,7 +4,7 @@ import type { Project, Task, TaskPriority } from "./types";
 import { PromptEditor } from "./PromptEditor";
 import { PrioritySelect } from "./PrioritySelect";
 import * as api from "./api";
-import { errorText, tr } from "./i18n";
+import { tr, useLocalizedMessage } from "./i18n";
 import { useImageDraft } from "./useImageDraft";
 
 const emptyPrompt = JSON.stringify({ type: "doc", content: [{ type: "paragraph" }] });
@@ -26,9 +26,9 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
   const [promptJson, setPromptJson] = useState(task?.prompt_json ?? emptyPrompt);
   const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? "normal");
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useLocalizedMessage();
   const [imageBusy, setImageBusy] = useState(false);
-  const [imageError, setImageError] = useState("");
+  const [imageError, setImageError] = useLocalizedMessage();
   const draft = useImageDraft(project.id, task?.id);
   const submitting = useRef(false);
   const titleInput = useRef<HTMLInputElement>(null);
@@ -51,7 +51,7 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
 
   useEffect(() => {
     if (error && !saving) (titleInput.current ?? form.current?.querySelector<HTMLElement>('[contenteditable="true"]'))?.focus();
-  }, [error, saving]);
+  }, [!!error, saving]);
 
   function close() { if (!submitting.current) onClose(); }
 
@@ -65,7 +65,7 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
       if (task) await api.updateTask(task.id, name.trim() === initialName.current.trim() ? undefined : name.trim(), promptJson, priority, draftId);
       else await api.createTask(project.id, priority, promptJson, draftId);
     } catch (reason) {
-      setError(errorText(reason));
+      setError(String(reason));
       return;
     } finally {
       submitting.current = false; setSaving(false);
@@ -107,7 +107,7 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
         <div>
           <label id={`${id}-prompt`} className="field-label">{tr("task.prompt")}</label>
           <PromptEditor content={promptJson} rootPath={project.root_path} onChange={setPromptJson}
-            getDraftId={draft.getId} onImageBusy={busy => { setImageBusy(busy); if (busy) setImageError(""); }} onImageError={reason => setImageError(errorText(reason))}
+            getDraftId={draft.getId} onImageBusy={busy => { setImageBusy(busy); if (busy) setImageError(""); }} onImageError={reason => setImageError(String(reason))}
             labelledBy={`${id}-prompt`} disabled={saving} autoFocus={!task} />
           {imageError && <p role="alert" className="error">{imageError}</p>}
         </div>

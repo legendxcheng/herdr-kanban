@@ -1,27 +1,27 @@
 import { useEffect, useState } from "react";
 import type { HerdrAgent, Project, Task } from "./types";
 import * as api from "./api";
-import { tr, errorText } from "./i18n";
+import { tr, useLocalizedMessage } from "./i18n";
 
 export function BindingDialog({ task, project, onClose, onSaved }: { task: Task; project: Project; onClose: () => void; onSaved: () => void }) {
   const [agents, setAgents] = useState<HerdrAgent[]>([]);
   const [selected, setSelected] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [error, setError] = useLocalizedMessage();
   const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     let active = true;
     setLoading(true); setError("");
     api.herdrListAgents(project.id).then((items) => { if (active) setAgents(items); })
-      .catch((e) => { if (active) setError(errorText(e)); })
+      .catch((e) => { if (active) setError(String(e)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [project.id, project.workspace_id, refresh]);
   async function save() {
     setBusy(true); setError("");
     try { await api.repairBinding(task.id, selected); onSaved(); }
-    catch (e) { setError(errorText(e)); }
+    catch (e) { setError(String(e)); }
     finally { setBusy(false); }
   }
   return <div className="dialog-overlay"><section className="dialog" role="dialog" aria-label={tr("binding.repair")}>

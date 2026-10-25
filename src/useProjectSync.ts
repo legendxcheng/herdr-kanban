@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Project, WorkspaceOperation } from "./types";
 import * as api from "./api";
-import { errorText, tr } from "./i18n";
+import { useLocalizedMessage } from "./i18n";
 import { notify } from "./Toast";
 import { useProjectGitStatus } from "./useProjectGitStatus";
 
@@ -11,7 +11,7 @@ export function useProjectSync() {
   const gitStatuses = useProjectGitStatus(projects, gitRefresh);
   const [operations, setOperations] = useState<WorkspaceOperation[]>([]);
   const [syncing, setSyncing] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useLocalizedMessage();
   const [session, setSession] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
   const moving = useRef(false);
@@ -40,13 +40,13 @@ export function useProjectSync() {
           try {
             const cached = await api.listProjects();
             if (current() && !repeat.current) { setProjects(cached); initialized.current = true; }
-          } catch (e) { if (current()) setError(errorText(e)); }
+          } catch (e) { if (current()) setError(String(e)); }
         }
         try {
           const result = await api.syncProjects();
           if (current() && !repeat.current) { setProjects(result.projects); setSession(result.session); setOperations(result.operations); setError(""); initialized.current = true; }
         } catch (e) {
-          if (current()) setError(`${tr("workspace.offline")} ${errorText(e)}`);
+          if (current()) setError({ prefix: "workspace.offline", error: String(e) });
           try { const pending = await api.workspaceOperations(); if (current()) setOperations(pending); } catch { /* Keep last durable operation view. */ }
         }
       } while (repeat.current && mounted.current && !moving.current);
@@ -68,7 +68,7 @@ export function useProjectSync() {
         setError(""); initialized.current = true;
       }
     } catch (e) {
-      if (mounted.current) notify(`${tr("workspace.reorder_failed")} ${errorText(e)}`, "error");
+      if (mounted.current) notify({ prefix: "workspace.reorder_failed", error: String(e) }, "error");
     } finally {
       revision.current++;
       moving.current = false;

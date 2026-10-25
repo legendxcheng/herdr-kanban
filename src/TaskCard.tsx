@@ -3,7 +3,7 @@ import type { Task } from "./types";
 import * as api from "./api";
 import { notify } from "./Toast";
 import { Icon } from "./Icon";
-import { errorText, tr } from "./i18n";
+import { errorText, tr, useLocalizedMessage } from "./i18n";
 import { flowPending, flowUnresolved, preparationLabel, taskColumn } from "./taskFlow";
 import { AgentStatusDot, type AgentStatus } from "./agentStatus";
 
@@ -29,7 +29,7 @@ export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, 
   const deletingRef = useRef(false);
   const [deleting, setDeleting] = useState(false);
   const [archiving, setArchiving] = useState(false);
-  const [archiveError, setArchiveError] = useState("");
+  const [archiveError, setArchiveError] = useLocalizedMessage();
   const archiveReason = task.binding?.operation ? "dispatch.verify_required"
     : ["pending", "unknown"].includes(task.flow?.state ?? "") ? "flow.verify_required"
     : task.cleanup_required ? "archive.cleanup_required" : "";
@@ -47,10 +47,10 @@ export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, 
     setArchiving(true); setArchiveError("");
     try {
       await api.archiveTask(task.id);
-      notify(tr("archive.success"), "success");
+      notify({ key: "archive.success" }, "success");
       onRemoved();
     } catch (error) {
-      setArchiveError(errorText(error));
+      setArchiveError(String(error));
     } finally {
       archivingRef.current = false; setArchiving(false);
     }
@@ -58,15 +58,15 @@ export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, 
 
   async function handleDelete() {
     if (deletingRef.current || archivingRef.current || removing) return;
-    if (!confirm(`删除任务「${task.name}」？`)) return;
+    if (!confirm(tr("task.delete_confirm", { name: task.name }))) return;
     deletingRef.current = true;
     setDeleting(true);
     try {
       await api.deleteTask(task.id);
-      notify("任务已删除", "info");
+      notify({ key: "task.deleted" }, "info");
       onRemoved();
     } catch (e) {
-      notify(errorText(e), "error");
+      notify({ error: String(e) }, "error");
     } finally {
       deletingRef.current = false;
       setDeleting(false);
@@ -97,8 +97,8 @@ export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, 
         <div className="task-actions" {...controls}>
           <fieldset disabled={controlsDisabled} className="task-actions">
             {task.flow?.kind === "start" && task.flow.state === "failed" && <button onClick={onStart} className="btn-secondary">{tr("flow.retry_start")}</button>}
-            {taskColumn(task) === "todo" && !task.binding?.operation && <button onClick={() => onDispatchTask(task.id)} className="btn-primary">派发<Icon name="arrow" size={13} /></button>}
-            {taskColumn(task) === "in_progress" && <button onClick={onComplete} className="btn-success">标记完成</button>}
+            {taskColumn(task) === "todo" && !task.binding?.operation && <button onClick={() => onDispatchTask(task.id)} className="btn-primary">{tr("dispatch.action")}<Icon name="arrow" size={13} /></button>}
+            {taskColumn(task) === "in_progress" && <button onClick={onComplete} className="btn-success">{tr("task.complete")}</button>}
           </fieldset>
           <button disabled={deleting || archiving || removing} onClick={handleDelete} className="btn-icon btn-danger" aria-label={tr("task.delete")} title={tr("task.delete")}><Icon name="trash" /></button>
         </div>

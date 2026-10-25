@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import * as api from "./api";
 import type { Project } from "./types";
-import { errorText, tr } from "./i18n";
+import { tr, getLocale, useLocalizedMessage } from "./i18n";
 
 /** Calendar boundaries, not now minus 24h; preserves local DST transitions. */
 export function localDay(now = new Date()) {
@@ -16,7 +16,7 @@ export function TaskOverviewDialog({ projects, onClose, onSelect }: {
 }) {
   const scope = JSON.stringify(projects.map(project => project.id));
   const [snapshot, setSnapshot] = useState<{ scope: string; day: ReturnType<typeof localDay>; rows: api.ProjectCounts[] } | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useLocalizedMessage();
   const [refreshing, setRefreshing] = useState(false);
   const refresh = useRef<() => void>(() => {});
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -51,7 +51,7 @@ export function TaskOverviewDialog({ projects, onClose, onSelect }: {
         if (localDay().start !== day.start) { setSnapshot(null); queued = true; return; }
         setSnapshot({ scope, day, rows }); setError("");
       } catch (reason) {
-        if (active) { setSnapshot(null); setError(errorText(reason)); }
+        if (active) { setSnapshot(null); setError(String(reason)); }
       } finally {
         running = false;
         if (active) {
@@ -101,7 +101,7 @@ export function TaskOverviewDialog({ projects, onClose, onSelect }: {
         {error ? <p className="error" role="alert">{tr("overview.failed")} {error}</p> : !data ? <p role="status">{tr("overview.loading")}</p> : <>
           <div className="overview-totals">{(["todo", "in_progress", "today_done"] as const).map(key => <div key={key}><span>{tr(`overview.${key}`)}</span><strong>{totals![key]}</strong></div>)}</div>
           {projects.length === 0 ? <p className="overview-empty">{tr("overview.empty")}</p> : <div className="overview-table-scroll"><table className="overview-table">
-            <thead><tr><th scope="col">Workspace</th>{["todo", "in_progress", "done", "today_done"].map(key => <th scope="col" key={key}>{tr(`overview.${key}`)}</th>)}</tr></thead>
+            <thead><tr><th scope="col">{tr("common.workspace")}</th>{["todo", "in_progress", "done", "today_done"].map(key => <th scope="col" key={key}>{tr(`overview.${key}`)}</th>)}</tr></thead>
             <tbody>{projects.map(project => {
               const row = byId.get(project.id);
               return <tr key={project.id}><th scope="row"><button title={project.name} onClick={() => onSelect(project.id)}>{project.name}</button></th>
@@ -112,7 +112,7 @@ export function TaskOverviewDialog({ projects, onClose, onSelect }: {
           <p className="overview-note">{tr("overview.rules")}</p>
         </>}
       </div>
-      <footer className="overview-footer"><span>{data?.day.label ?? localDay().label} · {tr("overview.local_day")}</span>
+      <footer className="overview-footer"><span>{new Date(data?.day.start ?? localDay().start).toLocaleDateString(getLocale())} · {tr("overview.local_day")}</span>
         <button className="btn-secondary" disabled={refreshing} onClick={() => refresh.current()}>{tr(error ? "overview.retry" : refreshing ? "overview.refreshing" : "overview.refresh")}</button>
       </footer>
     </section>

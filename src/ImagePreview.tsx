@@ -1,10 +1,11 @@
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { tr } from "./i18n";
+import { tr, useLocale } from "./i18n";
 
 export function ImagePreview({ source, name, opener, onClose }: {
   source: string; name: string; opener: HTMLElement | null; onClose: () => void;
 }) {
+  useLocale();
   const closeButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const dialog = opener?.closest<HTMLElement>('[role="dialog"]');

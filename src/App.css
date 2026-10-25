@@ -71,6 +71,7 @@ body {
 
 .sidebar-header { display: flex; justify-content: space-between; align-items: center; padding: 0 15px 7px 22px; }
 .sidebar-header h2 {
+  white-space: nowrap;
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -529,6 +530,9 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 .sidebar-footer div { display: flex; flex-direction: column; gap: 2px; }
 .sidebar-footer strong { font-size: 14px; font-weight: 400; color: var(--n8); }
 .sidebar-footer span { font-size: 14px; }
+.language-select { display: flex; align-items: center; gap: 8px; margin: auto 14px 14px; color: var(--text-muted); font-size: 14px; flex-shrink: 0; }
+.language-select select { flex: 1; min-width: 0; padding: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+.language-select + .sidebar-footer { margin-top: 0; }
 .workspace-bar { height: 64px; flex-shrink: 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 14px; padding: 0 32px; color: var(--text-muted); font-size: 14px; }
 .breadcrumb-sep { color: var(--n5); }
 .workspace-current { min-width: 0; color: var(--n8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

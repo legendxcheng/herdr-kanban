@@ -1,25 +1,27 @@
 import { useState, useCallback, useRef } from "react";
+import { messageText, useLocale, type Message } from "./i18n";
 
 export type ToastKind = "success" | "error" | "info";
 
 interface ToastItem {
   id: number;
-  message: string;
+  message: Message;
   kind: ToastKind;
 }
 
-let _notify: ((msg: string, kind?: ToastKind) => void) | null = null;
+let _notify: ((msg: Message, kind?: ToastKind) => void) | null = null;
 
 /** Call from anywhere to show a toast. */
-export function notify(message: string, kind: ToastKind = "success") {
+export function notify(message: Message, kind: ToastKind = "success") {
   _notify?.(message, kind);
 }
 
 export function ToastContainer() {
+  useLocale();
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const counter = useRef(0);
 
-  const add = useCallback((message: string, kind: ToastKind = "success") => {
+  const add = useCallback((message: Message, kind: ToastKind = "success") => {
     const id = ++counter.current;
     setToasts((prev) => [...prev, { id, message, kind }]);
     setTimeout(() => {
@@ -43,7 +45,7 @@ export function ToastContainer() {
       {toasts.map((t) => (
         <div key={t.id} className={`toast ${t.kind}`}>
           <span>{icons[t.kind]}</span>
-          <span>{t.message}</span>
+          <span>{messageText(t.message)}</span>
         </div>
       ))}
     </div>

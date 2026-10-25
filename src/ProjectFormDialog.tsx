@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { Project, ProjectSnapshot } from "./types";
 import * as api from "./api";
-import { tr, errorText } from "./i18n";
+import { tr, useLocalizedMessage } from "./i18n";
 
 interface ProjectFormDialogProps {
   existing?: Project | null;
@@ -16,7 +16,7 @@ export function ProjectFormDialog({ existing, onClose, onSaved }: ProjectFormDia
   const [snapshot, setSnapshot] = useState<ProjectSnapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useLocalizedMessage();
   const [uncertain, setUncertain] = useState(false);
   const [useHerdrDirectory, setUseHerdrDirectory] = useState(false);
   const busy = useRef(false);
@@ -27,13 +27,13 @@ export function ProjectFormDialog({ existing, onClose, onSaved }: ProjectFormDia
     let active = true;
     setLoading(true);
     api.syncProjects().then((s) => { if (active) { setSnapshot(s); setError(""); } })
-      .catch((e) => { if (active) setError(errorText(e)); })
+      .catch((e) => { if (active) setError(String(e)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [mode, refresh]);
   async function save() {
     if (busy.current) return;
-    if (mode === "create" && (!name.trim() || !root.trim())) { setError(tr("workspace.invalid_input")); return; }
+    if (mode === "create" && (!name.trim() || !root.trim())) { setError("workspace.invalid_input"); return; }
     busy.current = true; setSaving(true); setError("");
     try {
       if (uncertain) await api.recoverWorkspace(operation.current);
@@ -42,7 +42,7 @@ export function ProjectFormDialog({ existing, onClose, onSaved }: ProjectFormDia
       else if (existing) await api.updateProject(existing.id, name.trim(), useHerdrDirectory ? "" : root !== existing.root_path ? root.trim() : null);
       onSaved(); onClose();
     } catch (e) {
-      setError(errorText(e));
+      setError(String(e));
       if (mode === "create") {
         // Durable operation state, not the error text, determines whether retry may create.
         try {
@@ -80,7 +80,7 @@ export function ProjectFormDialog({ existing, onClose, onSaved }: ProjectFormDia
         <label htmlFor="workspace-directory">{tr("workspace.directory")}</label>
         <div className="workspace-path">
           <input id="workspace-directory" value={useHerdrDirectory ? existing?.herdr_directory ?? "" : root} readOnly={!!directoryReadonly || useHerdrDirectory || (mode === "link" && !!candidates.find((w) => w.id === selected)?.directory)} disabled={saving || uncertain} onChange={(e) => setRoot(e.target.value)} />
-          {!directoryReadonly && !useHerdrDirectory && <button type="button" className="btn-secondary" disabled={saving || uncertain} onClick={async () => { try { const path = await api.pickFolder(); if (path) setRoot(path); } catch (e) { setError(errorText(e)); } }}>{tr("workspace.browse")}</button>}
+          {!directoryReadonly && !useHerdrDirectory && <button type="button" className="btn-secondary" disabled={saving || uncertain} onClick={async () => { try { const path = await api.pickFolder(); if (path) setRoot(path); } catch (e) { setError(String(e)); } }}>{tr("workspace.browse")}</button>}
         </div>
         {existing && <p className="hint">{tr(`workspace.directory_${existing.directory_source}`)}</p>}
         {existing?.herdr_directory && existing.directory_source !== "herdr" && <label className="workspace-directory-option"><input type="checkbox" checked={useHerdrDirectory} disabled={saving} onChange={(e) => setUseHerdrDirectory(e.target.checked)} />{tr("workspace.use_directory")} · {existing.herdr_directory}</label>}

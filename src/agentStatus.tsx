@@ -1,5 +1,5 @@
 import type { HerdrAgent, HerdrTarget, Task } from "./types";
-import { tr } from "./i18n";
+import { tr, useLocale } from "./i18n";
 
 export type AgentStatus = "working" | "blocked" | "done" | "idle" | "unknown" | "not_started" | "closed";
 export function normalizeAgentStatus(status: string): AgentStatus {
@@ -24,6 +24,7 @@ export function taskAgentStatus(task: Task, agents: HerdrAgent[], busy = false):
 }
 
 export function AgentStatusDot({ status }: { status: AgentStatus }) {
+  useLocale();
   const label = tr(`agent_status.${status}`);
   return <span className="agent-status-dot" data-status={status} role="img" aria-label={label} title={label} />;
 }

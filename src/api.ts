@@ -1,5 +1,6 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { tr } from "./i18n";
 import type {
   Project, ProjectGitStatus, ProjectSnapshot, WorkspaceOperation, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
 } from "./types";
@@ -93,4 +94,4 @@ export const resizeTerminal = (connectionId: string, cols: number, rows: number)
 export const ackTerminal = (connectionId: string, bytes: number) => invoke<void>("terminal_ack", { connectionId, bytes });
 
 // Native folder picker (returns null if cancelled)
-export const pickFolder = () => invoke<string | null>("pick_folder");
+export const pickFolder = () => invoke<string | null>("pick_folder", { title: tr("folder.title") });

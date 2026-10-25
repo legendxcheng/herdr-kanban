@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import * as api from "./api";
 import type { Task } from "./types";
-import { tr, errorText } from "./i18n";
+import { tr, useLocalizedMessage } from "./i18n";
 import { preparationLabel } from "./taskFlow";
 import { terminalAppearance } from "./terminalAppearance";
 import { changeTerminalFontSize, readTerminalFontSize, terminalFontSizeDelta } from "./terminalFontSize";
@@ -19,7 +19,7 @@ export function TerminalPanel({ task, onRepair, maximized = false, onToggleMaxim
 }) {
   const host = useRef<HTMLDivElement>(null);
   const [state, setState] = useState("terminal.empty");
-  const [error, setError] = useState("");
+  const [error, setError] = useLocalizedMessage();
   const [attempt, setAttempt] = useState(0);
   const identity = JSON.stringify(task?.binding?.target);
   const bindingState = task?.binding?.state;
@@ -68,7 +68,7 @@ export function TerminalPanel({ task, onRepair, maximized = false, onToggleMaxim
       ended = true; connected = false; pendingInput = "";
       scroll.pause();
       terminal.options.disableStdin = true;
-      setState("terminal.disconnected"); setError(errorText(e));
+      setState("terminal.disconnected"); setError(String(e));
       void api.closeTerminal(connectionId).catch(() => {});
     }
     async function flushInput() {

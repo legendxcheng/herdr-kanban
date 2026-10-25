@@ -350,9 +350,9 @@ pub fn read_skill_content(skill_md_path: String) -> Result<String, String> {
 
 /// Open a native folder picker. Returns the chosen absolute path, or null if cancelled.
 #[tauri::command]
-pub fn pick_folder() -> Result<Option<String>, String> {
+pub fn pick_folder(title: Option<String>) -> Result<Option<String>, String> {
     let folder = rfd::FileDialog::new()
-        .set_title("选择本地目录")
+        .set_title(title.as_deref().unwrap_or("选择本地目录"))
         .pick_folder();
     Ok(folder.map(|p| p.to_string_lossy().replace('\\', "/")))
 }

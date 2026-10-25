@@ -1,12 +1,12 @@
 import { useRef, useState } from "react";
 import type { HerdrWorkspace, WorkspaceOperation } from "./types";
 import * as api from "./api";
-import { errorText, tr } from "./i18n";
+import { tr, useLocalizedMessage } from "./i18n";
 
 export function WorkspaceRecovery({ operation, onChanged }: { operation: WorkspaceOperation; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const locked = useRef(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useLocalizedMessage();
   const [choices, setChoices] = useState<HerdrWorkspace[]>([]);
   const [selected, setSelected] = useState("");
   async function recover() {
@@ -17,7 +17,7 @@ export function WorkspaceRecovery({ operation, onChanged }: { operation: Workspa
       else await api.recoverWorkspace(operation.id, selected || null);
       onChanged();
     } catch (e) {
-      setError(errorText(e));
+      setError(String(e));
       try {
         const snapshot = await api.syncProjects();
         setChoices(snapshot.workspaces.filter((w) => !snapshot.operations.some((o) => o.id !== operation.id && (o.workspace_id === w.id || w.name === `kanban-create-${o.id}`) && o.state !== "failed")));

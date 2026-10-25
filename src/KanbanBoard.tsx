@@ -9,7 +9,7 @@ import { Icon, type IconName } from "./Icon";
 import { DispatchRecovery } from "./DispatchRecovery";
 import { TerminalPanel } from "./TerminalPanel";
 import { BindingDialog } from "./BindingDialog";
-import { tr, errorText } from "./i18n";
+import { tr, errorText, messageText, useLocalizedMessage, type Message } from "./i18n";
 import { flowUnresolved, taskColumn } from "./taskFlow";
 import { useTaskFlowUpdates } from "./useTaskFlowUpdates";
 import { useAgentStatus } from "./useAgentStatus";
@@ -23,9 +23,9 @@ interface KanbanBoardProps {
 }
 
 const COLUMNS: { status: TaskStatus; label: string; emptyIcon: IconName; emptyText: string; hint: string }[] = [
-  { status: "todo", label: "未开发", emptyIcon: "circle", emptyText: "暂无待办任务", hint: "task.empty_hint" },
-  { status: "in_progress", label: "开发中", emptyIcon: "progress", emptyText: "没有进行中的任务", hint: "派发给 Agent，让任务开始推进" },
-  { status: "done", label: "完成", emptyIcon: "check", emptyText: "还没有完成的任务", hint: "完成的每一步，都会留在这里" },
+  { status: "todo", label: "board.todo", emptyIcon: "circle", emptyText: "board.todo_empty", hint: "task.empty_hint" },
+  { status: "in_progress", label: "board.in_progress", emptyIcon: "progress", emptyText: "board.in_progress_empty", hint: "board.in_progress_hint" },
+  { status: "done", label: "board.done", emptyIcon: "check", emptyText: "board.done_empty", hint: "board.done_hint" },
 ];
 
 export function KanbanBoard({ project, terminalMaximized = false, onToggleTerminalMaximized }: KanbanBoardProps) {
@@ -45,11 +45,11 @@ export function KanbanBoard({ project, terminalMaximized = false, onToggleTermin
   const activeFlows = useRef(new Set<string>());
   const optimisticStarts = useRef(new Map<string, Task["flow"]>());
   const [busyTasks, setBusyTasks] = useState(new Set<string>());
-  const [flowError, setFlowError] = useState("");
+  const [flowError, setFlowError] = useLocalizedMessage();
   const bulkTaskIdsRef = useRef(new Set<string>());
   const [bulkTaskIds, setBulkTaskIds] = useState(new Set<string>());
   const [bulkAction, setBulkAction] = useState<"archive" | "delete" | null>(null);
-  const [bulkFeedback, setBulkFeedback] = useState<{ message: string; issues: { id: string; message: string }[]; failed: boolean } | null>(null);
+  const [bulkFeedback, setBulkFeedback] = useState<{ message: Message; issues: { id: string; name: string; error: string }[]; failed: boolean } | null>(null);
   const removedTaskIds = useRef(new Set<string>());
   const selectedTask = tasks.find((task) => task.id === selectedTaskId && taskColumn(task) === "in_progress") ?? null;
   const suppressClick = useRef(false);
@@ -99,7 +99,7 @@ export function KanbanBoard({ project, terminalMaximized = false, onToggleTermin
           ? current : t.find((task) => taskColumn(task) === "in_progress")?.id ?? null);
       }
     } catch (e) {
-      if (sequence === loadSequence.current) notify(errorText(e), "error");
+      if (sequence === loadSequence.current) notify({ error: String(e) }, "error");
     } finally {
       if (taskRequest.current === request) taskRequest.current = null;
       if (sequence === loadSequence.current) setLoading(false);
@@ -139,16 +139,15 @@ export function KanbanBoard({ project, terminalMaximized = false, onToggleTermin
       if (!mounted.current) return;
       // Commit local removal before the reconciliation request can fail or return stale data.
       handleRemoved(result.succeeded);
-      const message = tr(`batch.${action}_result`)
-        .replace("{succeeded}", String(result.succeeded.length))
-        .replace("{skipped}", String(result.skipped.length))
-        .replace("{failed}", String(result.failed.length));
+      const message = { key: `batch.${action}_result`, params: {
+        succeeded: result.succeeded.length, skipped: result.skipped.length, failed: result.failed.length,
+      } };
       setBulkFeedback({ message, failed: result.failed.length > 0,
         issues: [...result.skipped, ...result.failed].map(issue => ({ id: issue.id,
-          message: `${snapshot.find(task => task.id === issue.id)?.name ?? issue.id}：${errorText(issue.error)}` })) });
+          name: snapshot.find(task => task.id === issue.id)?.name ?? issue.id, error: issue.error })) });
     } catch (error) {
       if (mounted.current) {
-        setBulkFeedback({ message: errorText(error), issues: [], failed: true });
+        setBulkFeedback({ message: { error: String(error) }, issues: [], failed: true });
         void load();
       }
     } finally {
@@ -210,14 +209,14 @@ export function KanbanBoard({ project, terminalMaximized = false, onToggleTermin
         await api.startTask(task.id, operationId);
       } else {
         const result = await api.updateTaskStatus(task.id, status);
-        if (result?.warning) setFlowError(`${tr("flow.cleanup_warning")} ${errorText(result.warning)}`);
+        if (result?.warning) setFlowError({ prefix: "flow.cleanup_warning", error: result.warning });
       }
       optimisticStarts.current.delete(task.id);
       await load();
     } catch (e) {
       optimisticStarts.current.delete(task.id);
       setTasks(current => current.map(t => t.id === task.id ? { ...t, flow: task.flow } : t));
-      setFlowError(errorText(e));
+      setFlowError(String(e));
       await load();
     } finally {
       activeFlows.current.delete(task.id);
@@ -231,14 +230,14 @@ export function KanbanBoard({ project, terminalMaximized = false, onToggleTermin
     if (task.flow.kind === "complete") { await moveTask(task, "done"); return; }
     activeFlows.current.add(task.id); setBusyTasks(new Set(activeFlows.current));
     try { await api.recoverLifecycle(task.id, task.flow.operation_id); setFlowError(""); }
-    catch (e) { setFlowError(errorText(e)); }
+    catch (e) { setFlowError(String(e)); }
     finally { activeFlows.current.delete(task.id); setBusyTasks(new Set(activeFlows.current)); await load(); }
   }
 
   return (
     <div className="kanban-board board-workspace" ref={workspaceRef} style={terminalWidth === null ? undefined : { "--terminal-width": `${terminalWidth}px` } as React.CSSProperties} onDragOver={(e) => e.preventDefault()}>
       <div className="board-main" inert={terminalMaximized}>
-        {loading && tasks.length === 0 ? <div className="board-loading"><span className="spinner" /><span>加载中…</span></div> : <>
+        {loading && tasks.length === 0 ? <div className="board-loading"><span className="spinner" /><span>{tr("common.loading")}</span></div> : <>
         <div className="workspace-bar">
           <h1 className="workspace-project" title={project.name}>{project.name}</h1>
           <span className="breadcrumb-sep">/</span>
@@ -251,10 +250,10 @@ export function KanbanBoard({ project, terminalMaximized = false, onToggleTermin
         <div className="board-content">
           {flowError && <p role="alert" className="error">{flowError}</p>}
           <div className="board-toolbar">
-            <div className="board-view"><Icon name="board" /><h2>任务看板</h2><span className="toolbar-count">{tasks.length}</span></div>
+            <div className="board-view"><Icon name="board" /><h2>{tr("board.title")}</h2><span className="toolbar-count">{tasks.length}</span></div>
             <div className="board-toolbar-actions">
-              <span className="board-summary">{tasks.filter((task) => taskColumn(task) === "done").length} / {tasks.length} 已完成</span>
-              <button className="btn-primary" onClick={() => setCreatingTask(true)}><Icon name="plus" />新建任务<kbd>N</kbd></button>
+              <span className="board-summary">{tr("board.summary", { done: tasks.filter(task => taskColumn(task) === "done").length, total: tasks.length })}</span>
+              <button className="btn-primary" onClick={() => setCreatingTask(true)}><Icon name="plus" />{tr("task.create")}<kbd>N</kbd></button>
             </div>
           </div>
           <div className="kanban-columns">
@@ -275,7 +274,7 @@ export function KanbanBoard({ project, terminalMaximized = false, onToggleTermin
                 onDrop={(e) => handleDrop(e, status)}
               >
                 <div className="col-header">
-                  <span className="col-title"><Icon name={emptyIcon} />{label}</span>
+                  <span className="col-title"><Icon name={emptyIcon} />{tr(label)}</span>
                   <div className="col-header-actions">
                     <span className="col-count">{col.length}</span>
                     {status === "done" && <>
@@ -291,17 +290,17 @@ export function KanbanBoard({ project, terminalMaximized = false, onToggleTermin
                   </div>
                 </div>
                 {status === "done" && bulkFeedback && <div className="col-batch-result" role={bulkFeedback.failed ? "alert" : "status"}>
-                  <p>{bulkFeedback.message}</p>
+                  <p>{messageText(bulkFeedback.message)}</p>
                   {bulkFeedback.issues.length > 0 && <details>
                     <summary>{tr("batch.details")}</summary>
-                    <ul>{bulkFeedback.issues.map(issue => <li key={issue.id}>{issue.message}</li>)}</ul>
+                    <ul>{bulkFeedback.issues.map(issue => <li key={issue.id}>{tr("batch.issue", { name: issue.name, error: errorText(issue.error) })}</li>)}</ul>
                   </details>}
                 </div>}
                 {col.length === 0 ? (
                   <div className="col-empty">
                     <span className="col-empty-icon"><Icon name={emptyIcon} size={22} /></span>
-                    <span className="col-empty-text">{emptyText}</span>
-                    <span className="col-empty-hint">{status === "todo" ? tr(hint) : hint}</span>
+                    <span className="col-empty-text">{tr(emptyText)}</span>
+                    <span className="col-empty-hint">{tr(hint)}</span>
                   </div>
                 ) : (
                   <div className="col-cards">
