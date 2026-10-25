@@ -1,4 +1,6 @@
 {
+  "task.content_required": "请填写任务内容，或添加文件、技能引用或图片。",
+  "task.title_required": "任务标题不能为空。",
   "overview.title": "任务概况",
   "overview.scope": "汇总当前项目列表中的所有 Workspace，点击名称进入看板。",
   "overview.todo": "待办",

@@ -15,12 +15,13 @@ interface PromptEditorProps {
   onChange: (json: string) => void;
   labelledBy?: string;
   disabled?: boolean;
+  autoFocus?: boolean;
   getDraftId?: () => Promise<string>;
   onImageBusy?: (busy: boolean) => void;
   onImageError?: (reason: unknown) => void;
 }
 
-export function PromptEditor({ content, rootPath, onChange, labelledBy, disabled = false, getDraftId = async () => { throw new Error("image.draft_closed"); }, onImageBusy = () => {}, onImageError = () => {} }: PromptEditorProps) {
+export function PromptEditor({ content, rootPath, onChange, labelledBy, disabled = false, autoFocus = false, getDraftId = async () => { throw new Error("image.draft_closed"); }, onImageBusy = () => {}, onImageError = () => {} }: PromptEditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit,
@@ -40,6 +41,7 @@ export function PromptEditor({ content, rootPath, onChange, labelledBy, disabled
   });
 
   useEffect(() => { editor?.setEditable(!disabled); }, [editor, disabled]);
+  useEffect(() => { if (autoFocus) editor?.commands.focus("end"); }, [editor, autoFocus]);
 
   return (
     <EditorContext.Provider value={{ editor }}>

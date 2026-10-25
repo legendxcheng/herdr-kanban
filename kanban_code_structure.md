@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+2026-10-25 自动标题增量（GitHub #1）：新建只输入提示词与优先级，先保存摘要标题，再由独立 Codex CLI `gpt-6-luna` 后台命名；编辑冲突、失败兜底、队列限制及退出恢复见 6.2.4。更新日期仍为 2026-10-25；本次验证见[自动标题验收记录](docs/verification/2026-10-25-task-auto-title.md)。
+
 2026-10-25 独立仓库迁移：应用平铺于仓库根目录，开发技能及其规则文档一并迁移，新增需求指向 `legendxcheng/herdr-kanban`。旧仓库 Issue 与历史验收路径保留来源含义；本次迁移范围及验证见[独立仓库迁移记录](docs/verification/2026-10-25-kanban-repository-migration.md)。
 
 2026-10-25 任务概况增量：项目标题旁新增按需打开的统计弹窗，汇总当前导航中的各 Workspace 待办、进行中、未归档已完成及今日已完成；主界面不常驻统计。新增完成时间迁移 10 和批量统计 IPC，交互、口径及验证见 6.2.3 节。
@@ -85,7 +87,7 @@ herdr-kanban/
 │  ├─ agentStatus.tsx              实时身份匹配、状态语义及卡片状态圆点
 │  ├─ useAgentStatus.ts            前台 3 秒查询、焦点刷新、合并请求及迟到结果隔离
 │  ├─ PrioritySelect.tsx           创建与编辑共用的三档优先级选择
-│  ├─ TaskFormDialog.tsx           新建/编辑共用居中弹窗：标题、提示词、优先级
+│  ├─ TaskFormDialog.tsx           居中弹窗：新建只填正文/优先级；编辑可主动改名
 │  ├─ PromptEditor.tsx             Tiptap 初始化与 JSON 输出
 │  ├─ imagePaste.ts               图片 paste、导入占位与异步图文顺序
 │  ├─ PromptImageNode.tsx / ImagePreview.tsx  缩略图、悬停删除、大图与焦点恢复
@@ -119,6 +121,10 @@ herdr-kanban/
 │     ├─ file_search_tests.rs      临时副本、排序截断、忽略规则及路径/模糊查询回归
 │     ├─ skill_discovery_tests.rs  项目/用户技能发现、优先级、去重与截取回归
 │     ├─ tasks.rs                  任务存储、优先级排序、归档事务、已完成批量处理及活跃任务守卫
+│     ├─ task_titles.rs            原子任务保存、标题请求与双 worker 调度、编辑保护和退出清理
+│     ├─ title_prompt.rs           正文/引用名称摘要、输入限长及纯图片兜底
+│     ├─ title_cli.rs / title_process.rs  最小 Codex 配置、结构化结果、有界进程及后代清理
+│     ├─ title_tests.rs / title_process_tests.rs  真实 SQLite、可控生成器/进程及显式 CLI live 验收
 │     ├─ task_overview.rs / task_overview_tests.rs  跨项目列计数、今日完成聚合及迁移/日界线验证
 │     ├─ completed_task_tests.rs   批量范围、后台启动投影、部分失败回滚、归档重开与异常删除回归
 │     ├─ agent_status.rs           只读 Agent 发现、完整身份匹配及有效任务归属
@@ -219,7 +225,7 @@ flowchart TD
 | [KanbanBoard.tsx](src/KanbanBoard.tsx) | 卡片列表、加载、创建弹窗、拖拽状态、Agent 列表、编辑 ID、待派发对象 | 加载/创建/变更状态；协调编辑与派发弹层 |
 | [TaskCard.tsx](src/TaskCard.tsx) | 展示名称、实时状态圆点、优先级、异常与紧凑图标操作 | 编辑/派发回调；完成交给看板流转；删除/归档调用 API |
 | [useAgentStatus.ts](src/useAgentStatus.ts) | 当前项目独立实时 Agent 列表；可见时 3 秒刷新及焦点刷新 | 共用在途查询、任务刷新作废旧观察，卸载清理监听，失败清空实时状态 |
-| [TaskFormDialog.tsx](src/TaskFormDialog.tsx) | 标题、提示词、优先级草稿及保存/错误状态 | 新建一次创建完整任务；编辑显式保存；失败保留草稿并恢复焦点 |
+| [TaskFormDialog.tsx](src/TaskFormDialog.tsx) | 提示词、优先级及编辑模式的标题草稿 | 新建无标题输入且要求有效内容；编辑只有主动改名才提交 name；失败保留草稿并恢复焦点 |
 | [PromptEditor.tsx](src/PromptEditor.tsx) | Tiptap Editor 实例 | 接收 JSON 字符串；每次编辑输出序列化 JSON |
 | [MentionPopover.tsx](src/MentionPopover.tsx) | 搜索词、引用种类、候选项、选择下标、展开状态 | 查询文件/技能；写入编辑器 transaction |
 | [DispatchDialog.tsx](src/DispatchDialog.tsx) | Agent 列表、选中 pane、loading、错误、预览文本 | 重新查 Agent、展开引用、派发 |
@@ -292,7 +298,8 @@ flowchart TD
 | `workspace_operations` | 创建操作 ID、session、请求、已知 workspace ID、Project ID、pending/unknown/succeeded/failed 与错误；重启 pending 转 unknown |
 | `workspace_exclusions` | 用户本地删除后的 session + workspace ID；防止自动重新导入 |
 | `task_working_directories` | 按任务保存首次启动/派发目录；同步项目目录不覆盖历史上下文 |
-| `schema_migrations` | 记录绑定、派发、生命周期与任务字段迁移版本（当前 10；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用，10 加完成时间与生命周期 task_id 查询索引），初始化可重复执行 |
+| `schema_migrations` | 当前 11；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用，10 加完成时间与生命周期索引，11 加标题请求与失效触发器；初始化可重复执行 |
+| `task_title_requests` | task_id 主键并级联删除，唯一请求 UUID、最多 2000 字符输入快照、created_ms、edit_version、状态及稳定错误码；pending/running 与开发生命周期独立，重启转 interrupted，不重试 |
 | `prompt_images`、`image_drafts` | 图片 ID、项目归属、名称、MIME、字节数、尺寸及内容摘要；草稿按项目/可选任务独立持有，重启释放未保存草稿 |
 | `draft_image_refs`、`task_image_refs`、`operation_image_refs` | 分别保护可撤销的草稿、已保存正文和已受理操作；归档保留引用，删除不抹除已有启动/派发证据 |
 | `image_prompt_snapshots` | 手动图片派发的操作 ID、正文及展开文本；重试同一操作使用同一快照，无实际操作记录的孤儿准备在任务删除/应用重开后释放 |
@@ -325,8 +332,8 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `delete_project` | id | 本地删除并记录排除；不关闭 Herdr workspace/Agent |
 | `list_tasks` | projectId | 项目内未归档 Task[]，优先级降序，同级创建时间升序、ID 稳定排序 |
 | `task_overview` | projectIds、dayStart、dayEnd | 后台线程持数据库锁执行单次聚合；返回各 project_id 的 todo / in_progress / done / today_done；日期参数为本地当天起止转换的 RFC3339 时间，区间左闭右开；不读取提示词或查询 Herdr |
-| `create_task` | projectId、name、priority、可选 promptJson/draftId | 同一事务保存任务及正文图片引用，返回 todo Task；省略正文兼容 `{}`，旧无图调用不需要草稿 |
-| `update_task` | id、name、promptJson、priority、可选 draftId | 同一事务更新正文和图片引用；校验草稿/任务归属，拒绝归档任务，失败保留原数据 |
+| `create_task` | projectId、priority、可选 name/promptJson/draftId/locale | 新 UI 不传 name；事务保存摘要标题、正文/图片及生成意图，立即返回 todo Task；旧调用显式 name 保留原名且不生成，允许省略正文 |
+| `update_task` | id、promptJson、priority、可选 name/draftId | name 省略则保留库内最新标题；显式改名或正文变更使旧生成失效；同一事务更新正文和图片引用，失败保留原数据 |
 | `open_image_draft` | projectId、可选 taskId | 返回草稿 UUID；编辑时保护原任务图片，支持取消和撤销 |
 | `import_prompt_image` | draftId、name、mime、base64 data | 校验 PNG/JPEG/WebP，返回稳定图片元数据；解码和文件写入不持应用数据库 Mutex |
 | `preview_prompt_image` | draftId、imageId | 校验草稿引用及文件摘要，返回临时预览 data URL |
@@ -397,15 +404,15 @@ Kanban 改名调用 Herdr 并读回确认；外部改名按 ID 同步。外部�
 
 ### 6.2 创建、编辑和移动卡片
 
-1. 顶部“新建任务”按钮或 N 打开 `TaskFormDialog`；列底部没有新增输入区域。字段顺序为标题（必填）、提示词（可空）、优先级（默认一般），提示词复用 Tiptap 的 @ 文件/$ 技能引用。调用 `create_task` 一次提交三个字段。创建失败保留完整草稿并恢复标题焦点，取消不创建；再次打开清空草稿并恢复一般优先级。
-2. Rust 使用单条 INSERT 保存完整 todo 卡片，前端关闭新建弹窗并重新加载，不再自动打开编辑。数据库复用已有 prompt_json 字段，无新增迁移。
+1. 顶部“新建任务”按钮或 N 打开 `TaskFormDialog`，聚焦提示词；新建不显示标题输入，优先级默认一般。文字、有效 @ 文件/$ 技能引用或导入完成的图片至少有一种；完全空白不能提交。失败保留完整草稿并恢复正文焦点，取消不创建；再次打开清空草稿。
+2. `create_task → TaskTitles::create → images::save_task_in` 以短事务保存 todo 卡片、图片引用与标题请求，立即返回摘要标题；生成失败不撤销卡片，前端关闭弹窗并重新加载。标题状态使用迁移 11，正文仍复用 prompt_json。
 3. Tiptap 编辑内容经 `getJSON()` 序列化到面板草稿。
-4. 点击卡片编辑入口打开同一 `TaskFormDialog`（以任务 ID 为 key）；显式保存调用 `update_task`，同时保存标题、提示词和优先级，成功后关闭弹窗、刷新看板。同列按优先级重排，保留有效的当前终端选择。
+4. 编辑使用同一弹窗（任务 ID 为 key），允许手动改名；未主动修改标题时 `update_task` 省略 name，由后端保留最新名称，避免旧弹窗覆盖生成结果。正文或显式改名使在途标题请求失效，只改优先级不使请求失效。保存后刷新，同列按优先级重排并保留当前终端选择。
 5. 卡片拖到“开发中”时立即投影到目标列并选中，显示“窗口准备中”，调用 `start_task` 仅等待本地受理。首次执行在后台展开已保存提示词并发送，已保存会话或保留原绑定的任务只恢复/连接、不重发。准备完成通过通知及查询刷新，不抢回后来选择的任务。拖到“完成”及完成按钮统一走 `complete_task`，关闭失败也刷新完成状态并显示清理警告。拖到“未开发”调用 `update_task_status`；拖到原列不执行更新。任务流转期间禁用该卡片操作和拖拽，并用同步 Set 阻止重复请求。
 
 列之间允许迁移，包括 done 回 todo；从 todo 或 done 拖入 in_progress 自动启动或恢复，无派发确认弹窗。同一列不提供手动排序；后端按紧急、优先、一般，再按创建时间和 ID 排序。前端仅对开发中列做稳定分组，将身份匹配且状态为 blocked 的任务放到顶部；组内保持后端顺序，状态恢复后回到原位置。重排不改变已选任务或终端连接。“标记完成”按钮只出现在 in_progress 卡片；拖放可以把任意状态卡片直接移到 done。
 
-看板快捷键是无 Ctrl/Meta/Alt 修饰的小写 `n`，打开顶部创建表单；标题框 Enter 提交，提示词内 Enter 换行；中文输入法确认不提交。Escape 取消，引用候选打开时先关闭候选。提交中锁定全部字段与取消/关闭入口，并用同步标记阻止重复提交；失败保留草稿。全局快捷键排除 input、select、textarea、contenteditable、已有弹层和右侧终端，终端键盘事件不冒泡至看板。
+看板快捷键是无 Ctrl/Meta/Alt 修饰的小写 `n`；编辑标题框 Enter 提交，提示词内 Enter 换行，中文输入法确认不提交。Escape 取消，引用候选打开时先关闭候选。本地保存期间锁定表单并防重复提交，后台生成期间不锁定卡片。全局快捷键排除 input、select、textarea、contenteditable、已有弹层和右侧终端。
 
 ### 6.2.1 紧凑卡片与归档
 
@@ -448,6 +455,18 @@ IPC 使用后台线程执行本地事务。每个去重后的 ID 都在自己的
 前端使用本地日历零点及下一天零点转换为 UTC 参数，不用固定 24 小时推算，兼容夏令时。打开时、启动通知、前台每 2 秒、焦点及恢复可见时刷新，午夜重新计算日期；仅弹窗挂载期间持有计时器和监听。查询串行合并；项目 ID 集合变化或关闭后丢弃旧响应，跨日旧结果不展示。失败显示错误与重试，不把失败显示为零任务；关闭后的后台回复不恢复弹窗。
 
 验证与边界见 [任务概况验收记录](docs/verification/2026-10-25-kanban-task-overview.md)。本次没有增加真实 Herdr 的查询或写操作；真实 Agent 派发/恢复与安装包升级需单独验收。
+
+### 6.2.4 自动任务标题（2026-10-25，GitHub #1）
+
+`TaskFormDialog → create_task → TaskTitles` 负责保存；应用启动注册两个后台 worker。`title_prompt` 从第一段有效普通文字生成最多 40 个 Unicode 字符的摘要；无普通文字时使用引用名称，纯图片直接使用本地化“图片任务”，不调用模型。输入快照保留文字和引用显示名称，最多 2000 字符，不读取文件/技能正文或上传图片。
+
+`title_cli → title_process` 直接启动独立 `codex exec`，固定 `gpt-6-luna`、low、Standard；最小配置、临时工作目录、短标题指令和 JSON Schema，禁用开发工具、技能上下文、插件及 hook。复用 CLI 登录，不修改全局配置或正常开发模型。可用 `KANBAN_CODEX_EXECUTABLE` 指定测试执行程序；显式错误路径不回退。进程上限 30 秒、队列等待上限 60 秒，stdout/stderr 各限制 64 KiB；Windows Job Object／Unix 进程组清理后代。最多两路，不自动重试或换模型。
+
+生成结果仅在请求仍 running 的短事务中写回；名称/正文修改及归档触发请求 invalidated，编辑版本递增；删除外键级联移除请求。主动改名即使与临时值相同也撤销旧请求。输出空白、控制字符或结构错误保留摘要；正常单行标题去除外围引号并截至 40 字符。请求状态不参与启动、派发或删除互斥，旧任务不批量起名。
+
+`task-title-changed` 只携带 project_id，前端按当前项目读取任务；与现有启动事件共用合并查询、焦点及 2 秒兜底刷新，不抢选择或重连终端。退出取消工作并回收子进程；启动恢复将残余 pending/running 标为 interrupted，保留任务和摘要，不重新调用。`images::save_task_in` 在调用者事务内保存图片，确保生成意图与附件一起提交。
+
+前端 128 项、Rust 132 项常规测试通过，9 项 live 默认忽略；真实 CLI 三种输入已另行运行。原生 WebView2 + Rust/SQLite 的创建返回约 78 ms，后台刷新、编辑冲突、项目隔离和关闭重开通过，另以真实 CLI 通过桌面命名链路。20 个排队任务验证最高并发为 2、超时保留摘要；真实 Herdr 在标题等待期间启动并取得实际 Codex 回复，测试 Workspace 已清理。完整验收与未覆盖项见[自动标题验收记录](docs/verification/2026-10-25-task-auto-title.md)。
 
 ### 6.3 @ 文件与 $ 技能引用
 

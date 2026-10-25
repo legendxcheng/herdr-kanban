@@ -22,9 +22,9 @@ export interface ProjectCounts { project_id: string; todo: number; in_progress: 
 export const taskOverview = (projectIds: string[], dayStart: string, dayEnd: string) =>
   invoke<ProjectCounts[]>("task_overview", { projectIds, dayStart, dayEnd });
 export const listTasks = (projectId: string) => invoke<Task[]>("list_tasks", { projectId });
-export const createTask = (projectId: string, name: string, priority: TaskPriority, promptJson: string, draftId?: string) =>
-  invoke<Task>("create_task", { projectId, name, priority, promptJson, draftId });
-export const updateTask = (id: string, name: string, promptJson: string, priority: TaskPriority, draftId?: string) =>
+export const createTask = (projectId: string, priority: TaskPriority, promptJson: string, draftId?: string) =>
+  invoke<Task>("create_task", { projectId, priority, promptJson, draftId, locale: document.documentElement.lang });
+export const updateTask = (id: string, name: string | undefined, promptJson: string, priority: TaskPriority, draftId?: string) =>
   invoke<void>("update_task", { id, name, promptJson, priority, draftId });
 export interface PromptImage { id: string; name: string; mime: string; bytes: number; width: number; height: number }
 export const openImageDraft = (projectId: string, taskId?: string) => invoke<string>("open_image_draft", { projectId, taskId });
@@ -39,6 +39,8 @@ export const startTask = (taskId: string, operationId: string) =>
 export interface StartChanged { project_id: string; task_id: string; operation_id: string }
 export const onStartChanged = (onChange: (event: StartChanged) => void) =>
   listen<StartChanged>("task-start-changed", event => onChange(event.payload));
+export const onTitleChanged = (onChange: (event: { project_id: string }) => void) =>
+  listen<{ project_id: string }>("task-title-changed", event => onChange(event.payload));
 export const completeTask = (taskId: string, operationId: string) =>
   invoke<FlowOutcome>("complete_task", { taskId, operationId });
 export const recoverLifecycle = (taskId: string, operationId: string) =>

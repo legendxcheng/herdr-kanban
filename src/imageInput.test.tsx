@@ -9,6 +9,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 const project = { id: "p", root_path: "E:/fixture" } as Project;
 const image = { id: "ddbc5177-fab2-4aa6-a6e1-d46fc29fdaed", name: "截图.png", mime: "image/png", bytes: 80, width: 2, height: 2 };
 beforeEach(() => {
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
+  Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: () => new DOMRect() });
   vi.mocked(invoke).mockReset().mockImplementation(async (command) => {
     switch (command) {
       case "open_image_draft": return "draft-1";
@@ -23,7 +25,6 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 it("pastes a screenshot into the prompt and saves its durable reference with the task", async () => {
   render(<TaskFormDialog project={project} onClose={() => {}} onSaved={() => {}} />);
-  fireEvent.change(screen.getByRole("textbox", { name: "标题" }), { target: { value: "带截图的任务" } });
   const prompt = screen.getByRole("textbox", { name: "提示词" });
   fireEvent.focus(prompt);
   const file = new File([new Uint8Array([137, 80, 78, 71])], "截图.png", { type: "image/png" });
@@ -33,19 +34,20 @@ it("pastes a screenshot into the prompt and saves its durable reference with the
   fireEvent.click(screen.getByRole("button", { name: "添加任务" }));
   await waitFor(() => expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "create_task")).toBe(true));
   const [, args] = vi.mocked(invoke).mock.calls.find(([command]) => command === "create_task")!;
-  expect(args).toMatchObject({ draftId: "draft-1", name: "带截图的任务" });
+  expect(args).toMatchObject({ draftId: "draft-1" });
+  expect(args).not.toHaveProperty("name");
   expect(JSON.parse((args as { promptJson: string }).promptJson).content).toContainEqual({ type: "promptImage", attrs: { imageId: image.id, name: "截图.png", bytes: 80 } });
 });
 
 it("rejects an over-limit multi-image paste without discarding existing input", async () => {
   render(<TaskFormDialog project={project} onClose={() => {}} onSaved={() => {}} />);
-  fireEvent.change(screen.getByRole("textbox", { name: "标题" }), { target: { value: "保留任务" } });
   const prompt=screen.getByRole("textbox",{name:"提示词"});
+  fireEvent.paste(prompt, { clipboardData: { files: [], getData: (type: string) => type === "text/plain" ? "保留任务" : "" } });
   const files=Array.from({length:21},(_,index)=>new File(["PNG"],`${index}.png`,{type:"image/png"}));
   fireEvent.paste(prompt,{clipboardData:{files,items:[],getData:()=>""}});
   expect((await screen.findByRole("alert")).textContent).toContain("20");
   expect(vi.mocked(invoke).mock.calls.some(([command])=>command==="import_prompt_image")).toBe(false);
-  expect((screen.getByRole("textbox",{name:"标题"}) as HTMLInputElement).value).toBe("保留任务");
+  expect(prompt.textContent).toBe("保留任务");
 });
 
 it("can delete a pasted image and undo the deletion without losing its reference", async () => {
@@ -67,7 +69,6 @@ it("keeps a slow two-image paste before text entered while import is pending", a
     ? (args as {name:string}).name==='first.png' ? new Promise(resolve=>{finish=resolve;}) : Promise.resolve({...image,id:'ddbc5177-fab2-4aa6-a6e1-d46fc29fdaee',name:'second.png'})
     : base(command,args,options));
   render(<TaskFormDialog project={project} onClose={()=>{}} onSaved={()=>{}}/>);
-  fireEvent.change(screen.getByRole('textbox',{name:'标题'}),{target:{value:'保持图文顺序'}});
   const prompt=screen.getByRole('textbox',{name:'提示词'});
   const files=['first.png','second.png'].map(name=>new File(['PNG'],name,{type:'image/png'}));
   fireEvent.paste(prompt,{clipboardData:{files,items:[],getData:()=>''}});

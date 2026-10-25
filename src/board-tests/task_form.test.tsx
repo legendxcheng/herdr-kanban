@@ -13,7 +13,6 @@ describe("任务优先级", () => {
     await renderBoard();
     fireEvent.click(screen.getByRole("button", { name: /新建任务/ }));
     const dialog = screen.getByRole("dialog", { name: "新建任务" });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "标题" }), { target: { value: "保留全部输入" } });
     fireEvent.paste(within(dialog).getByRole("textbox", { name: "提示词" }), {
       clipboardData: { getData: (type: string) => type === "text/plain" ? "失败也不能丢失正文" : "", files: [] },
     });
@@ -26,30 +25,28 @@ describe("任务优先级", () => {
     expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "create_task")).toHaveLength(1);
     rejectSave(new Error("保存失败"));
     await screen.findByRole("alert");
-    expect(document.activeElement).toBe(within(dialog).getByRole("textbox", { name: "标题" }));
-    expect((within(dialog).getByRole("textbox", { name: "标题" }) as HTMLInputElement).value).toBe("保留全部输入");
+    expect(document.activeElement).toBe(within(dialog).getByRole("textbox", { name: "提示词" }));
     expect(within(dialog).getByRole("textbox", { name: "提示词" }).textContent).toBe("失败也不能丢失正文");
     expect((within(dialog).getByRole("combobox") as HTMLSelectElement).value).toBe("high");
     vi.mocked(invoke).mockImplementation(base);
     fireEvent.click(save);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect(await screen.findByText("保留全部输入")).toBeTruthy();
+    expect(await screen.findByText("自动标题")).toBeTruthy();
   });
 
-  it("新建一次保存标题、提示词和优先级，关闭后重新编辑可读回", async () => {
+  it("新建保存提示词和优先级，编辑可读回自动标题", async () => {
     await renderBoard();
     fireEvent.click(screen.getByRole("button", { name: /新建任务/ }));
     const dialog = screen.getByRole("dialog", { name: "新建任务" });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "标题" }), { target: { value: "完整任务" } });
     const prompt = within(dialog).getByRole("textbox", { name: "提示词" });
     fireEvent.paste(prompt, { clipboardData: { getData: (type: string) => type === "text/plain" ? "请检查新建表单" : "", files: [] } });
     fireEvent.change(within(dialog).getByRole("combobox", { name: "优先级" }), { target: { value: "urgent" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "添加任务" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    const card = (await screen.findByText("完整任务")).closest(".task-card")! as HTMLElement;
+    const card = (await screen.findByText("自动标题")).closest(".task-card")! as HTMLElement;
     fireEvent.click(within(card).getByRole("button", { name: "编辑" }));
     const edit = screen.getByRole("dialog", { name: "编辑任务" });
-    expect((within(edit).getByRole("textbox", { name: "标题" }) as HTMLInputElement).value).toBe("完整任务");
+    expect((within(edit).getByRole("textbox", { name: "标题" }) as HTMLInputElement).value).toBe("自动标题");
     expect(within(edit).getByRole("textbox", { name: "提示词" }).textContent).toBe("请检查新建表单");
     expect((within(edit).getByRole("combobox", { name: "优先级" }) as HTMLSelectElement).value).toBe("urgent");
   });
@@ -61,11 +58,11 @@ describe("任务优先级", () => {
     await renderBoard();
     fireEvent.keyDown(document, { key: "n" });
     const dialog = screen.getByRole("dialog", { name: "新建任务" });
-    fireEvent.change(within(dialog).getByRole("textbox", { name: "标题" }), { target: { value: "保留草稿" } });
+    fireEvent.paste(within(dialog).getByRole("textbox", { name: "提示词" }), { clipboardData: { files: [], getData: (type: string) => type === "text/plain" ? "保留草稿" : "" } });
     fireEvent.change(within(dialog).getByRole("combobox", { name: "优先级" }), { target: { value: "high" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "添加任务" }));
     await screen.findByRole("alert");
-    expect((within(dialog).getByRole("textbox", { name: "标题" }) as HTMLInputElement).value).toBe("保留草稿");
+    expect(within(dialog).getByRole("textbox", { name: "提示词" }).textContent).toBe("保留草稿");
     expect((within(dialog).getByRole("combobox") as HTMLSelectElement).value).toBe("high");
     fireEvent.click(within(dialog).getByRole("button", { name: "取消" }));
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -76,11 +73,11 @@ describe("任务优先级", () => {
     await renderBoard();
     expect(screen.queryByRole("textbox", { name: "标题" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /新建任务/ }));
-    fireEvent.change(screen.getByRole("textbox", { name: "标题" }), { target: { value: "紧急故障" } });
+    fireEvent.paste(screen.getByRole("textbox", { name: "提示词" }), { clipboardData: { files: [], getData: (type: string) => type === "text/plain" ? "紧急故障" : "" } });
     fireEvent.change(screen.getByRole("combobox", { name: "优先级" }), { target: { value: "urgent" } });
     fireEvent.click(screen.getByRole("button", { name: "添加任务" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    const card = (await screen.findByText("紧急故障")).closest(".task-card")! as HTMLElement;
+    const card = (await screen.findByText("自动标题")).closest(".task-card")! as HTMLElement;
     fireEvent.click(within(card).getByRole("button", { name: "编辑" }));
     const editor = screen.getByRole("dialog", { name: "编辑任务" });
     const priority = within(editor).getByRole("combobox", { name: "优先级" });

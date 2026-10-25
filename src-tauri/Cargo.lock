@@ -2140,6 +2140,7 @@ dependencies = [
  "fs2",
  "ignore",
  "image",
+ "libc",
  "rfd",
  "rusqlite",
  "serde",
@@ -2151,6 +2152,7 @@ dependencies = [
  "tauri-plugin-shell",
  "uuid",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

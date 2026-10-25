@@ -12,14 +12,19 @@ mod project_git;
 mod projects;
 mod start;
 mod task_overview;
+mod task_titles;
 mod tasks;
 mod terminal;
+mod title_cli;
+mod title_process;
+mod title_prompt;
 mod work_commands;
 mod workflow;
 
 use commands::DbState;
 use rusqlite::Connection;
 use std::sync::{Arc, Mutex};
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -45,7 +50,21 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
-        .manage(DbState(conn))
+        .manage(DbState(conn.clone()))
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            app.manage(task_titles::TaskTitles::new(
+                conn.clone(),
+                Arc::new(title_cli::CodexTitleGenerator::from_env()),
+                Arc::new(move |project_id| {
+                    let _ = handle.emit(
+                        "task-title-changed",
+                        serde_json::json!({"project_id":project_id}),
+                    );
+                }),
+            ));
+            Ok(())
+        })
         .manage(workflow)
         .manage(projects)
         .manage(Arc::new(terminal::TerminalManager::default()))
@@ -53,6 +72,7 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 use tauri::Manager;
                 window.state::<Arc<terminal::TerminalManager>>().close_all();
+                window.state::<task_titles::TaskTitles>().shutdown();
             }
         })
         .invoke_handler(tauri::generate_handler![

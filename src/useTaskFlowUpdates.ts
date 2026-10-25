@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { onStartChanged } from "./api";
+import { onStartChanged, onTitleChanged } from "./api";
 
 /** Events prompt authoritative reads; polling/focus also recover missed notifications. */
 export function useTaskFlowUpdates(projectId: string, reload: () => Promise<void>) {
@@ -10,6 +10,7 @@ export function useTaskFlowUpdates(projectId: string, reload: () => Promise<void
     let running = false;
     let queued = false;
     let unlisten: (() => void) | undefined;
+    let unlistenTitle: (() => void) | undefined;
     async function reconcile() {
       if (!active || document.visibilityState === "hidden") return;
       if (running) { queued = true; return; }
@@ -28,6 +29,12 @@ export function useTaskFlowUpdates(projectId: string, reload: () => Promise<void
       // Close the gap between initial load and listener registration.
       void reconcile();
     }).catch(() => { /* Polling remains available if the event transport fails. */ });
+    void onTitleChanged(event => {
+      if (event.project_id === projectId) void reconcile();
+    }).then(stop => {
+      if (!active) stop();
+      else { unlistenTitle = stop; void reconcile(); }
+    }).catch(() => { /* Existing polling also recovers lost title notifications. */ });
     const timer = window.setInterval(() => void reconcile(), 2000);
     window.addEventListener("focus", reconcile);
     document.addEventListener("visibilitychange", reconcile);
@@ -37,6 +44,7 @@ export function useTaskFlowUpdates(projectId: string, reload: () => Promise<void
       window.removeEventListener("focus", reconcile);
       document.removeEventListener("visibilitychange", reconcile);
       unlisten?.();
+      unlistenTitle?.();
     };
   }, [projectId]);
 }

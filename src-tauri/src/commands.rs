@@ -43,50 +43,40 @@ pub async fn task_overview(
 
 #[tauri::command]
 pub fn create_task(
-    state: State<DbState>,
+    titles: State<crate::task_titles::TaskTitles>,
     project_id: String,
-    name: String,
+    name: Option<String>,
     priority: TaskPriority,
     prompt_json: Option<String>,
     draft_id: Option<String>,
+    locale: Option<String>,
 ) -> Result<Task, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    crate::images::save_task(
-        &conn,
-        None,
-        &project_id,
-        &name,
-        prompt_json.as_deref().unwrap_or("{}"),
+    titles.create(crate::task_titles::NewTask {
+        project_id,
+        name,
         priority,
-        draft_id.as_deref(),
-    )
+        prompt_json: prompt_json.unwrap_or_else(|| "{}".into()),
+        draft_id,
+        locale: locale.unwrap_or_else(|| "zh-CN".into()),
+    })
 }
 
 #[tauri::command]
 pub fn update_task(
-    state: State<DbState>,
+    titles: State<crate::task_titles::TaskTitles>,
     id: String,
-    name: String,
+    name: Option<String>,
     prompt_json: String,
     priority: TaskPriority,
     draft_id: Option<String>,
 ) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let project: String = conn
-        .query_row("SELECT project_id FROM tasks WHERE id=?1", [&id], |r| {
-            r.get(0)
-        })
-        .map_err(|_| "task.missing")?;
-    crate::images::save_task(
-        &conn,
-        Some(&id),
-        &project,
-        &name,
+    titles.update(
+        &id,
+        name.as_deref(),
         &prompt_json,
         priority,
         draft_id.as_deref(),
     )
-    .map(|_| ())
 }
 
 #[tauri::command]

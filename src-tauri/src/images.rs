@@ -320,6 +320,7 @@ pub fn document_images(json: &str) -> Result<Vec<String>, String> {
     Ok(ids)
 }
 
+#[cfg(test)]
 pub fn save_task(
     db: &Connection,
     task: Option<&str>,
@@ -329,8 +330,23 @@ pub fn save_task(
     priority: TaskPriority,
     draft: Option<&str>,
 ) -> Result<Task, String> {
-    let ids = document_images(json)?;
     let tx = db.unchecked_transaction().map_err(error)?;
+    let saved = save_task_in(&tx, task, project, name, json, priority, draft)?;
+    tx.commit().map_err(error)?;
+    Ok(saved)
+}
+
+/// The caller owns the transaction, including any accompanying task metadata.
+pub(crate) fn save_task_in(
+    tx: &Connection,
+    task: Option<&str>,
+    project: &str,
+    name: &str,
+    json: &str,
+    priority: TaskPriority,
+    draft: Option<&str>,
+) -> Result<Task, String> {
+    let ids = document_images(json)?;
     let mut total = 0;
     if let Some(draft) = draft {
         let owner: Option<(String, Option<String>)> = tx
@@ -388,7 +404,6 @@ pub fn save_task(
         )
         .map_err(error)?;
     }
-    tx.commit().map_err(error)?;
     Ok(saved)
 }
 

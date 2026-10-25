@@ -41,6 +41,9 @@ export const board = {} as { storedTask: Task; availableAgents: HerdrAgent[]; ex
 export const sendPrompt = vi.fn<(input: Record<string, string>) => Promise<void>>();
 
 beforeEach(() => {
+  // jsdom has no text-range geometry; focused Tiptap pastes request it.
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
+  Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: () => new DOMRect() });
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   flowEvents.clear();
   terminalSize.cols = 80; terminalSize.rows = 24;
@@ -66,13 +69,14 @@ beforeEach(() => {
       case "delete_task": board.deleted = true; return;
       case "archive_task": board.deleted = true; return;
       case "create_task": {
-        const task = { ...board.storedTask, id: "new-task", name: input.name, prompt_json: input.promptJson, priority: input.priority };
+        const task = { ...board.storedTask, id: "new-task", name: input.name ?? "自动标题", prompt_json: input.promptJson, priority: input.priority };
         board.extraTasks.push(task as Task);
         return task;
       }
       case "update_task": {
         const task = input.id === board.storedTask.id ? board.storedTask : board.extraTasks.find((t) => t.id === input.id)!;
-        task.name = input.name; task.prompt_json = input.promptJson; task.priority = input.priority as Task["priority"]; return;
+        if (input.name !== undefined) task.name = input.name;
+        task.prompt_json = input.promptJson; task.priority = input.priority as Task["priority"]; return;
       }
       case "herdr_list_agents": return board.availableAgents;
       case "complete_task": board.storedTask.status = "done"; return {};

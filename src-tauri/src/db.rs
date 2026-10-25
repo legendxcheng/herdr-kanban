@@ -177,11 +177,13 @@ pub fn init(conn: &Connection) -> Result<()> {
         )?;
         tx.commit()?;
     }
+    crate::task_titles::init(conn)?;
     Ok(())
 }
 
 /// Only called once when opening the application, never during a live command.
 pub fn recover_interrupted(conn: &Connection) -> Result<()> {
+    conn.execute("UPDATE task_title_requests SET state='interrupted',error='title.interrupted' WHERE state IN ('pending','running')", [])?;
     conn.execute("DELETE FROM image_drafts", [])?;
     let _ = crate::images::release_abandoned_preparations(conn, true);
     // Reclamation cannot prevent opening otherwise usable task data.

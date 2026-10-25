@@ -1,4 +1,6 @@
 {
+  "task.content_required": "Enter task content or add a file, skill reference, or image.",
+  "task.title_required": "The task title cannot be empty.",
   "overview.title": "Task overview",
   "overview.scope": "All Workspaces in the current project list. Select a name to open its board.",
   "overview.todo": "To do",
