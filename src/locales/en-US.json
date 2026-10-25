@@ -237,5 +237,9 @@
   "task.complete": "Mark done",
   "terminal.wezterm_unavailable": "WezTerm was not found. Install it or set KANBAN_WEZTERM_EXECUTABLE.",
   "terminal.window_timeout": "The WezTerm window did not become ready. Reconnect to try again.",
+  "terminal.client_protocol": "Herdr does not support the required client navigation protocol. Update both client and server.",
+  "terminal.client_focus": "Could not locate the task in this Herdr window. Reconnect to try again.",
+  "terminal.client_focus_timeout": "Timed out locating the task in Herdr. Reconnect to try again.",
+  "terminal.client_connect": "Herdr client connection failed",
   "terminal.process_isolation": "Cannot manage the WezTerm process. Reconnect to try again."
 }

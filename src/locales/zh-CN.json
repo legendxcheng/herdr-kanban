@@ -237,5 +237,9 @@
   "task.complete": "标记完成",
   "terminal.wezterm_unavailable": "未找到 WezTerm，请先安装或设置 KANBAN_WEZTERM_EXECUTABLE。",
   "terminal.window_timeout": "WezTerm 窗口未能就绪，请重连。",
+  "terminal.client_protocol": "Herdr 不支持当前客户端定位协议，请确认客户端和服务器均已升级。",
+  "terminal.client_focus": "未能在此 Herdr 窗口定位任务，请重连。",
+  "terminal.client_focus_timeout": "等待 Herdr 任务定位超时，请重连。",
+  "terminal.client_connect": "Herdr 客户端连接失败",
   "terminal.process_isolation": "无法管理 WezTerm 进程，请重连。"
 }

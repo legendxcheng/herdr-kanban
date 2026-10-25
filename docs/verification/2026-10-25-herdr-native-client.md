@@ -1,5 +1,7 @@
 # WezTerm 直接运行 Herdr 客户端（2026-10-25）
 
+> 本记录对应 0.8.0 预览版与最初的原生客户端接入。升级至 0.9.5 后的客户端范围定位及双窗口独立导航见[后续验收](2026-10-25-herdr-client-navigation.md)；下文全局 focus 与状态语义保留历史含义。
+
 ## 修正范围
 
 用户要求的是独立 WezTerm 中的完整 Herdr 体验，尤其是 Herdr 原生右键菜单。此前使用了 `kanban-terminal-bridge.exe → terminal session control`，只能呈现 pane 输出，没有运行 Herdr UI；确认 WezTerm 进程存在不能证明该需求已完成。此前桥接方案及其验收属于历史记录，不再是当前实现。

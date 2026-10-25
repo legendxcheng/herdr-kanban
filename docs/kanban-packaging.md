@@ -17,7 +17,7 @@
 
 2026-10-25 修正为 WezTerm 直接运行官方 Herdr 客户端。beforeDev/beforeBuild 分别执行 npm run dev/npm run build；不再构建或打包 terminal bridge。WezTerm 与 Herdr 本身均不打入安装包。
 
-程序在 PATH、Program Files/WezTerm 和 LocalAppData/Programs/WezTerm 查找 wezterm-gui.exe；可用 KANBAN_WEZTERM_EXECUTABLE 显式指定。WezTerm 正常读取用户配置，Kanban 仅覆盖无边框和隐藏 tab bar，不写专用鼠标/按键配置。Herdr 使用 connect-only 的 client 入口连接已运行 session；本次验证 Herdr 0.8.0-preview.2026-08-04-d78e3d3b5126、WezTerm 20240203-110809-5046fc22。详细证据见[原生客户端验收](verification/2026-10-25-herdr-native-client.md)。
+程序在 PATH、Program Files/WezTerm 和 LocalAppData/Programs/WezTerm 查找 wezterm-gui.exe；可用 KANBAN_WEZTERM_EXECUTABLE 显式指定。WezTerm 正常读取用户配置，Kanban 仅覆盖无边框和隐藏 tab bar，不写专用鼠标/按键配置。Herdr 使用 connect-only 的 client 入口连接已运行 session。当前任务定位要求支持 endpoint generation 1 的客户端范围 pane.focus；本次验证 Herdr 0.9.5、WezTerm 20240203-110809-5046fc22。进程内专用管道只原样传输官方协议帧并加入首次定位，不额外打包 bridge。详细证据见[独立导航验收](verification/2026-10-25-herdr-client-navigation.md)。
 
 ## 发布新版本
 

@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+2026-10-25 Herdr 0.9.5 多客户端定位修正：删除全局 `agent focus`，通过 Kanban 专用连接发送客户端范围的 `pane.focus`。真实双窗口测试覆盖不同 workspace、同 workspace 不同 tab、连续/快速任务切换及输入隔离，见[独立导航验收](docs/verification/2026-10-25-herdr-client-navigation.md)。
+
 2026-10-25 WezTerm 原生 Herdr 修正：直接启动官方 Herdr 客户端，删除桥接、自定义鼠标转发及专用 Lua，保留 Herdr 自带右键菜单，见[原生客户端验收](docs/verification/2026-10-25-herdr-native-client.md)。窗口跟随部分：移除 xterm 与 FitAddon，右侧内容改为独立无边框 WezTerm 窗口；同步位置、尺寸、窗口层级及显示状态，不设置父子或 owner 关系。修正失焦消失和后台停止定位，新增原生移动事件唤醒。当前链路与验收边界见 6.5 节及 [WezTerm 验收记录](docs/verification/2026-10-25-wezterm-terminal.md)。
 
 2026-10-25 中英双语增量：应用仅提供简体中文和 English，侧栏切换即时生效并保存本机偏好；首次使用按系统语言选择中文或英文。覆盖既有界面、错误提示、编辑器和日期；切换保留草稿与终端连接，详见 2.5 节及[双语验收记录](docs/verification/2026-10-25-language-support.md)。更新日期：2026-10-25。
@@ -155,6 +157,8 @@ herdr-kanban/
 │     ├─ shared_tab.rs             查找唯一 kanban Tab、选择分屏位置及真实拓扑回归
 │     ├─ pane_allocation.rs        同 workspace 分配互斥、创建前快照与未知结果隔离
 │     ├─ native_terminal.rs        任务定位、独立 WezTerm/官方 Herdr 客户端启动及关闭
+│     ├─ native_client_connection.rs  私有管道连接、原样转发及首次客户端范围定位
+│     ├─ native_client_wire.rs      endpoint generation 1 定位信封、回执及快照确认
 │     ├─ native_terminal_windows.rs  独立窗口位置/尺寸/前台同步与 Job 清理
 │     └─ terminal.rs               历史协议回归实现，仅 cfg(test)，不参与产品运行
 ├─ public/、src/assets/、src-tauri/icons/  静态资源和图标
@@ -377,7 +381,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `repair_binding` | taskId、paneId | 显式验证并替换独占绑定，不重发 |
 | `terminal_open` | taskId、connectionId、bounds、output Channel | 校验任务、定位 pane，并启动 WezTerm 中的官方 Herdr client；窗口发现后返回，Channel 仅通知关闭 |
 | `terminal_bounds` | connectionId、bounds | 同步内容区 CSS 矩形、WebView 宽高和可见性；拒绝旧连接、非有限及越界值 |
-| `terminal_close` | connectionId | 关闭对应查看窗口及桥接，释放 Herdr 控制器；不关闭 Agent |
+| `terminal_close` | connectionId | 关闭对应查看窗口与私有连接；不关闭 Agent |
 | `pick_folder` | 可选 `title` | 使用当前 UI 语言的标题；省略沿用中文。原生目录选择结果，取消返回 null |
 
 `dispatch_to_herdr` 的 `agentName` 实际传入 `pane_id`，不是 `HerdrAgent.name`。`name` 是 Agent 类型，`title` 用于展示，`pane_id` 才是发送目标。
@@ -594,9 +598,11 @@ Enter 前重新采集该目标的 `state_change_seq`，随后每约 200ms 查询
 
 ### 6.5 右侧原生 Herdr 客户端（2026-10-25）
 
-`TerminalPanel → terminal_open → NativeTerminalManager → wezterm-gui.exe → herdr.exe --session <name> client`。显示完整 Herdr UI，包含原生右键菜单、侧栏、tabs 和分屏。Herdr server 继续拥有 Agent。删除 bridge crate、wire 协议、专用 Lua、构建脚本及资源，不再由 Kanban 转发终端画面、键盘、鼠标、滚轮、resize 或 ack。
+`TerminalPanel → terminal_open → NativeTerminalManager → wezterm-gui.exe → herdr.exe client`。显示完整 Herdr UI，包含原生右键菜单、侧栏、tabs 和分屏。Herdr server 继续拥有 Agent。旧的 ANSI bridge crate、专用 Lua、构建脚本及资源不再使用；新增进程内连接适配只负责原样传输官方客户端协议帧和首次定位，不解析或重绘终端画面，也不编码键盘、鼠标、滚轮或尺寸事件。
 
-**启动和任务定位。** 先验证 task 绑定及 session，再执行 `agent focus <pane>`，用 `client` 连接既有 server，禁止在查看窗口 Job 内自动启动 server。串行化打开请求，检查旧连接已失效，防止慢请求覆盖新任务焦点。清除继承的 HERDR_ENV、pane/tab/workspace/socket 及 WEZTERM_* 上下文，不修改用户配置。状态“Herdr 已打开 / Herdr open”表示窗口创建完成，连接及错误画面由 Herdr 自己显示。
+**启动和任务定位。** 先验证 task 绑定及 session，通过 CLI `status server` 解析现有客户端端点，再创建只允许当前用户/SYSTEM、拒绝远程访问的随机命名管道。官方客户端通过 `HERDR_SESSION` 保持会话身份，通过 `HERDR_CLIENT_SOCKET_PATH` 使用专用连接；不传优先级更高的 `--session` 参数覆盖管道。清除继承的 HERDR_ENV、pane/tab/workspace/socket 及 WEZTERM_* 上下文。`HERDR_REMOTE_PREFERENCES_IDENTITY` 仅给临时连接提供稳定的 Kanban 数据目录/session 偏好键，保留侧栏偏好，不开启远程模式、不修改用户配置文件。
+
+适配器验证 endpoint generation 1 和 `pane.focus` 能力，读取初始 snapshot 的 boot_id，在同一客户端连接发送 `ClientShellEndpointRequest(pane.focus)`，不再调用全局 `agent focus`。独立请求 ID 的成功回执和目标 pane 快照都确认后，才将“Herdr 已打开 / Herdr open”状态与窗口显示置为就绪。初始快照已是目标时不等待不存在的重复快照；分片回执会合并并核对 boot、请求及 pane。握手/定位限时 15 秒，单次阻塞写入限时 5 秒，帧大小上限 64 MiB；旧选择取消、连接异常或协议不兼容时关闭本次查看连接，绝不回退全局 focus。定位完成后所有官方协议帧原样传输。
 
 **窗口布局。** `.terminal-host` 仅提供区域测量，React 保留标题、错误、重连和最大化控件。ResizeObserver/MutationObserver 合并串行发送 bounds；独立原生线程监听 WinEvent 位置/前台事件，并以 16ms 超时兜底，在 Windows 移动循环内继续定位。CSS 矩形转换为实际客户区屏幕像素，按实际差异移动/缩放/排序。窗口按独立 PID 和唯一 class 查找，无 SetParent、owner 或 TOPMOST。
 
@@ -604,9 +610,9 @@ Enter 前重新采集该目标的 `state_change_seq`，随后每约 200ms 查询
 
 **原生输入与配置。** WezTerm 正常读取用户配置，仅通过命令行覆盖 window_decorations 和 enable_tab_bar。鼠标、复制粘贴、字体快捷键、滚轮及终端尺寸协商均交给 WezTerm/Herdr；没有仿制菜单或私有滚轮标记。旧专用 Lua/字号文件不再读取，也不删除用户已有文件。
 
-**生命周期与导航边界。** 选中任务初始定位到对应 Agent；之后用户可以在完整 Herdr UI 中导航，Kanban 绑定不会自动改成当前 pane。此版本 Herdr 的同一 session 共享导航，任务定位可能影响其他客户端，不能宣称输入永远锁定于卡片。关闭查看窗口、切任务/项目、任务删除/归档/完成及绑定修复均释放对应原生窗口。Windows Job 清理 WezTerm 及 Herdr client；不终止外部 server/Agent。用户在 Herdr 菜单主动关闭 pane 则执行真实的 Herdr 操作。
+**生命周期与导航边界。** 在已验证的 Herdr 0.9.5 中，选中任务仅定位 Kanban 自己的客户端；其他客户端可保留各自 workspace/tab。同一 tab 的 pane 焦点、分屏布局及尺寸仍受 Herdr 自身共享规则影响。用户随后可在完整 Herdr UI 中导航，Kanban 绑定不会自动改成当前 pane，不宣称输入永远锁定于卡片。关闭查看窗口、切任务/项目、任务删除/归档/完成及绑定修复均释放对应原生窗口和管道线程。Windows Job 清理 WezTerm 及 Herdr client；不终止外部 server/Agent。用户在 Herdr 菜单主动关闭 pane 则执行真实的 Herdr 操作。
 
-**验证。** 前端 136 项、Rust 135 项通过，9 项既有 live 测试 ignored；生产前端和 Windows debug 构建通过。实际 Tauri+WezTerm+Herdr 原生右键打开菜单，进程链无 bridge；双任务切换定位/输入、旧客户端清理及关闭看板后 Agent 保留通过，见[原生客户端验收](docs/verification/2026-10-25-herdr-native-client.md)。此前桥接验收仅作历史记录。旧 terminal.rs 在 cfg(test) 下保留历史协议回归，不进入产品。没有数据库迁移；跨屏 DPI、虚拟桌面、完整物理鼠标/IME/剪贴板和 NSIS 安装升级未完整验收。
+**验证。** 当前独立导航修正：前端 136 项、Rust 138 项通过，10 项 opt-in live 测试默认 ignored，其中新增原生连接定位测试另行显式运行通过；生产前端构建及 tauri dev 编译通过。真实 Tauri+WezTerm+Herdr 0.9.5 双窗口验证不同 workspace/tab 保持独立、连续/快速选任务正确、输入目标正确、旧客户端清理、原生右键菜单及关闭看板后 Agent 保留，见[独立导航验收](docs/verification/2026-10-25-herdr-client-navigation.md)。此前[原生客户端验收](docs/verification/2026-10-25-herdr-native-client.md)及桥接验收保留历史语义。旧 terminal.rs 在 cfg(test) 下保留历史协议回归，不进入产品。没有数据库迁移；跨屏 DPI、虚拟桌面、完整物理鼠标/IME/剪贴板和 NSIS 安装升级未完整验收。
 
 ### 6.6 自动分配、完成关闭与恢复（GitHub #10）
 

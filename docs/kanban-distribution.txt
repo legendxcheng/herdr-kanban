@@ -7,6 +7,7 @@ Herdr Kanban — Windows x64
 使用环境：Windows 10/11 x64。无需安装 Node.js、Rust 或 Python。
 若系统缺少 Microsoft Edge WebView2 Runtime，安装器会联网下载并安装它。
 Herdr、Codex CLI 与 WezTerm 需要自行安装配置；此安装包不包含它们，也不包含账户登录信息。
+请使用 Herdr 0.9.5 或具备相同客户端定位能力的兼容版本，并确认后台服务器也已升级。
 右侧终端由独立 WezTerm 窗口显示，随 Kanban 自动定位并跟随窗口层级；切换至其他应用时保留，打开看板弹窗或最小化时暂时隐藏。
 WezTerm 直接运行 Herdr 原生客户端，支持 Herdr 自带右键菜单。关闭看板或终端查看窗口不会关闭运行中的 Agent。
 

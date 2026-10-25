@@ -11,6 +11,21 @@ use std::{
 };
 
 impl Cli {
+    pub(crate) fn client_endpoint(&self) -> Result<std::path::PathBuf, String> {
+        let bytes = self.output(&["status", "server"]).map_err(|e| e.message)?;
+        let status = std::str::from_utf8(&bytes).map_err(|_| "herdr.invalid_response")?;
+        let api = status
+            .lines()
+            .find_map(|line| line.strip_prefix("socket: "))
+            .filter(|s| !s.trim().is_empty())
+            .ok_or("herdr.invalid_response")?;
+        let path = std::path::Path::new(api.trim());
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or("herdr.invalid_response")?;
+        Ok(path.with_file_name(format!("{stem}-client.sock")))
+    }
     pub fn from_env() -> Self {
         let installed = std::env::var_os("LOCALAPPDATA")
             .map(PathBuf::from)
