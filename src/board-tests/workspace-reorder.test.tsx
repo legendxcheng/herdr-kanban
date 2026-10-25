@@ -42,7 +42,7 @@ function drag(source: string, target: string, after = false) {
 }
 it("拖动可上移和移至末尾，保持项目选择、任务及终端连接，外部重排继续同步", async () => {
   const { state } = setup(); bindTask(); board.storedTask.status = "in_progress";
-  render(<App />); await screen.findByText("已连接");
+  render(<App />); await screen.findByText("Herdr 已打开");
   drag(third.id, project.id);
   await waitFor(() => expect(names()).toEqual([third.name, project.name, second.name]));
   expect(invoke).toHaveBeenCalledWith("move_project", { projectId: third.id, beforeProjectId: project.id });

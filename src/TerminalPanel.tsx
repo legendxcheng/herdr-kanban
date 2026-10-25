@@ -1,14 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import "@xterm/xterm/css/xterm.css";
 import * as api from "./api";
 import type { Task } from "./types";
 import { tr, useLocalizedMessage } from "./i18n";
 import { preparationLabel } from "./taskFlow";
-import { terminalAppearance } from "./terminalAppearance";
-import { changeTerminalFontSize, readTerminalFontSize, terminalFontSizeDelta } from "./terminalFontSize";
-import { attachTerminalScroll } from "./terminalScroll";
+import { terminalBounds } from "./nativeTerminalBounds";
 import { Icon } from "./Icon";
 
 export function TerminalPanel({ task, onRepair, maximized = false, onToggleMaximized }: {
@@ -31,96 +26,56 @@ export function TerminalPanel({ task, onRepair, maximized = false, onToggleMaxim
     if (bindingState !== "valid") { setState("binding.repair_required"); return; }
     const connectionId = crypto.randomUUID();
     let active = true;
-    let connected = false;
     let ended = false;
-    let pendingInput = "";
-    let writing = false;
-    let inputTimer: ReturnType<typeof setTimeout> | undefined;
-    let sizeGeneration = 0;
-    let sizeSync = Promise.resolve();
-    let sizeAcknowledged = false;
-    let renderedSize = { cols: 0, rows: 0 };
-    const terminal = new Terminal({ ...terminalAppearance, fontSize: readTerminalFontSize(), scrollback: 3000, convertEol: false });
-    const fit = new FitAddon();
-    terminal.loadAddon(fit);
-    terminal.open(host.current);
-    const scroll = attachTerminalScroll(host.current, terminal, connectionId, fail);
-    terminal.attachCustomKeyEventHandler((event) => {
-      const delta = terminalFontSizeDelta(event);
-      if (!delta) return true;
-      // Consume every phase, but adjust only on keydown (including key repeat).
-      event.preventDefault();
-      event.stopPropagation();
-      if (active && event.type === "keydown") {
-        const size = changeTerminalFontSize(terminal.options.fontSize!, delta);
-        if (size !== terminal.options.fontSize) {
-          terminal.options.fontSize = size;
-          fit.fit();
-        }
-      }
-      return false;
-    });
-    fit.fit();
-    terminal.options.disableStdin = true;
+    let opened = false;
+    let lastBounds = "";
+    let syncing = false;
+    let dirty = true;
     setState("terminal.connecting");
     function fail(e: unknown) {
-      if (!active) return;
-      ended = true; connected = false; pendingInput = "";
-      scroll.pause();
-      terminal.options.disableStdin = true;
+      if (!active || ended) return;
+      ended = true;
       setState("terminal.disconnected"); setError(String(e));
       void api.closeTerminal(connectionId).catch(() => {});
     }
-    async function flushInput() {
-      if (!active || !connected || writing || !pendingInput) return;
-      const data = pendingInput; pendingInput = ""; writing = true;
-      try { await api.inputTerminal(connectionId, data); }
-      catch (e) { fail(e); }
-      finally { writing = false; if (active && connected && pendingInput) void flushInput(); }
+    async function syncBounds() {
+      dirty = true;
+      if (!active || ended || !opened || syncing) return;
+      syncing = true;
+      try {
+        while (active && !ended && dirty && host.current) {
+          dirty = false;
+          const bounds = terminalBounds(host.current);
+          const key = JSON.stringify(bounds);
+          if (key === lastBounds) continue;
+          await api.setTerminalBounds(connectionId, bounds);
+          lastBounds = key;
+        }
+      } catch (e) { fail(e); }
+      finally { syncing = false; }
     }
-    const dataListener = terminal.onData((data) => {
-      if (!active || !connected) return;
-      if (new TextEncoder().encode(pendingInput + data).length > 65536) { fail("terminal.input_limit"); return; }
-      pendingInput += data;
-      clearTimeout(inputTimer); inputTimer = setTimeout(() => void flushInput(), 10);
-    });
-    function syncSize() {
-      scroll.pause();
-      sizeAcknowledged = false;
-      const generation = ++sizeGeneration;
-      const { cols, rows } = terminal;
-      sizeSync = sizeSync.then(async () => {
-        if (!active || !connected || generation !== sizeGeneration) return;
-        await api.resizeTerminal(connectionId, cols, rows);
-        if (active && connected && generation === sizeGeneration) { sizeAcknowledged = true; enableScroll(); }
-      }).catch(fail);
-    }
-    function enableScroll() {
-      if (active && connected && sizeAcknowledged && renderedSize.cols === terminal.cols && renderedSize.rows === terminal.rows) scroll.enable();
-    }
-    const resizeListener = terminal.onResize(syncSize);
-    const observer = new ResizeObserver(() => { if (active) fit.fit(); });
+    // Observe the entire layout: a title/status change or modal may move the
+    // slot without changing its size. Native code handles main-window movement.
+    const observer = new ResizeObserver(() => { void syncBounds(); });
     observer.observe(host.current);
-    void api.openTerminal(task.id, connectionId, terminal.cols, terminal.rows, (packet) => {
-      if (!active || ended) return;
-      if (packet.kind === "closed") { fail(packet.message); return; }
-      // Output can arrive before the invoke result. It belongs to this connection.
-      terminal.write(new Uint8Array(packet.data), () => {
-        if (packet.cols && packet.rows) renderedSize = { cols: packet.cols, rows: packet.rows };
-        enableScroll();
-        if (active && !ended) void api.ackTerminal(connectionId, packet.data.length).catch(fail);
-      });
+    const mutations = new MutationObserver(() => { void syncBounds(); });
+    mutations.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style", "inert", "role"] });
+    const update = () => { void syncBounds(); };
+    window.addEventListener("resize", update);
+    document.addEventListener("visibilitychange", update);
+    const initial = terminalBounds(host.current);
+    void api.openTerminal(task.id, connectionId, initial, packet => {
+      if (active && !ended && packet.kind === "closed") fail(packet.message);
     }).then(() => {
       if (!active || ended) { void api.closeTerminal(connectionId).catch(() => {}); return; }
-      connected = true; terminal.options.disableStdin = false; setState("terminal.connected");
-      fit.fit();
-      // fit may already have run during connect, without an active resize channel.
-      syncSize();
+      opened = true; setState("terminal.connected");
+      void syncBounds();
     }).catch(fail);
     return () => {
-      active = false; connected = false; clearTimeout(inputTimer); pendingInput = "";
-      scroll.dispose();
-      observer.disconnect(); dataListener.dispose(); resizeListener.dispose(); terminal.dispose();
+      active = false;
+      observer.disconnect(); mutations.disconnect();
+      window.removeEventListener("resize", update);
+      document.removeEventListener("visibilitychange", update);
       void api.closeTerminal(connectionId).catch(() => {});
     };
   // Reconnect only when the selected identity/state changes, not on list refreshes.

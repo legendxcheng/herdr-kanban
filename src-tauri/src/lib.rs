@@ -14,7 +14,9 @@ mod start;
 mod task_overview;
 mod task_titles;
 mod tasks;
+#[cfg(test)]
 mod terminal;
+mod native_terminal;
 mod title_cli;
 mod title_process;
 mod title_prompt;
@@ -67,11 +69,11 @@ pub fn run() {
         })
         .manage(workflow)
         .manage(projects)
-        .manage(Arc::new(terminal::TerminalManager::default()))
+        .manage(Arc::new(native_terminal::NativeTerminalManager::default()))
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 use tauri::Manager;
-                window.state::<Arc<terminal::TerminalManager>>().close_all();
+                window.state::<Arc<native_terminal::NativeTerminalManager>>().close_all();
                 window.state::<task_titles::TaskTitles>().shutdown();
             }
         })
@@ -112,10 +114,7 @@ pub fn run() {
             work_commands::repair_binding,
             work_commands::terminal_open,
             work_commands::terminal_close,
-            work_commands::terminal_input,
-            work_commands::terminal_scroll,
-            work_commands::terminal_resize,
-            work_commands::terminal_ack,
+            work_commands::terminal_bounds,
             commands::pick_folder,
         ])
         .run(tauri::generate_context!())

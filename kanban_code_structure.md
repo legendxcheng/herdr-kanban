@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+2026-10-25 WezTerm 原生 Herdr 修正：直接启动官方 Herdr 客户端，删除桥接、自定义鼠标转发及专用 Lua，保留 Herdr 自带右键菜单，见[原生客户端验收](docs/verification/2026-10-25-herdr-native-client.md)。窗口跟随部分：移除 xterm 与 FitAddon，右侧内容改为独立无边框 WezTerm 窗口；同步位置、尺寸、窗口层级及显示状态，不设置父子或 owner 关系。修正失焦消失和后台停止定位，新增原生移动事件唤醒。当前链路与验收边界见 6.5 节及 [WezTerm 验收记录](docs/verification/2026-10-25-wezterm-terminal.md)。
+
 2026-10-25 中英双语增量：应用仅提供简体中文和 English，侧栏切换即时生效并保存本机偏好；首次使用按系统语言选择中文或英文。覆盖既有界面、错误提示、编辑器和日期；切换保留草稿与终端连接，详见 2.5 节及[双语验收记录](docs/verification/2026-10-25-language-support.md)。更新日期：2026-10-25。
 
 2026-10-25 自动标题增量（GitHub #1）：新建只输入提示词与优先级，先保存摘要标题，再由独立 Codex CLI `gpt-6-luna` 后台命名；编辑冲突、失败兜底、队列限制及退出恢复见 6.2.4。更新日期仍为 2026-10-25；本次验证见[自动标题验收记录](docs/verification/2026-10-25-task-auto-title.md)。
@@ -47,13 +49,15 @@ flowchart LR
     CLI --> AGENT[已有 Agent pane]
     CMD --> WF[workflow.rs：独占绑定与派发]
     WF --> DB
-    CMD --> TERM[terminal.rs：连接与输入]
-    TERM --> CLI
-    TERM -->|Channel ANSI 流| UI
+    CMD --> NATIVE
+    WEZ[独立 WezTerm 窗口] --> CLIENT[Herdr 原生客户端]
+    CLIENT --> SERVER[已有 Herdr server 与 Agent]
+    UI -->|区域矩形| NATIVE[原生窗口管理]
+    NATIVE --> WEZ
     CMD --> PICK[rfd 原生目录选择器]
 ```
 
-没有业务 HTTP 服务或 Agent 业务完成回调。启动由应用持有后台线程，生命周期变化发出任务通知，持久化记录负责恢复；应用退出后不继续执行。CRUD 通过 `invoke → Promise` 请求/响应传递；终端输出通过 Tauri Channel 流式传递。Herdr 继续拥有底层 Agent 进程；看板管理查看连接，并通过任务流转命令创建、准备及关闭任务 pane。
+没有业务 HTTP 服务或 Agent 业务完成回调。启动由应用持有后台线程，生命周期变化发出任务通知，持久化记录负责恢复；应用退出后不继续执行。CRUD 通过 `invoke → Promise` 请求/响应传递；查看窗口关闭状态通过 Tauri Channel 传递；终端画面、输入与鼠标由 WezTerm 和官方 Herdr 客户端直接处理。Herdr 继续拥有底层 Agent 进程；看板管理查看连接，并通过任务流转命令创建、准备及关闭任务 pane。
 
 ## 2. 目录与入口
 
@@ -99,10 +103,8 @@ herdr-kanban/
 │  ├─ MentionPopover.tsx           @/$ 搜索、键盘选择和节点插入
 │  ├─ fileDiscovery.test.tsx        @ 文件候选防抖、迟到响应、项目隔离及引用选择回归
 │  ├─ DispatchDialog.tsx           Agent 选择、预览和派发
-│  ├─ TerminalPanel.tsx            xterm 渲染、输入、尺寸、连接代次及最大化/恢复按钮
-│  ├─ terminalScroll.ts           连接级滚轮换算、有界队列、字符区命中与失效清理
-│  ├─ terminalAppearance.ts        本机 WezTerm 外观预设：字体、光标、ANSI 色板
-│  ├─ terminalFontSize.ts           字号快捷键识别、上下限及本机偏好保存
+│  ├─ TerminalPanel.tsx            原生终端连接状态、布局区域同步及最大化/恢复按钮
+│  ├─ nativeTerminalBounds.ts     WebView 区域测量、裁切与弹窗可见性判定
 │  ├─ BindingDialog.tsx            显式修复独占绑定，不发送提示词
 │  ├─ DispatchRecovery.tsx         核实不确定的派发结果
 │  ├─ i18n.ts / locales/           中英词库、语言订阅、本机偏好、插值与错误显示
@@ -152,7 +154,9 @@ herdr-kanban/
 │     ├─ codex_process.rs          Windows 进程写锁观测、恢复启动证据及会话切换拒绝
 │     ├─ shared_tab.rs             查找唯一 kanban Tab、选择分屏位置及真实拓扑回归
 │     ├─ pane_allocation.rs        同 workspace 分配互斥、创建前快照与未知结果隔离
-│     └─ terminal.rs               Herdr JSONL 控制流、输入与安全释放
+│     ├─ native_terminal.rs        任务定位、独立 WezTerm/官方 Herdr 客户端启动及关闭
+│     ├─ native_terminal_windows.rs  独立窗口位置/尺寸/前台同步与 Job 清理
+│     └─ terminal.rs               历史协议回归实现，仅 cfg(test)，不参与产品运行
 ├─ public/、src/assets/、src-tauri/icons/  静态资源和图标
 └─ dist/、node_modules/、src-tauri/target/ 构建产物与依赖目录
 ```
@@ -162,7 +166,7 @@ herdr-kanban/
 1. [main.rs](src-tauri/src/main.rs) 调用 `kanban_lib::run()`；release 模式设置 Windows GUI subsystem。
 2. [lib.rs](src-tauri/src/lib.rs) 创建数据目录，持有数据库实例锁，再打开 SQLite、执行迁移，将上次中断的 pending 派发及生命周期操作标为 unknown。
 3. 连接包装为 `Arc<Mutex<Connection>>`，CRUD 与 Workflow 共享。外部 Herdr 请求不持有数据库锁。
-4. 注册插件、业务命令、Workflow 和 TerminalManager，再启动 Tauri 窗口；销毁窗口时释放本应用终端连接。
+4. 注册插件、业务命令、Workflow 和 NativeTerminalManager，再启动 Tauri 窗口；销毁窗口时关闭专用 WezTerm/Herdr 客户端，保留外部 server 与 Agent。
 5. [main.tsx](src/main.tsx) 挂载 `App`；`App` 加载项目，自动选择列表中的第一个有效项目。
 6. `KanbanBoard` 按项目 ID 加载卡片，由后端按 Project ID 解析稳定 workspace ID 查询 Agent；卡片成功加载后自动选择第一张开发中任务，已有有效选择则保留。加载期间及没有项目时也保留右侧空终端。
 
@@ -371,12 +375,9 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `dispatch_to_herdr` | taskId、agentName（pane ID）、promptText、operationId、可选 promptJson | 后端从项目解析 workspace；有图正文由后端冻结、解析及校验，再经原独占派发流程；旧无图文本调用兼容 |
 | `resolve_dispatch` | taskId、operationId、sent、evidence | 人工核实未知结果，不重发 |
 | `repair_binding` | taskId、paneId | 显式验证并替换独占绑定，不重发 |
-| `terminal_open` | taskId、connectionId、cols、rows、output Channel | 从任务解析有效目标；创建控制流 |
-| `terminal_input` | connectionId、data | 再核验任务、绑定及身份后转发输入 |
-| `terminal_scroll` | connectionId、event | 核验任务身份、字符坐标、网格尺寸后批量转发单行滚动 |
-| `terminal_resize` | connectionId、cols、rows | 有界尺寸更新 |
-| `terminal_ack` | connectionId、bytes | 渲染消费确认，释放输出配额 |
-| `terminal_close` | connectionId | 只释放指定查看连接 |
+| `terminal_open` | taskId、connectionId、bounds、output Channel | 校验任务、定位 pane，并启动 WezTerm 中的官方 Herdr client；窗口发现后返回，Channel 仅通知关闭 |
+| `terminal_bounds` | connectionId、bounds | 同步内容区 CSS 矩形、WebView 宽高和可见性；拒绝旧连接、非有限及越界值 |
+| `terminal_close` | connectionId | 关闭对应查看窗口及桥接，释放 Herdr 控制器；不关闭 Agent |
 | `pick_folder` | 可选 `title` | 使用当前 UI 语言的标题；省略沿用中文。原生目录选择结果，取消返回 null |
 
 `dispatch_to_herdr` 的 `agentName` 实际传入 `pane_id`，不是 `HerdrAgent.name`。`name` 是 Agent 类型，`title` 用于展示，`pane_id` 才是发送目标。
@@ -591,37 +592,21 @@ Enter 前重新采集该目标的 `state_change_seq`，随后每约 200ms 查询
 
 不新增 IPC、数据库字段或迁移。原提示词可在真实 Windows Herdr/Codex 中复现成功回执但仍留在输入框；只拆开 Right/Enter 并延长等待仍可复现。最终验证包含原提示词连续三次、普通中文、多行与超过 11K 字符长文本，以及独立 Tauri/WebView2 + SQLite 的文本/技能节点两种拖放；每次均检查实际回复而非只检查回执。共享工作区 112 项 Rust、110 项前端测试及构建通过；8 项 opt-in live 默认跳过，其中本次提交矩阵和退出两项另行显式运行通过。详细证据、边界与运行中应用未替换的说明见[自动提交修复验收记录](docs/verification/2026-10-24-kanban-codex-submit.md)。
 
-### 6.5 右侧终端与恢复
+### 6.5 右侧原生 Herdr 客户端（2026-10-25）
 
-2026-10-25 最大化增量：终端标题栏右侧提供“最大化终端”按钮，点击后同位置显示“恢复终端”；已连接、连接中、断线和空态均可操作。`App.terminalMaximized → KanbanBoard / TerminalPanel` 传递纯布局状态及切换回调；无项目时由 App 直接传给空终端。最大化使用原面板的 `position: fixed; inset: 0` 铺满窗口内容区，保留系统标题栏，层级低于既有对话框与通知。侧栏、看板和分隔线保留挂载与布局测量，使用 visibility 隐藏并设为 inert；看板 N 快捷键同时停用，避免误操作隐藏内容。
+`TerminalPanel → terminal_open → NativeTerminalManager → wezterm-gui.exe → herdr.exe --session <name> client`。显示完整 Herdr UI，包含原生右键菜单、侧栏、tabs 和分屏。Herdr server 继续拥有 Agent。删除 bridge crate、wire 协议、专用 Lua、构建脚本及资源，不再由 Kanban 转发终端画面、键盘、鼠标、滚轮、resize 或 ack。
 
-切换不卸载或更改终端连接 effect 的依赖，沿用 ResizeObserver → FitAddon → onResize → terminal_resize 同步行列数；滚轮继续等待尺寸确认及对应帧渲染。恢复使用 KanbanBoard 原有 terminalWidth / widthAdjusted 状态；未手调仍按窗口 1/3，手调后保持像素宽度，窗口缩小时沿用上限约束。最大化状态不持久化，当前项目改变或重新打开应用回到分栏。按钮图标来自 Icon.tsx，提示与可访问名称使用中英文翻译键；不新增 IPC、Rust 改动或数据库迁移。
+**启动和任务定位。** 先验证 task 绑定及 session，再执行 `agent focus <pane>`，用 `client` 连接既有 server，禁止在查看窗口 Job 内自动启动 server。串行化打开请求，检查旧连接已失效，防止慢请求覆盖新任务焦点。清除继承的 HERDR_ENV、pane/tab/workspace/socket 及 WEZTERM_* 上下文，不修改用户配置。状态“Herdr 已打开 / Herdr open”表示窗口创建完成，连接及错误画面由 Herdr 自己显示。
 
-本次全量前端 120 项测试、类型检查及生产构建通过；真实 Chromium + React/xterm/FitAddon、模拟 Tauri IPC 在 900×600、1280×800、1920×1080 完成 9 次最大化/恢复，始终保留同一 xterm 节点与连接（1 次 open、0 次 close）。手动宽度恢复、最大化期间窗口缩小、字符边界、输入、字号快捷键、滚轮六行、隐藏区域键盘隔离及中英文按钮通过。截图和探针位于 `.scratch/terminal-maximize/`；本增量未执行原生 Tauri/WebView2 或真实 Herdr 验收，也未重新打包安装，不复用历史原生结果充当本次证据。
+**窗口布局。** `.terminal-host` 仅提供区域测量，React 保留标题、错误、重连和最大化控件。ResizeObserver/MutationObserver 合并串行发送 bounds；独立原生线程监听 WinEvent 位置/前台事件，并以 16ms 超时兜底，在 Windows 移动循环内继续定位。CSS 矩形转换为实际客户区屏幕像素，按实际差异移动/缩放/排序。窗口按独立 PID 和唯一 class 查找，无 SetParent、owner 或 TOPMOST。
 
-2026-10-24 滚轮修复（GitHub #21）：`TerminalPanel → terminalScroll.ts → terminal_scroll → TerminalManager::scroll` 将字符区滚轮送到 Herdr。常见一格（3 行或 120 CSS px）对应 6 行；触控板像素小数累积，反向时清空旧积累，步长不依赖字号。单批上限 24 行、队列上限 16 批，相邻同方向、位置和修饰键相同的批次合并并封顶，8ms 后发送且不因持续输入无限延后。标题及字符区外不转发；字符区阻止 xterm 本地滚动和页面重复处理。不转发鼠标点击。
+终端紧邻主窗口上方；激活终端时主窗口排到其后，不抢焦点。失焦/WebView occlusion 不触发隐藏；主窗口最小化、隐藏、DWM cloaked、前端弹窗/inert 或无有效区域时隐藏。初始窗口在屏幕外，窗口发现及前端最新区域确认后显示。独立跨进程窗口仍可能有瞬时帧差。
 
-后端每批只核验一次任务/绑定/进程身份，并校验字符坐标、修饰键及网格尺寸；持有同一个写锁，将 N 行发送为 N 条 `lines:1` 的 `terminal.scroll`。这是因为 Herdr 的应用鼠标报告/alternate-scroll 路径忽略单条命令的 `lines` 放大值。尺寸改变时暂停并清空滚轮队列，串行同步最终尺寸；输出包仅在完整帧的末片附带 cols/rows，前端等尺寸同步成功且 xterm 已完成匹配网格的渲染后才恢复滚轮。切任务、项目、断线或卸载清空待发送动作；过期尺寸拒绝，不重放。无数据库迁移。
+**原生输入与配置。** WezTerm 正常读取用户配置，仅通过命令行覆盖 window_decorations 和 enable_tab_bar。鼠标、复制粘贴、字体快捷键、滚轮及终端尺寸协商均交给 WezTerm/Herdr；没有仿制菜单或私有滚轮标记。旧专用 Lua/字号文件不再读取，也不删除用户已有文件。
 
-隔离验收可显式设置 `KANBAN_HERDR_EXECUTABLE`；未设置仍使用当前安装路径，显式错误路径不静默回退。真实 Windows Tauri/WebView2 + Herdr 0.9.5 + Codex CLI 验证了一格六行、反向、字号/面板宽度变化、项目切换、键盘和断线重连；已安装 Herdr 0.8 的独立 session 另验证宿主历史 0→6→0。实际系统 DPI 切换未执行，未替换用户运行中的二进制。详细证据及自动化边界见[滚轮验收记录](docs/verification/2026-10-24-kanban-terminal-scroll.md)。
+**生命周期与导航边界。** 选中任务初始定位到对应 Agent；之后用户可以在完整 Herdr UI 中导航，Kanban 绑定不会自动改成当前 pane。此版本 Herdr 的同一 session 共享导航，任务定位可能影响其他客户端，不能宣称输入永远锁定于卡片。关闭查看窗口、切任务/项目、任务删除/归档/完成及绑定修复均释放对应原生窗口。Windows Job 清理 WezTerm 及 Herdr client；不终止外部 server/Agent。用户在 Herdr 菜单主动关闭 pane 则执行真实的 Herdr 操作。
 
-2026-10-24 右侧列裁切修复：`TerminalPanel` 新增 `.terminal-body` 承担上下 4px、左右 6px 的外观内边距，内部 `.terminal-host` 不设内边距，作为 xterm 挂载和 ResizeObserver 测量容器。FitAddon 按实际可用宽高计算行列并预留滚动条空间，避免全局 border-box 下把父容器内边距计入字符区；保留原 onResize → terminal_resize 和字号调整链路，不重建连接。此次只修复显示尺寸，滚动行为未调整，无新增 IPC 或数据迁移。
-
-本次验证：真实 React/xterm/FitAddon + 模拟 Tauri IPC 的 Chromium 检查先复现文本区侵入滚动条 3px，修复后通过 80 组面板宽度（280/300/400/426.6667/640px）、字号（10/约17.33/24/32px）和 deviceScaleFactor（1/1.25/1.5/2）组合；覆盖末列与末行边界、字号快捷键尺寸同步和连接保持，最右侧 ASCII 与中文字符另经截图检查。共享工作区 84 项前端测试及生产构建通过，保留既有大 chunk 提示。证据脚本与结果位于 `.scratch/terminal-right-edge/`。浏览器 deviceScaleFactor 不等于真实系统 DPI 切换；本次未执行原生 WebView2/真实 Herdr、物理分隔线拖动或安装包验收。
-
-终端外观由 `terminalAppearance.ts` 集中配置，采用 2026-10-24 本机 WezTerm 配置快照：Catppuccin Mocha 完整 16 色 ANSI 色板、背景 `#1e1e2e`、前景 `#cdd6f4`，字体依次为 Cascadia Code / Noto Sans SC / Microsoft YaHei / monospace；13pt 换算为约 17.33 CSS px，行高 1.05，常亮竖线光标。面板标题、边框和内边距在 `App.css` 对齐主题。这是静态外观预设，不会自动读取或同步后续 Lua 配置；字体依赖本机安装，WebView 的字体回退字重、抗锯齿和连字效果不等同于 WezTerm 原生渲染。
-
-终端获得焦点时，`Ctrl+-` 缩小字号，`Ctrl++` 放大字号；兼容 `Ctrl+=`、`Ctrl+Shift+=` 和数字键盘加减号。每次 keydown 调整 1 CSS px，支持长按，限制在 10～32px；不接管带 Alt/Meta 修饰或输入法组合中的事件。`TerminalPanel` 使用 xterm 的自定义键盘处理器消费匹配事件，阻止默认页面缩放及向 Agent 发送该按键，其他按键保留原终端处理。修改 `terminal.options.fontSize` 后调用 FitAddon，通过已有 onResize → terminal_resize 同步行列数，不重建连接。连接尚未就绪时沿用连接成功后的最新尺寸同步。
-
-`terminalFontSize.ts` 首次使用时读取 localStorage 的 `kanban.terminal.fontSize`，无有效值时采用外观预设默认值；后续在内存中共享当前字号并写回本机存储。切任务、切项目、重连复用偏好，重新启动前端时读取保存值；不新增 IPC 或 SQLite 字段。存储读取/写入异常不阻断终端；写入失败时当前会话仍保留字号，跨重启保存不保证成功。
-
-卡片列表成功加载时，保留仍处于开发中的选中任务；否则按列表已有优先级顺序选择第一张开发中卡片。用户仍可点击其他开发中卡片切换，刷新不会抢回有效选择。完成、移回 todo 或删除当前任务后自动回退到剩余第一张开发中卡片；没有候选时显示“暂无开发中的任务”空终端。加载期间和没有项目时保留右侧终端区域；列表请求失败保留已有列表和选择。切项目由 Project key 卸载旧看板并重新应用首选规则。选择仅保存在当前组件内存中。
-
-自动或手动选择均更新卡片高亮和终端标题，TerminalPanel 创建唯一 connectionId，经 terminal_open 请求任务对应的目标。旧 effect 立即禁用输入、清理 xterm 和监听器、按旧 ID 释放连接；迟到输出不能写入新的 xterm。绑定异常的首张任务仍被选中并展示修复/核实入口，不跳到后续任务，也不自动派发或修复。完成、移回 todo、删除及切项目清理旧连接；列表刷新保持同一任务身份时不重连。
-
-本机 Herdr 的 Windows `agent attach` 实测不支持直接连接，因此使用同版本已验证的 `terminal session control <pane> --cols N --rows N` JSONL 控制协议。Rust 将 terminal.frame 的 base64 ANSI 数据送入 xterm，将输入/resize 转为 terminal.input/terminal.resize；关闭发送 terminal.release，只终止本应用控制器，不关闭底层 pane/Agent。没有强制 takeover。
-
-连接首帧限时 8 秒；每个输入批次重新核验目标，后台每 2 秒检查身份。输出分片 8 KiB，未消费窗口约 128 KiB，消费停滞 10 秒断开；单帧上限 8 MiB，前端 scrollback 3000 行，输入队列上限 64 KiB。断线时禁用输入并提供重连/修复入口。重连只建立查看连接，修复只改绑定，两者均不调用 prompt。
+**验证。** 前端 136 项、Rust 135 项通过，9 项既有 live 测试 ignored；生产前端和 Windows debug 构建通过。实际 Tauri+WezTerm+Herdr 原生右键打开菜单，进程链无 bridge；双任务切换定位/输入、旧客户端清理及关闭看板后 Agent 保留通过，见[原生客户端验收](docs/verification/2026-10-25-herdr-native-client.md)。此前桥接验收仅作历史记录。旧 terminal.rs 在 cfg(test) 下保留历史协议回归，不进入产品。没有数据库迁移；跨屏 DPI、虚拟桌面、完整物理鼠标/IME/剪贴板和 NSIS 安装升级未完整验收。
 
 ### 6.6 自动分配、完成关闭与恢复（GitHub #10）
 
@@ -675,7 +660,7 @@ Approve For Me 下本机 Codex 0.164.0 会额外持有辅助会话写锁。仅�
 
 当前结构的优点是入口清楚、组件职责容易定位、IPC 集中、模型较小；SQL、CLI 和文件访问都留在 Rust，React 不直接持有数据库连接。对于本地单用户看板，这种结构便于快速迭代。
 
-主要复杂度集中在两个位置：`KanbanBoard` 同时协调列表、拖放、Agent 和弹层生命周期；`lifecycle.rs` 处理窗口及会话生命周期，`workflow.rs` 集中处理绑定与派发一致性，`terminal.rs` 集中处理查看连接；`commands.rs` 保留既有 CRUD 和文件/技能读取。扩展时应先围绕明确业务边界拆分，而不是单纯按文件长度拆文件。
+主要复杂度集中在两个位置：`KanbanBoard` 同时协调列表、拖放、Agent 和弹层生命周期；`lifecycle.rs` 处理窗口及会话生命周期，`workflow.rs` 集中处理绑定与派发一致性，`native_terminal.rs` 管理原生客户端窗口；`commands.rs` 保留既有 CRUD 和文件/技能读取。扩展时应先围绕明确业务边界拆分，而不是单纯按文件长度拆文件。
 
 | 要做的改动 | 首先阅读/修改 | 必须同步考虑 |
 | --- | --- | --- |
@@ -683,7 +668,7 @@ Approve For Me 下本机 Codex 0.164.0 会额外持有辅助会话写锁。仅�
 | 新增项目/任务字段 | models.rs、types.ts、db.rs、commands.rs、api.ts | tasks.rs 行映射与守卫、表单、迁移、现有库兼容 |
 | 修改提示词或引用格式 | PromptEditor、MentionNode、MentionPopover、dispatchUtils、DispatchDialog | 历史 prompt_json、预览一致性、失败引用、格式保留 |
 | 扩展技能发现 | commands.rs 的 search_skills / search_skills_in | 当前已支持项目与用户目录、去重、排序；后续可扩展自定义目录、缓存、完整 frontmatter 解析 |
-| 改 Herdr 协议或派发可靠性 | herdr.rs、workflow.rs、work_commands.rs、terminal.rs | 稳定目标 ID、超时、结果解析、重复发送、落库失败 |
+| 改 Herdr 协议或派发可靠性 | herdr.rs、workflow.rs、work_commands.rs、native_terminal.rs | 稳定目标 ID、超时、结果解析、重复发送、落库失败 |
 | 增加 Agent 自动完成同步 | 独立结果接收/查询模块，加任务状态服务 | 任务与执行实例映射、重复/乱序通知、用户手动状态冲突；当前没有此链路 |
 | workspace 同步 | projects.rs、project_commands.rs、useProjectSync | Herdr 目录格式兼容、未决创建恢复、session 隔离 |
 | 修改布局与主题 | App.css、对应组件 | WebView2 原生拖放、最小窗口尺寸、遮罩层级和输入焦点 |
@@ -697,6 +682,8 @@ Approve For Me 下本机 Codex 0.164.0 会额外持有辅助会话写锁。仅�
 常用命令如下，前端命令在仓库根目录执行，Rust 检查在 `src-tauri/` 执行：
 
 ```powershell
+# 首次运行后端检查前准备打包资源
+
 # 前端静态检查
 .\node_modules\.bin\tsc.cmd --noEmit
 
@@ -730,7 +717,7 @@ npm run tauri build
 
 1. `types.ts → models.rs → db.rs`：厘清 Project、Task、引用和派发快照。
 2. `main.tsx → App.tsx → KanbanBoard.tsx`：理解页面和状态归属。
-3. `api.ts → lib.rs → commands.rs/work_commands.rs → workflow.rs/lifecycle.rs/herdr.rs/terminal.rs`：对应每个动作的 IPC、SQL 与外部副作用。
+3. `api.ts → lib.rs → commands.rs/work_commands.rs → workflow.rs/lifecycle.rs/herdr.rs/native_terminal.rs`：对应每个动作的 IPC、SQL 与外部副作用。
 4. `TaskFormDialog → PromptEditor → MentionNode/MentionPopover`：理解新建/编辑共用草稿及 prompt_json 如何产生。
 5. `DispatchDialog → dispatchUtils → dispatch_to_herdr`：理解“草稿、预览、实际发送、快照”之间的差异。
 6. `ProjectFormDialog → project_commands → ProjectService → Herdr`：核对稳定身份、默认目录及创建恢复。

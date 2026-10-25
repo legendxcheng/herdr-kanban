@@ -1,7 +1,7 @@
 use crate::{
     models::Project,
     projects::{CreateOperation, ProjectService, Snapshot},
-    terminal::TerminalManager,
+    native_terminal::NativeTerminalManager as TerminalManager,
 };
 use std::sync::Arc;
 use tauri::State;

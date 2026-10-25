@@ -73,7 +73,7 @@
   "terminal.label": "Herdr terminal",
   "terminal.empty": "No tasks in development",
   "terminal.connecting": "Connecting…",
-  "terminal.connected": "Connected",
+  "terminal.connected": "Herdr open",
   "terminal.disconnected": "Disconnected",
   "terminal.reconnect": "Reconnect",
   "terminal.view": "View terminal: ",
@@ -234,5 +234,8 @@
   "dispatch.file": "@File",
   "task.delete_confirm": "Delete task “{name}”?",
   "task.deleted": "Task deleted",
-  "task.complete": "Mark done"
+  "task.complete": "Mark done",
+  "terminal.wezterm_unavailable": "WezTerm was not found. Install it or set KANBAN_WEZTERM_EXECUTABLE.",
+  "terminal.window_timeout": "The WezTerm window did not become ready. Reconnect to try again.",
+  "terminal.process_isolation": "Cannot manage the WezTerm process. Reconnect to try again."
 }

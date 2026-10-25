@@ -53,19 +53,17 @@ it("updates an open editor and existing error while retaining the draft, priorit
   expect(calls[0][1]).toMatchObject({ locale: "en-US" });
 });
 
-it("keeps the selected terminal connection and input working across language changes", async () => {
+it("keeps the selected native terminal connection across language changes", async () => {
   bindTask();
   await renderBoard("in_progress");
-  await screen.findByText("已连接");
-  const input = screen.getByRole("textbox", { name: "终端输入" });
+  await screen.findByText("Herdr 已打开");
+  const host = document.querySelector(".terminal-host");
   const opened = vi.mocked(invoke).mock.calls.filter(([command]) => command === "terminal_open");
   act(() => setLocale("en-US"));
-  expect(screen.getByText("Connected")).toBeTruthy();
-  expect(screen.getByRole("textbox", { name: "终端输入" })).toBe(input);
+  expect(screen.getByText("Herdr open")).toBeTruthy();
+  expect(document.querySelector(".terminal-host")).toBe(host);
   expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "terminal_open")).toEqual(opened);
   expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "terminal_close")).toHaveLength(0);
-  fireEvent.input(input, { target: { value: "unchanged input" } });
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_input", expect.objectContaining({ data: "unchanged input" })));
   expect(document.querySelector(".task-card.selected .task-name")?.textContent).toBe(board.storedTask.name);
 });
 

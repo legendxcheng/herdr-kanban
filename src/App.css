@@ -608,8 +608,7 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 .terminal-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .terminal-header [role=status] { margin-left: auto; flex-shrink: 0; color: #a6adc8; font-size: 12px; }
 .terminal-size-toggle { flex-shrink: 0; color: #cdd6f4; }
-/* FitAddon measures the host's width/height without subtracting its padding. */
-/* Keep WezTerm window_padding outside that measurement box. */
+/* The host rectangle is the native WezTerm window's outer boundary. */
 .terminal-body { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; padding: 4px 6px; overflow: hidden; }
 .terminal-host { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .terminal-hint, .terminal-feedback { padding: 12px; color: #a6adc8; font-size: 14px; overflow-wrap: anywhere; }
@@ -620,7 +619,6 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 
 .terminal-splitter { width: 8px; flex: 0 0 8px; cursor: col-resize; touch-action: none; border-radius: 4px; background: transparent; }
 .terminal-splitter:hover, .terminal-splitter:focus-visible { background: var(--accent-dim); outline: 1px solid var(--accent); }
-.terminal-host > .xterm { height: 100%; }
 .dialog textarea { display: block; width: 100%; min-height: 80px; margin-top: 8px; }
 
 /* Respond to the resizable board, not just the window width. */

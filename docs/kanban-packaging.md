@@ -15,6 +15,10 @@
 
 默认最多同时运行 4 个 Cargo 编译任务，减少打包对开发机器的压力；显式设置的 `CARGO_BUILD_JOBS` 会被尊重。
 
+2026-10-25 修正为 WezTerm 直接运行官方 Herdr 客户端。beforeDev/beforeBuild 分别执行 npm run dev/npm run build；不再构建或打包 terminal bridge。WezTerm 与 Herdr 本身均不打入安装包。
+
+程序在 PATH、Program Files/WezTerm 和 LocalAppData/Programs/WezTerm 查找 wezterm-gui.exe；可用 KANBAN_WEZTERM_EXECUTABLE 显式指定。WezTerm 正常读取用户配置，Kanban 仅覆盖无边框和隐藏 tab bar，不写专用鼠标/按键配置。Herdr 使用 connect-only 的 client 入口连接已运行 session；本次验证 Herdr 0.8.0-preview.2026-08-04-d78e3d3b5126、WezTerm 20240203-110809-5046fc22。详细证据见[原生客户端验收](verification/2026-10-25-herdr-native-client.md)。
+
 ## 发布新版本
 
 1. 在仓库根目录执行 `npm version 0.1.1 --no-git-tag-version`（替换为实际版本），同步更新 package.json/package-lock.json。
@@ -30,7 +34,7 @@ Tauri NSIS 模板在安装完成时将目录写入 `HKCU\Software\administrator\
 
 这个保证适用于同一 Windows 用户且安装记录仍存在。跨用户安装、手工删除注册表、旧 MSI 的迁移或彻底卸载后的新装不属于“读取上次目录”的验收范围。程序数据保存在 `%APPDATA%\herdr-kanban`，不随二进制更新删除；数据库迁移仍由应用启动时执行。
 
-WebView2 缺失时安装器联网下载；已有运行时直接复用。目标用户不需要编译工具，但需自行准备 Herdr、Codex CLI 及账户配置。只产出 Windows x64 安装包，不产出 MSI、ARM64 或其他平台安装包。当前未配置代码签名证书，产物为未签名安装包。
+WebView2 缺失时安装器联网下载；已有运行时直接复用。目标用户不需要编译工具，但需自行准备 Herdr、Codex CLI、WezTerm 及账户配置。只产出 Windows x64 安装包，不产出 MSI、ARM64 或其他平台安装包。当前未配置代码签名证书，产物为未签名安装包。
 
 ## 验证
 

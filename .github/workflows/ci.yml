@@ -32,4 +32,5 @@ jobs:
           rustup toolchain install stable --profile minimal
           rustup default stable
       - name: Test Rust backend
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+        run: |
+          cargo test --locked --manifest-path src-tauri/Cargo.toml

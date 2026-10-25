@@ -39,7 +39,7 @@ describe("workspace 导航同步", () => {
       if (command === "list_tasks" && (args as { projectId: string }).projectId === other.id) return Promise.resolve([]);
       return base(command, args, options);
     });
-    render(<App />); await screen.findByText("已连接");
+    render(<App />); await screen.findByText("Herdr 已打开");
     const connection = vi.mocked(invoke).mock.calls.find(([cmd]) => cmd === "terminal_open")![1] as { connectionId: string };
     projects = [other, project];
     fireEvent(window, new Event("focus"));

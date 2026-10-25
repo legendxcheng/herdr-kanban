@@ -1,4 +1,4 @@
-use crate::terminal::{Output, TerminalManager};
+use crate::native_terminal::{NativeTerminalManager as TerminalManager, Output};
 use crate::{models::DispatchRecord, workflow::Workflow};
 use std::sync::Arc;
 use tauri::{Emitter, State};
@@ -128,81 +128,43 @@ pub async fn repair_binding(
 
 #[tauri::command]
 pub async fn terminal_open(
+    window: tauri::Window,
     app: State<'_, Arc<Workflow>>,
-    manager: State<'_, Arc<TerminalManager>>,
+    native: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
     task_id: String,
     connection_id: String,
-    cols: u16,
-    rows: u16,
+    bounds: crate::native_terminal::Bounds,
     output: tauri::ipc::Channel<Output>,
 ) -> Result<String, String> {
     let app = app.inner().clone();
-    let manager = manager.inner().clone();
-    manager.select(&connection_id, &task_id)?;
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    let view = native.select(
+        connection_id.clone(),
+        task_id.clone(),
+        bounds,
+        Arc::new(move |packet| {
+            let _ = output.send(packet);
+        }),
+    )?;
     tauri::async_runtime::spawn_blocking(move || {
-        let sink = Arc::new(move |packet| output.send(packet).is_ok());
-        match manager.open(
-            app,
-            &crate::herdr::Cli::from_env(),
-            &task_id,
-            &connection_id,
-            cols,
-            rows,
-            sink,
-        ) {
-            Ok(()) => Ok(connection_id),
-            Err(e) => {
-                manager.close(&connection_id);
-                Err(e)
-            }
-        }
+        crate::native_terminal::open(view, app, hwnd)?;
+        Ok(connection_id)
     })
     .await
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-pub fn terminal_close(manager: State<'_, Arc<TerminalManager>>, connection_id: String) {
-    manager.close(&connection_id);
-}
-#[tauri::command]
-pub async fn terminal_input(
-    app: State<'_, Arc<Workflow>>,
-    manager: State<'_, Arc<TerminalManager>>,
+pub fn terminal_close(
+    native: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
     connection_id: String,
-    data: String,
-) -> Result<(), String> {
-    let app = app.inner().clone();
-    let manager = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || manager.input(&app, &connection_id, &data))
-        .await
-        .map_err(|e| e.to_string())?
+) {
+    native.close(&connection_id);
 }
 #[tauri::command]
-pub async fn terminal_scroll(
-    app: State<'_, Arc<Workflow>>,
-    manager: State<'_, Arc<TerminalManager>>,
+pub fn terminal_bounds(
+    native: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
     connection_id: String,
-    event: crate::terminal::ScrollEvent,
+    bounds: crate::native_terminal::Bounds,
 ) -> Result<(), String> {
-    let app = app.inner().clone();
-    let manager = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || manager.scroll(&app, &connection_id, event))
-        .await
-        .map_err(|e| e.to_string())?
-}
-#[tauri::command]
-pub async fn terminal_resize(
-    manager: State<'_, Arc<TerminalManager>>,
-    connection_id: String,
-    cols: u16,
-    rows: u16,
-) -> Result<(), String> {
-    let manager = manager.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || manager.resize(&connection_id, cols, rows))
-        .await
-        .map_err(|e| e.to_string())?
-}
-#[tauri::command]
-pub fn terminal_ack(manager: State<'_, Arc<TerminalManager>>, connection_id: String, bytes: usize) {
-    manager.ack(&connection_id, bytes);
+    native.bounds(&connection_id, bounds)
 }

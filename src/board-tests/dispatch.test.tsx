@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
-import { board, project, agent, sendPrompt, terminalSize, renderBoard, column, dropOn, expectNoStatusWrite, bindTask } from "./fixtures";
+import { board, project, agent, sendPrompt, renderBoard, column, dropOn, expectNoStatusWrite, bindTask } from "./fixtures";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 
 describe("拖入开发中列", () => {
-  it("连接等待期间改变终端尺寸，连接成功后同步最新尺寸", async () => {
+  it("连接等待期间改变布局，连接成功后同步最新区域", async () => {
     board.storedTask.binding = { state: "valid", operation: null, target: {
       session: "default", workspace_id: "w1", pane_id: "w1:p1", terminal_id: "term1", agent: "codex", process_id: "100", title: "A", status: "idle",
     } };
@@ -22,13 +22,13 @@ describe("拖入开发中列", () => {
     await renderBoard("in_progress");
     fireEvent.click(screen.getByRole("button", { name: `查看终端：${board.storedTask.name}` }));
     await screen.findByText("连接中…");
-    expect(invoke).toHaveBeenCalledWith("terminal_open", expect.objectContaining({ cols: 80, rows: 24 }));
-    terminalSize.cols = 100; terminalSize.rows = 30;
+    expect(invoke).toHaveBeenCalledWith("terminal_open", expect.objectContaining({ bounds: expect.any(Object) }));
+    fireEvent.keyDown(screen.getByRole("separator"), { key: "ArrowLeft" });
     connected(connectionId);
-    await screen.findByText("已连接");
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_resize", { connectionId, cols: 100, rows: 30 }));
+    await screen.findByText("Herdr 已打开");
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_bounds", { connectionId, bounds: expect.any(Object) }));
   });
-  it("快速切换后迟到的旧连接不能接收新任务的输入", async () => {
+  it("快速切换后迟到的旧连接只能关闭自身", async () => {
     const target = { session: "default", workspace_id: "w1", pane_id: "w1:p1", terminal_id: "term1", agent: "codex", process_id: "100", title: "A", status: "idle" };
     board.storedTask.binding = { state: "valid", operation: null, target };
     board.extraTasks = [{ ...board.storedTask, id: "task-2", name: "任务 B", status: "in_progress", binding: { state: "valid", operation: null, target: { ...target, pane_id: "w1:p2", terminal_id: "term2" } } }];
@@ -47,12 +47,12 @@ describe("拖入开发中列", () => {
     fireEvent.click(screen.getByRole("button", { name: `查看终端：${board.storedTask.name}` }));
     await screen.findByText("连接中…");
     fireEvent.click(screen.getByRole("button", { name: "查看终端：任务 B" }));
-    await screen.findByText("已连接");
+    await screen.findByText("Herdr 已打开");
     finishA(idA);
-    fireEvent.input(screen.getByLabelText("终端输入"), { target: { value: "only B" } });
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_input", { connectionId: idB, data: "only B" }));
-    expect(invoke).toHaveBeenCalledWith("terminal_close", { connectionId: idA });
-    expect(vi.mocked(invoke).mock.calls.some(([name, args]) => name === "terminal_input" && (args as Record<string, string>).connectionId === idA)).toBe(false);
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_close", { connectionId: idA }));
+    expect(idB).not.toBe(idA);
+    expect(vi.mocked(invoke).mock.calls.some(([name, args]) => name === "terminal_close" && (args as Record<string, string>).connectionId === idB)).toBe(false);
+    expect(screen.getByText("Herdr 已打开")).toBeTruthy();
   });
   it("可通过分隔线键盘调整终端宽度", async () => {
     await renderBoard();
@@ -77,7 +77,7 @@ describe("拖入开发中列", () => {
     } };
     await renderBoard("in_progress");
     fireEvent.click(screen.getByRole("button", { name: `查看终端：${board.storedTask.name}` }));
-    await screen.findByText("已连接");
+    await screen.findByText("Herdr 已打开");
     expect(invoke).toHaveBeenCalledWith("terminal_open", expect.objectContaining({ taskId: "task-1", connectionId: expect.any(String) }));
     const opened = vi.mocked(invoke).mock.calls.filter(([name]) => name === "terminal_open").length;
     fireEvent.click(screen.getByRole("button", { name: "编辑" }));
@@ -195,7 +195,7 @@ describe("拖入开发中列", () => {
     dropOn(column("in_progress"));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("start_task", { taskId: board.storedTask.id, operationId: expect.any(String) }));
     expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "read_file_content")).toBe(false);
-    await screen.findByText("已连接");
+    await screen.findByText("Herdr 已打开");
     expect(screen.queryByRole("heading", { name: /派发任务:/ })).toBeNull();
     expectNoStatusWrite();
   });
@@ -211,7 +211,7 @@ describe("拖入开发中列", () => {
     expect(board.storedTask.status).toBe("todo");
     expect(screen.queryByRole("heading", { name: /派发任务:/ })).toBeNull();
     finish();
-    await screen.findByText("已连接");
+    await screen.findByText("Herdr 已打开");
     expect(within(column("in_progress")).getByText(board.storedTask.name)).toBeTruthy();
   });
   it("自动启动失败保留原列并显示错误", async () => {

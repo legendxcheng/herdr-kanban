@@ -73,7 +73,7 @@
   "terminal.label": "Herdr 终端",
   "terminal.empty": "暂无开发中的任务",
   "terminal.connecting": "连接中…",
-  "terminal.connected": "已连接",
+  "terminal.connected": "Herdr 已打开",
   "terminal.disconnected": "连接已断开",
   "terminal.reconnect": "重新连接",
   "terminal.view": "查看终端：",
@@ -234,5 +234,8 @@
   "dispatch.file": "@文件",
   "task.delete_confirm": "删除任务「{name}」？",
   "task.deleted": "任务已删除",
-  "task.complete": "标记完成"
+  "task.complete": "标记完成",
+  "terminal.wezterm_unavailable": "未找到 WezTerm，请先安装或设置 KANBAN_WEZTERM_EXECUTABLE。",
+  "terminal.window_timeout": "WezTerm 窗口未能就绪，请重连。",
+  "terminal.process_isolation": "无法管理 WezTerm 进程，请重连。"
 }

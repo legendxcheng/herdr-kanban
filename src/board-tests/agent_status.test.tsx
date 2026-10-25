@@ -17,7 +17,7 @@ describe("实时 Agent 状态", () => {
     await waitFor(() => expect(cardOrder()).toEqual(["任务 B", "任务 C", board.storedTask.name]));
     const selected = screen.getByRole("button", { name: `查看终端：${board.storedTask.name}` });
     expect(selected.getAttribute("aria-pressed")).toBe("true");
-    await screen.findByText("已连接");
+    await screen.findByText("Herdr 已打开");
     const opened = vi.mocked(invoke).mock.calls.filter(([name]) => name === "terminal_open").length;
     board.availableAgents = [liveAgent(board.storedTask, "working"), ...board.extraTasks.map(t => liveAgent(t, "working"))];
     fireEvent(window, new Event("focus"));

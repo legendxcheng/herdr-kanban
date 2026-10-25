@@ -39,7 +39,7 @@ describe("保留其他拖放与派发行为", () => {
     expect(screen.queryByRole("button", { name: "修复绑定" })).toBeNull();
     expect(screen.queryByRole("button", { name: "派发" })).toBeNull();
     fireEvent.click(screen.getByText("其他任务"));
-    await screen.findByText("已连接");
+    await screen.findByText("Herdr 已打开");
     bindTask(); board.storedTask.status = "in_progress"; board.storedTask.flow!.state = "succeeded";
     await act(async () => { for (const callback of flowEvents) callback({ payload: {
       project_id: project.id, task_id: board.storedTask.id, operation_id: board.storedTask.flow!.operation_id!
@@ -55,7 +55,7 @@ describe("保留其他拖放与派发行为", () => {
     expect(screen.getAllByText("窗口准备中…").length).toBeGreaterThan(0);
     bindTask(); board.storedTask.status = "in_progress"; board.storedTask.flow.state = "succeeded";
     fireEvent(window, new Event("focus"));
-    await screen.findByText("已连接");
+    await screen.findByText("Herdr 已打开");
     expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "start_task")).toHaveLength(0);
   });
 

@@ -83,7 +83,7 @@ pub fn update_task(
 pub async fn update_task_status(
     state: State<'_, DbState>,
     app: State<'_, Arc<crate::workflow::Workflow>>,
-    terminals: State<'_, Arc<crate::terminal::TerminalManager>>,
+    terminals: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
     id: String,
     status: String,
 ) -> Result<crate::lifecycle::Outcome, String> {
@@ -118,7 +118,7 @@ pub async fn update_task_status(
 #[tauri::command]
 pub fn archive_task(
     state: State<DbState>,
-    terminals: State<Arc<crate::terminal::TerminalManager>>,
+    terminals: State<Arc<crate::native_terminal::NativeTerminalManager>>,
     id: String,
 ) -> Result<(), String> {
     let mut conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -131,7 +131,7 @@ pub fn archive_task(
 #[tauri::command]
 pub fn delete_task(
     state: State<DbState>,
-    terminals: State<Arc<crate::terminal::TerminalManager>>,
+    terminals: State<Arc<crate::native_terminal::NativeTerminalManager>>,
     id: String,
 ) -> Result<(), String> {
     let mut conn = state.0.lock().map_err(|e| e.to_string())?;
@@ -144,7 +144,7 @@ pub fn delete_task(
 #[tauri::command]
 pub async fn archive_completed_tasks(
     state: State<'_, DbState>,
-    terminals: State<'_, Arc<crate::terminal::TerminalManager>>,
+    terminals: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
     project_id: String,
     task_ids: Vec<String>,
 ) -> Result<crate::tasks::BatchTaskResult, String> {
@@ -161,7 +161,7 @@ pub async fn archive_completed_tasks(
 #[tauri::command]
 pub async fn delete_completed_tasks(
     state: State<'_, DbState>,
-    terminals: State<'_, Arc<crate::terminal::TerminalManager>>,
+    terminals: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
     project_id: String,
     task_ids: Vec<String>,
 ) -> Result<crate::tasks::BatchTaskResult, String> {
@@ -177,7 +177,7 @@ pub async fn delete_completed_tasks(
 
 async fn remove_completed_tasks(
     db: Arc<Mutex<Connection>>,
-    terminals: Arc<crate::terminal::TerminalManager>,
+    terminals: Arc<crate::native_terminal::NativeTerminalManager>,
     project_id: String,
     task_ids: Vec<String>,
     action: crate::tasks::CompletedTaskAction,

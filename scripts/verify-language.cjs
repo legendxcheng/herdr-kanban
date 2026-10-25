@@ -1,4 +1,4 @@
-// Real React/Tiptap/xterm in Edge; Tauri IPC is simulated and no real prompt is sent.
+// Real React/Tiptap in Edge; native WezTerm IPC is simulated. No prompt is sent.
 // PLAYWRIGHT_MODULE may point to an existing Playwright installation.
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const assert = require('node:assert/strict');
@@ -32,9 +32,8 @@ fs.mkdirSync(out, { recursive: true });
             case 'list_tasks': return probe.tasks;
             case 'herdr_list_agents': return [{ pane_id: 'pane1', name: 'codex', title: 'Agent', status: 'idle', target, verified_task_id: 't' }];
             case 'terminal_open':
-              args.output.onmessage({ kind: 'data', data: [...new TextEncoder().encode('Original terminal output\r\n')], cols: args.cols, rows: args.rows });
               return args.connectionId;
-            case 'terminal_ack': case 'terminal_resize': case 'terminal_close': case 'terminal_input': return;
+            case 'terminal_bounds': case 'terminal_close': return;
             case 'task_overview': return [{ project_id: 'p', todo: 0, in_progress: 1, done: 0, today_done: 0 }];
             case 'create_task': throw 'image.storage: fixture diagnostic';
             default: throw new Error('Unexpected IPC: ' + command);
@@ -43,7 +42,7 @@ fs.mkdirSync(out, { recursive: true });
       };
     });
     await page.goto(process.env.KANBAN_VERIFY_URL || 'http://127.0.0.1:1449');
-    await page.getByText('Connected', { exact: true }).waitFor();
+    await page.getByText('Herdr open', { exact: true }).waitFor();
     assert.equal(await page.locator('html').getAttribute('lang'), 'en-US', 'Unsupported system language uses English');
     const terminalCalls = () => page.evaluate(() => probe.calls.filter(call => ['terminal_open', 'terminal_close'].includes(call.command)).map(call => ({ command: call.command, id: call.args.connectionId })));
     const initial = await terminalCalls();
@@ -64,9 +63,7 @@ fs.mkdirSync(out, { recursive: true });
       }
     }
     assert.deepEqual(await terminalCalls(), initial, 'Switching language must not reconnect terminal');
-    await page.locator('.xterm-helper-textarea').fill('kept input');
-    await page.locator('.xterm-helper-textarea').press('Enter');
-    await page.waitForFunction(() => probe.calls.some(call => call.command === 'terminal_input'));
+    await page.waitForFunction(() => probe.calls.some(call => call.command === 'terminal_bounds'));
     await page.getByRole('button', { name: /New task/ }).click();
     const editor = page.getByRole('textbox', { name: 'Prompt', exact: true });
     await editor.fill('中文 draft remains intact');
@@ -89,11 +86,11 @@ fs.mkdirSync(out, { recursive: true });
     await page.screenshot({ path: path.join(out, 'overview-en-US-900.png') });
     await page.getByRole('button', { name: 'Close', exact: true }).click();
     await page.reload();
-    await page.getByText('Connected', { exact: true }).waitFor();
+    await page.getByText('Herdr open', { exact: true }).waitFor();
     assert.equal(await page.locator('html').getAttribute('lang'), 'en-US', 'Saved preference survives reload');
     assert.equal(await page.locator('.language-select select').inputValue(), 'en-US');
     assert.deepEqual(errors, []);
-    fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify({ passed: true, geometry, errors, evidence: 'Edge + real React/Tiptap/xterm; simulated Tauri IPC' }, null, 2));
+    fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify({ passed: true, geometry, errors, evidence: 'Edge + real React/Tiptap; simulated native-terminal IPC' }, null, 2));
     console.log('Language browser verification passed: ' + out);
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

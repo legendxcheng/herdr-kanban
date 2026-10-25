@@ -1,102 +1,73 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { invoke } from "@tauri-apps/api/core";
-import { TerminalPanel } from "./TerminalPanel";
-import type { Task } from "./types";
-
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: class { onmessage = (_packet: unknown) => {}; } }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
-// Only the external terminal renderer and native IPC are substituted.
-vi.mock("@xterm/xterm", () => ({ Terminal: class {
-  cols = 80; rows = 24; options = {}; textarea = document.createElement("textarea");
-  open(host: HTMLElement) {
-    this.textarea.setAttribute("aria-label", "终端输入");
-    const grid = document.createElement("div"); grid.className = "xterm-screen";
-    grid.getBoundingClientRect = () => ({ x: 20, y: 50, left: 20, top: 50, right: 820, bottom: 530, width: 800, height: 480, toJSON() {} });
-    host.append(grid, this.textarea);
-  }
-  loadAddon() {} attachCustomKeyEventHandler() {} focus() { this.textarea.focus(); }
-  write(_data: unknown, done?: () => void) { done?.(); }
-  onData(callback: (value: string) => void) { this.textarea.oninput = () => callback(this.textarea.value); return { dispose() {} }; }
-  onResize() { return { dispose() {} }; } dispose() { this.textarea.remove(); }
-} }));
-vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
-vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
-const task = { id: "a", name: "任务 A", binding: { state: "valid", target: { pane_id: "p1" } } } as Task;
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
+import { TerminalPanel } from './TerminalPanel';
+import type { Task } from './types';
+vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), Channel: class { onmessage = () => {}; } }));
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
+const task = { id: 'a', name: '任务 A', binding: { state: 'valid', target: { pane_id: 'p1' } } } as Task;
 beforeEach(() => {
-  vi.mocked(invoke).mockReset();
-  vi.mocked(invoke).mockImplementation(async (command, args) => {
-    if (command === "terminal_open") {
-      const input = args as { connectionId: string; output: { onmessage: (packet: unknown) => void } };
-      input.output.onmessage({ kind: "data", data: [], cols: 80, rows: 24 });
-      return input.connectionId;
-    }
-  });
+  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 600, top: 48, right: 1000, bottom: 700, width: 400, height: 652 } as DOMRect);
+  vi.mocked(invoke).mockReset().mockImplementation(async (_command, args) => (args as { connectionId: string })?.connectionId);
 });
-afterEach(cleanup);
-it("scrolls six remote lines per wheel notch without moving the surrounding page", async () => {
-  const view = render(<TerminalPanel task={task} />);
-  await screen.findByText("已连接");
-  const grid = view.container.querySelector(".xterm-screen")!;
-  const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, clientX: 145, clientY: 115, deltaY: -3, deltaMode: 1 });
-  fireEvent(grid, event);
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_scroll", {
-    connectionId: expect.any(String), event: { direction: "up", lines: 6, column: 12, row: 3, modifiers: 0, cols: 80, rows: 24 },
-  }));
-  expect(event.defaultPrevented).toBe(true);
-  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "terminal_input")).toBe(false);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it('reports the native rectangle and hides for dialogs without releasing the Agent', async () => {
+  render(<TerminalPanel task={task} />);
+  await screen.findByText('Herdr 已打开');
+  expect(invoke).toHaveBeenCalledWith('terminal_open', expect.objectContaining({ bounds: expect.objectContaining({ x: 600, y: 48, width: 400, visible: true }) }));
+  const dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog');
+  act(() => { document.body.append(dialog); });
+  await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('terminal_bounds', expect.objectContaining({ bounds: expect.objectContaining({ visible: false }) })));
+  act(() => { dialog.remove(); });
+  await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('terminal_bounds', expect.objectContaining({ bounds: expect.objectContaining({ visible: true }) })));
+  expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === 'terminal_close')).toHaveLength(0);
+  expect(document.querySelector('.xterm')).toBeNull();
 });
-it("accumulates small touchpad deltas and reverses without retaining the previous direction", async () => {
-  const view = render(<TerminalPanel task={task} />);
-  await screen.findByText("已连接");
-  const grid = view.container.querySelector(".xterm-screen")!;
-  for (let i = 0; i < 4; i++) {
-    fireEvent.wheel(grid, { clientX: 145, clientY: 115, deltaY: -5 });
-    fireEvent.wheel(grid, { clientX: 145, clientY: 115, deltaY: 0, deltaX: 10 });
-  }
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_scroll", expect.objectContaining({ event: expect.objectContaining({ lines: 1, direction: "up" }) })));
-  fireEvent.wheel(grid, { clientX: 145, clientY: 115, deltaY: -10 });
-  fireEvent.wheel(grid, { clientX: 145, clientY: 115, deltaY: 20 });
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_scroll", expect.objectContaining({ event: expect.objectContaining({ lines: 1, direction: "down" }) })));
-});
-it("does not forward clicks and discards pending scroll on task switch", async () => {
-  let finish!: () => void;
-  const base = vi.mocked(invoke).getMockImplementation()!;
-  vi.mocked(invoke).mockImplementation((command, args, options) => command === "terminal_scroll"
-    ? new Promise<void>(resolve => { finish = resolve; }) : base(command, args, options));
-  const view = render(<TerminalPanel task={task} />);
-  await screen.findByText("已连接");
-  const grid = view.container.querySelector(".xterm-screen")!;
-  fireEvent.mouseDown(grid, { clientX: 145, clientY: 115 });
-  fireEvent.mouseUp(grid, { clientX: 145, clientY: 115 });
-  expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "terminal_scroll")).toBe(false);
-  fireEvent.wheel(grid, { clientX: 145, clientY: 115, deltaY: -120 });
-  await waitFor(() => expect(finish).toBeTypeOf("function"));
-  fireEvent.wheel(grid, { clientX: 145, clientY: 115, deltaY: 120 });
-  view.rerender(<TerminalPanel task={{ ...task, id: "b", name: "任务 B" }} />);
-  await screen.findByText("已连接"); finish();
-  await new Promise(resolve => setTimeout(resolve, 30));
-  expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "terminal_scroll")).toHaveLength(1);
-  fireEvent.input(screen.getByLabelText("终端输入"), { target: { value: "only B" } });
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_input", expect.objectContaining({ data: "only B" })));
-});
-it("waits for matching rendered geometry and ignores wheel events outside the grid", async () => {
-  let frame!: (packet: unknown) => void;
-  vi.mocked(invoke).mockImplementation(async (command, args) => {
-    if (command === "terminal_open") {
-      const input = args as { connectionId: string; output: { onmessage: (packet: unknown) => void } };
-      frame = input.output.onmessage; return input.connectionId;
+
+it('ignores old close notifications and late readiness after selecting another task', async () => {
+  const channels: { onmessage: (packet: unknown) => void }[] = [];
+  let ready!: () => void;
+  vi.mocked(invoke).mockImplementation(async (name, args) => {
+    if (name === 'terminal_open') {
+      channels.push((args as { output: typeof channels[number] }).output);
+      if (channels.length === 1) await new Promise<void>(resolve => { ready = resolve; });
     }
   });
   const view = render(<TerminalPanel task={task} />);
-  await screen.findByText("已连接");
-  const grid = view.container.querySelector(".xterm-screen")!;
-  fireEvent.wheel(grid, { clientX: 145, clientY: 115, deltaY: -120 });
-  await new Promise(resolve => setTimeout(resolve, 20));
-  expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "terminal_scroll")).toBe(false);
-  frame({ kind: "data", data: [], cols: 80, rows: 24 });
-  fireEvent.wheel(grid, { clientX: 10, clientY: 115, deltaY: -120 });
-  fireEvent.wheel(grid, { clientX: 145, clientY: 115, deltaY: -120 });
-  await waitFor(() => expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "terminal_scroll")).toHaveLength(1));
+  await screen.findByText('连接中…');
+  const oldId = (vi.mocked(invoke).mock.calls[0][1] as { connectionId: string }).connectionId;
+  view.rerender(<TerminalPanel task={{ ...task, id: 'b', name: '任务 B' }} />);
+  await screen.findByText('Herdr 已打开');
+  await act(async () => { channels[0].onmessage({ kind: 'closed', message: 'old failure' }); ready(); });
+  expect(screen.getByText('Herdr 已打开')).toBeTruthy();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(invoke).toHaveBeenCalledWith('terminal_close', { connectionId: oldId });
+});
+
+it('keeps the native viewer present when WebView reports occlusion', async () => {
+  render(<TerminalPanel task={task} />);
+  await screen.findByText('Herdr 已打开');
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith('terminal_bounds', expect.anything()));
+  const hidden = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+  await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+  const updates = vi.mocked(invoke).mock.calls.filter(([name]) => name === 'terminal_bounds');
+  expect(updates.every(([, args]) => (args as { bounds: { visible: boolean } }).bounds.visible)).toBe(true);
+  hidden.mockRestore();
+});
+
+it('serializes bounds updates and sends the latest layout after an in-flight update', async () => {
+  let finish!: () => void; let updates = 0;
+  vi.mocked(invoke).mockImplementation(async name => {
+    if (name === 'terminal_bounds' && ++updates === 1) await new Promise<void>(resolve => { finish = resolve; });
+  });
+  render(<TerminalPanel task={task} />);
+  await waitFor(() => expect(updates).toBe(1));
+  const dialog = document.createElement('div'); dialog.className = 'dialog-overlay';
+  act(() => { document.body.append(dialog); });
+  await act(async () => { finish(); });
+  await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('terminal_bounds', expect.objectContaining({ bounds: expect.objectContaining({ visible: false }) })));
+  act(() => { dialog.remove(); });
 });

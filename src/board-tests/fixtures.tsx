@@ -11,21 +11,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (_name, callback) 
   mockFlowEvents.add(callback);
   return () => { mockFlowEvents.delete(callback); };
 }) }));
-const mockTerminalSize = vi.hoisted(() => ({ cols: 80, rows: 24 }));
-// The terminal renderer is an external DOM/canvas system, simulated at that boundary.
-vi.mock("@xterm/xterm", () => ({ Terminal: class {
-  get cols() { return mockTerminalSize.cols; } get rows() { return mockTerminalSize.rows; }
-  options = {}; textarea = document.createElement("textarea");
-  open(element: HTMLElement) { this.textarea.setAttribute("aria-label", "终端输入"); element.append(this.textarea); }
-  loadAddon() {} write(_data: unknown, done?: () => void) { done?.(); }
-  onData(callback: (data: string) => void) { this.textarea.oninput = () => callback(this.textarea.value); return { dispose() {} }; }
-  onResize() { return { dispose() {} }; } attachCustomKeyEventHandler() {} focus() { this.textarea.focus(); }
-  dispose() { this.textarea.remove(); }
-} }));
-vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
-
 export const flowEvents = mockFlowEvents;
-export const terminalSize = mockTerminalSize;
 
 export const project: Project = {
   id: "project-1", name: "测试项目", root_path: "E:/fixture",
@@ -46,7 +32,6 @@ beforeEach(() => {
   Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: () => new DOMRect() });
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
   flowEvents.clear();
-  terminalSize.cols = 80; terminalSize.rows = 24;
   vi.mocked(invoke).mockReset();
   board.storedTask = {
     id: "task-1", project_id: project.id, name: "修复拖放派发", status: "todo", priority: "normal", archived_at: null, cleanup_required: false,
@@ -93,7 +78,7 @@ beforeEach(() => {
         return;
       case "repair_binding": board.storedTask.binding = { state: "valid", target: null, operation: null }; return;
       case "terminal_open": return input.connectionId;
-      case "terminal_close": case "terminal_input": case "terminal_resize": case "terminal_ack": return;
+      case "terminal_close": case "terminal_bounds": return;
       case "dispatch_to_herdr":
         await sendPrompt(input);
         // Mirror the backend contract: only successful dispatch changes status.

@@ -12,7 +12,7 @@ describe("默认终端与任务选择", () => {
     bindTask();
     board.extraTasks = [secondTask()];
     await renderBoard("in_progress");
-    await screen.findByText("已连接");
+    await screen.findByText("Herdr 已打开");
     expect(screen.getByRole("button", { name: `查看终端：${board.storedTask.name}` }).getAttribute("aria-pressed")).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "查看终端：任务 B" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_open", expect.objectContaining({ taskId: "task-2" })));
@@ -29,7 +29,7 @@ describe("默认终端与任务选择", () => {
   it.each(["done", "todo", "delete"])("选中任务变为 %s 后释放旧连接并选择下一张", async (action) => {
     bindTask(); board.extraTasks = [secondTask()];
     await renderBoard("in_progress");
-    await screen.findByText("已连接");
+    await screen.findByText("Herdr 已打开");
     const firstOpen = vi.mocked(invoke).mock.calls.find(([name]) => name === "terminal_open")![1] as { connectionId: string };
     if (action === "delete") {
       const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -43,7 +43,7 @@ describe("默认终端与任务选择", () => {
   });
 
   it("最后一张开发中任务完成后保留空终端", async () => {
-    bindTask(); await renderBoard("in_progress"); await screen.findByText("已连接");
+    bindTask(); await renderBoard("in_progress"); await screen.findByText("Herdr 已打开");
     fireEvent.click(screen.getByRole("button", { name: "标记完成" }));
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("暂无开发中的任务"));
     expect(screen.getByRole("complementary", { name: "Herdr 终端" })).toBeTruthy();
@@ -92,7 +92,7 @@ describe("默认终端与任务选择", () => {
       if (command === "list_tasks" && (args as { projectId: string }).projectId === other.id) return Promise.resolve([taskB]);
       return base(command, args, options);
     });
-    render(<App />); await screen.findByText("已连接");
+    render(<App />); await screen.findByText("Herdr 已打开");
     const first = vi.mocked(invoke).mock.calls.find(([name]) => name === "terminal_open")![1] as { connectionId: string };
     fireEvent.click(screen.getByRole("button", { name: /^第二项目/ }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_open", expect.objectContaining({ taskId: taskB.id })));

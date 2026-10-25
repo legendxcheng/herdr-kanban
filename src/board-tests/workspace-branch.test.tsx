@@ -30,7 +30,7 @@ it("侧栏显示分支和完整悬浮提示，分支切换保持项目、卡片�
   expect(label().getAttribute("title")).toBe(`${state.head}\n${project.root_path}`);
   expect(document.querySelector(".project-name")?.textContent).toBe(project.name);
   expect(label().textContent).not.toContain(project.root_path);
-  await screen.findByText("已连接");
+  await screen.findByText("Herdr 已打开");
   state.head = "feature/切换后的分支";
   fireEvent(window, new Event("focus"));
   await waitFor(() => expect(label().textContent).toBe(state.head));
