@@ -196,8 +196,12 @@ fn take_next(db: &Connection) -> Result<Option<(String, String, String)>, String
 
 fn finish(db: &Connection, task: &str, result: Result<String, String>) -> Result<(), String> {
     let result = result.and_then(|title| {
-        let title = title.trim().trim_matches(['"', '\'', '“', '”', '`']);
-        if title.is_empty() || title.chars().any(char::is_control) {
+        let title = title.trim().trim_matches(['"', '\'', '“', '”', '`']).trim();
+        if title.is_empty()
+            || title
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        {
             return Err("title.invalid_output".into());
         }
         Ok(title.chars().take(40).collect::<String>())

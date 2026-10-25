@@ -148,7 +148,15 @@ fn create_returns_saved_task_before_generation_and_updates_only_its_name() {
 
 #[test]
 fn invalid_model_output_keeps_the_saved_summary() {
-    for invalid in ["", "   ", "标题\n解释", "\u{0}oops"] {
+    for invalid in [
+        "",
+        "   ",
+        "标题\n解释",
+        "\u{0}oops",
+        "\"   \"",
+        "标题\u{2028}解释",
+        "标题\u{2029}解释",
+    ] {
         let db = database();
         let (started, input) = mpsc::channel();
         let (answer, response) = mpsc::channel();
