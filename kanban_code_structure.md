@@ -382,6 +382,9 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 
 Kanban 改名调用 Herdr 并读回确认；外部改名按 ID 同步。外部调用不持 SQLite Mutex，短事务提交结果。本地删除保留排除记录，不关闭外部资源。旧 ContextSwitcher 读取 IPC、类型和表单入口均已移除。
 
+2026-10-25 本地目录纠正验收（配置变更，无产品代码变更）：项目显示名称不决定文件/技能搜索范围，提示词沿用 `project.root_path → search_skills`。Herdr 的 `identity_cwd` 与实际项目目录不一致时，经用户明确选择，可按现有 `ProjectService::update` 的语义保留本地目录；`directory_source=conflict` 表示仍保留不同的 Herdr 原始目录，`directory_state` 在后续同步继续保留该本地选择。不要仅按名称推断目录，也不要把改名或终端内切目录当作 `identity_cwd` 已变化。
+
+本次将 `herdr-kanban` 项目的本地目录纠正为 `E:\herdr-kanban`，保留 Project/Workspace 身份及其他数据，修改前已备份数据库。当前运行的 Tauri/WebView2 通过辅助功能读取确认目录与 Git 分支刷新，同步后设置仍保留；独立调用相同 Rust 技能搜索实现能返回新仓库的 `kanban-dev`。未完成本次原生候选点击插入/保存验收，未创建测试任务或重启应用；Herdr 默认目录没有修改，项目设置会继续如实显示本地目录冲突来源。
 ### 6.1.1 Workspace 拖动与双向排序（2026-10-24）
 
 `ProjectSidebar → useProjectSync.move → move_project → ProjectService::move_project → Cli::move_workspace → workspace.move_block`。当前 session 中 ready 且已关联的项目行支持原生 HTML 拖放，显示上/下插入线；排除编辑/删除操作，使用独立拖动来源引用及 MIME，外来文件或任务拖放不触发排序。来源按 Project ID 保持，松手发送 source 与下一可见项目锚点；空锚点表示 session 末尾，同位置不发送。拖动后的点击不切项目，保存期间拒绝重复重排。
