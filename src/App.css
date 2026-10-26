@@ -129,8 +129,8 @@ body {
   gap: 3px;
 }
 
-.project-actions { display: none; flex-direction: row; justify-content: flex-end; gap: 4px; padding-top: 4px; }
-.project-list:not([data-dragging="true"]) .project-item:is(:hover, :focus-within) .project-actions { display: flex; }
+.project-actions { display: flex; flex-direction: row; justify-content: flex-end; gap: 4px; height: 32px; flex-shrink: 0; padding-top: 4px; visibility: hidden; pointer-events: none; }
+.project-list:not([data-dragging="true"]) .project-item:is(:hover, :focus-within) .project-actions { visibility: visible; pointer-events: auto; }
 
 /* ── Board area ─────────────────────────────────────────────────────────────── */
 .board-area { flex: 1; min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
@@ -610,7 +610,7 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
   .board-content { padding-right: 14px; padding-left: 14px; }
   .board-toolbar { flex-wrap: wrap; gap: 10px; }
 }
-@media (hover: none) { .project-list:not([data-dragging="true"]) .project-actions { display: flex; } }
+@media (hover: none) { .project-list:not([data-dragging="true"]) .project-actions { visibility: visible; pointer-events: auto; } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
@@ -620,6 +620,15 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 .board-workspace .board-content { padding-inline: 12px; }
 .board-workspace .kanban-columns { min-width: 0; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 8px; }
 .terminal-panel { width: var(--terminal-width, calc(100vw / 3)); flex-shrink: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: #1e1e2e; color: #cdd6f4; border-left: 1px solid #313244; }
+.task-edit-panel { width: var(--terminal-width, calc(100vw / 3)); flex-shrink: 0; min-width: 0; display: flex; background: var(--surface); border-left: 1px solid var(--border); overflow: hidden; }
+.task-edit-form { display: flex; flex-direction: column; width: 100%; min-width: 0; min-height: 0; }
+.task-edit-form .task-form-header { padding: 14px 16px; }
+.task-edit-form .task-form-body { flex: 1; padding: 16px; gap: 16px; }
+.task-edit-form .task-form-body > div { min-width: 0; }
+.task-edit-form .prompt-editor .ProseMirror { min-height: 200px; overflow-wrap: anywhere; }
+.task-edit-form .task-form-footer { padding: 12px 16px; flex-wrap: wrap; align-items: center; }
+.task-save-state { margin-right: auto; font-size: 12px; color: var(--text-muted); }
+.task-leave-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 /* Keep the underlying layout mounted and measured so restore retains its width. */
 .terminal-maximized .sidebar, .terminal-maximized .board-main, .terminal-maximized .terminal-splitter { visibility: hidden; }
 .terminal-panel-maximized { position: fixed; inset: 0; width: auto; z-index: 40; border-left: 0; }

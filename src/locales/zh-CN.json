@@ -1,4 +1,11 @@
 {
+  "task.view_edit": "查看并编辑：",
+  "task.unsaved": "有未保存的修改",
+  "task.saved": "已保存",
+  "task.unsaved_message": "离开前，是否保存当前任务的修改？",
+  "task.keep_editing": "继续编辑",
+  "task.discard": "放弃修改",
+  "task.save_continue": "保存并继续",
   "task.content_required": "请填写任务内容，或添加文件、技能引用或图片。",
   "task.title_required": "任务标题不能为空。",
   "overview.title": "任务概况",
@@ -308,5 +315,12 @@
   "machine.verified": "连接检查通过，可以添加这台电脑的 Workspace。",
   "machine.enrollment_missing": "找不到本次授权操作，请重新接入",
   "machine.enrollment_cancelled": "授权终端已关闭，尚未完成授权。可以重新尝试。",
-  "machine.profile_selection_required": "授权已完成，请在已保存连接中明确选择目标电脑后连接。"
+  "machine.profile_selection_required": "授权已完成，请在已保存连接中明确选择目标电脑后连接。",
+  "mention.searching": "正在搜索…",
+  "mention.searching_remote": "正在搜索远端…",
+  "mention.no_files": "没有匹配的文件",
+  "mention.no_skills": "没有匹配的技能",
+  "mention.failed": "搜索失败",
+  "mention.retry": "重试搜索",
+  "mention.directory_required": "请先设置项目工作目录"
 }

@@ -77,7 +77,7 @@ export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, 
     <div className={`task-card status-${taskColumn(task)}${selected ? " selected" : ""}`} onClick={onSelect}>
       <div className="task-heading">
         <div className="task-header" role={onSelect ? "button" : undefined} tabIndex={onSelect ? 0 : undefined}
-          aria-label={onSelect ? `${tr("terminal.view")}${task.name}` : undefined} aria-pressed={onSelect ? !!selected : undefined}
+          aria-label={onSelect ? `${tr(taskColumn(task) === "todo" ? "task.view_edit" : "terminal.view")}${task.name}` : undefined} aria-pressed={onSelect ? !!selected : undefined}
           onKeyDown={(event) => { if (onSelect && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onSelect(); } }}>
           <AgentStatusDot status={agentStatus} />
           <span className="task-name" title={task.name}>{task.name}</span>

@@ -1,0 +1,3 @@
+.mention-feedback { padding: 12px 14px; color: var(--text-muted); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.mention-feedback strong { color: var(--text); }
+.mention-error { margin: 4px 0 10px; white-space: pre-wrap; }

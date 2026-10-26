@@ -1,4 +1,11 @@
 {
+  "task.view_edit": "View and edit: ",
+  "task.unsaved": "Unsaved changes",
+  "task.saved": "Saved",
+  "task.unsaved_message": "Save changes to this task before leaving?",
+  "task.keep_editing": "Keep editing",
+  "task.discard": "Discard changes",
+  "task.save_continue": "Save and continue",
   "task.content_required": "Enter task content or add a file, skill reference, or image.",
   "task.title_required": "The task title cannot be empty.",
   "overview.title": "Task overview",
@@ -308,5 +315,12 @@
   "machine.verified": "Connection verified. You can add this computer's Workspaces.",
   "machine.enrollment_missing": "Authorization operation not found; start setup again",
   "machine.enrollment_cancelled": "The authorization terminal closed before completion. You can try again.",
-  "machine.profile_selection_required": "Authorization finished. Select the intended saved connection explicitly, then connect."
+  "machine.profile_selection_required": "Authorization finished. Select the intended saved connection explicitly, then connect.",
+  "mention.searching": "Searching…",
+  "mention.searching_remote": "Searching remote computer…",
+  "mention.no_files": "No matching files",
+  "mention.no_skills": "No matching skills",
+  "mention.failed": "Search failed",
+  "mention.retry": "Retry search",
+  "mention.directory_required": "Set the project's working directory first"
 }

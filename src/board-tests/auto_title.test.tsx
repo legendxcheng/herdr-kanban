@@ -25,19 +25,19 @@ it("新建只输入正文即可保存，空白不能创建且焦点在正文", a
 it("旧编辑表单只改优先级时保留后台新标题，主动改名则显式提交", async () => {
   await renderBoard();
   fireEvent.click(screen.getByRole("button", { name: "编辑" }));
-  const dialog = screen.getByRole("dialog");
+  const dialog = screen.getByRole("complementary", { name: "编辑任务" });
   board.storedTask.name = "后台生成的新标题";
   await act(async () => { for (const callback of flowEvents) callback({ payload: {
     project_id: project.id, task_id: board.storedTask.id, operation_id: "title-result",
   } }); });
   fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "urgent" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(within(dialog).getByRole("status").textContent).toBe("已保存"));
   expect(await screen.findByText("后台生成的新标题")).toBeTruthy();
   expect(vi.mocked(invoke).mock.calls.find(([command]) => command === "update_task")![1]).toMatchObject({ name: undefined });
   fireEvent.click(screen.getByRole("button", { name: "编辑" }));
   fireEvent.change(screen.getByRole("textbox", { name: "标题" }), { target: { value: "用户指定名称" } });
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
-  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  await waitFor(() => expect(within(dialog).getByRole("status").textContent).toBe("已保存"));
   expect(await screen.findByText("用户指定名称")).toBeTruthy();
 });

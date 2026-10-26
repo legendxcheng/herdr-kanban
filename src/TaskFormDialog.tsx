@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { createPortal } from "react-dom";
 import type { Project, Task, TaskPriority } from "./types";
 import { PromptEditor } from "./PromptEditor";
@@ -19,8 +19,19 @@ function hasTaskContent(json: string): boolean {
   try { return valid(JSON.parse(json)); } catch { return false; }
 }
 
-export function TaskFormDialog({ project, task, onClose, onSaved }: {
-  project: Project; task?: Task; onClose: () => void; onSaved: () => void;
+export interface TaskEditorHandle { requestLeave: () => Promise<boolean>; }
+interface TaskFormProps {
+  project: Project; task?: Task; onClose: () => void; onSaved: () => void | Promise<void>;
+}
+
+export function TaskFormDialog(props: TaskFormProps) { return <TaskForm {...props} />; }
+
+export function TaskEditPanel(props: TaskFormProps & { task: Task; editorRef: Ref<TaskEditorHandle> }) {
+  return <TaskForm {...props} panel />;
+}
+
+function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef }: TaskFormProps & {
+  panel?: boolean; editorRef?: Ref<TaskEditorHandle>;
 }) {
   const [name, setName] = useState(task?.name ?? "");
   const [promptJson, setPromptJson] = useState(task?.prompt_json ?? emptyPrompt);
@@ -34,11 +45,17 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
   const titleInput = useRef<HTMLInputElement>(null);
   const form = useRef<HTMLFormElement>(null);
   const initialName = useRef(task?.name ?? "");
+  const [saved, setSaved] = useState({ name: task?.name ?? "", promptJson: task?.prompt_json ?? emptyPrompt, priority: task?.priority ?? "normal" });
+  const dirty = name.trim() !== saved.name.trim() || promptJson !== saved.promptJson || priority !== saved.priority;
+  const [leaving, setLeaving] = useState(false);
+  const leaveResolver = useRef<((allow: boolean) => void) | null>(null);
+  const leaveDialog = useRef<HTMLDivElement>(null);
   const canSubmit = task ? !!name.trim() : hasTaskContent(promptJson);
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
   const id = useId();
 
   useEffect(() => {
+    if (panel) return;
     const root = document.getElementById("root");
     const wasInert = root?.inert ?? false;
     if (root) root.inert = true;
@@ -47,31 +64,65 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
       if (root) root.inert = wasInert;
       if (opener?.isConnected) opener.focus();
     };
-  }, [opener]);
+  }, [opener, panel]);
+
+  function requestLeave(): Promise<boolean> {
+    if (submitting.current || imageBusy || leaveResolver.current) return Promise.resolve(false);
+    if (!dirty) return Promise.resolve(true);
+    setLeaving(true);
+    return new Promise(resolve => { leaveResolver.current = resolve; });
+  }
+  useImperativeHandle(editorRef, () => ({ requestLeave }));
+  useEffect(() => () => { leaveResolver.current?.(false); leaveResolver.current = null; }, []);
+  useEffect(() => {
+    if (!leaving) return;
+    const root = document.getElementById("root");
+    const wasInert = root?.inert ?? false;
+    const active = document.activeElement as HTMLElement | null;
+    if (root) root.inert = true;
+    leaveDialog.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    return () => { if (root) root.inert = wasInert; if (active?.isConnected) active.focus(); };
+  }, [leaving]);
+
+  function resolveLeave(allow: boolean) {
+    setLeaving(false);
+    leaveResolver.current?.(allow);
+    leaveResolver.current = null;
+  }
 
   useEffect(() => {
-    if (error && !saving) (titleInput.current ?? form.current?.querySelector<HTMLElement>('[contenteditable="true"]'))?.focus();
-  }, [!!error, saving]);
+    if (error && !saving && !leaving) (titleInput.current ?? form.current?.querySelector<HTMLElement>('[contenteditable="true"]'))?.focus();
+  }, [!!error, saving, leaving]);
 
-  function close() { if (!submitting.current) onClose(); }
+  async function close() {
+    if (submitting.current) return;
+    if (!panel || await requestLeave()) onClose();
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!canSubmit || submitting.current || imageBusy) return;
+    await save();
+  }
+
+  async function save(): Promise<boolean> {
+    if (!canSubmit || submitting.current || imageBusy) return false;
     submitting.current = true; setSaving(true); setError("");
     try {
       const ready = draft.existingId();
       const draftId = ready ? await ready : undefined;
       if (task) await api.updateTask(task.id, name.trim() === initialName.current.trim() ? undefined : name.trim(), promptJson, priority, draftId);
       else await api.createTask(project.id, priority, promptJson, draftId);
+      initialName.current = name.trim();
+      setSaved({ name: name.trim(), promptJson, priority });
     } catch (reason) {
       setError(String(reason));
-      return;
+      return false;
     } finally {
       submitting.current = false; setSaving(false);
     }
-    onClose();
-    onSaved();
+    if (!panel) onClose();
+    await onSaved();
+    return true;
   }
 
   function keyDown(event: React.KeyboardEvent<HTMLFormElement>) {
@@ -79,7 +130,7 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
     if (event.nativeEvent.isComposing && event.key === "Enter") { event.preventDefault(); return; }
     if (event.key === "Escape") {
       event.preventDefault(); event.stopPropagation(); close();
-    } else if (event.key === "Tab") {
+    } else if (!panel && event.key === "Tab") {
       const fields = [...event.currentTarget.querySelectorAll<HTMLElement>(
         'button:not(:disabled), input:not(:disabled), select:not(:disabled), [contenteditable="true"]',
       )];
@@ -89,10 +140,7 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
     }
   }
 
-  return createPortal(<div className="dialog-overlay" onMouseDown={(event) => {
-    if (event.target === event.currentTarget) close();
-  }}>
-    <form ref={form} className="dialog task-form-dialog" role="dialog" aria-modal="true" aria-labelledby={`${id}-heading`}
+  const content = <form ref={form} className={panel ? "task-edit-form" : "dialog task-form-dialog"} role={panel ? undefined : "dialog"} aria-modal={panel ? undefined : true} aria-labelledby={`${id}-heading`}
       aria-busy={saving} onSubmit={submit} onKeyDown={keyDown}>
       <div className="task-form-header">
         <h3 id={`${id}-heading`}>{tr(task ? "task.edit_dialog" : "task.create")}</h3>
@@ -118,11 +166,39 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
         {error && <p role="alert" className="error">{error}</p>}
       </div>
       <div className="task-form-footer">
-        <button type="button" className="btn-secondary" disabled={saving} onClick={close}>{tr("common.cancel")}</button>
+        {panel && <span role="status" className="task-save-state">{tr(dirty ? "task.unsaved" : "task.saved")}</span>}
+        <button type="button" className="btn-secondary" disabled={saving || (panel && imageBusy)} onClick={close}>{tr(panel ? "common.close" : "common.cancel")}</button>
         <button type="submit" className="btn-primary" disabled={saving || imageBusy || !canSubmit}>
           {saving && <span className="spinner" />}{tr(task ? "common.save" : "task.add")}
         </button>
       </div>
-    </form>
-  </div>, document.body);
+    </form>;
+
+  if (!panel) return createPortal(<div className="dialog-overlay" onMouseDown={(event) => {
+    if (event.target === event.currentTarget) void close();
+  }}>{content}</div>, document.body);
+
+  return <aside className="task-edit-panel" aria-label={tr("task.edit_dialog")}>
+    {content}
+    {leaving && createPortal(<div className="dialog-overlay">
+      <div ref={leaveDialog} className="dialog" role="dialog" aria-modal="true" aria-labelledby={`${id}-leave`}
+        aria-busy={saving} onKeyDown={event => {
+          if (event.key === "Escape" && !saving) { event.preventDefault(); event.stopPropagation(); resolveLeave(false); }
+          if (event.key === "Tab") {
+            const buttons = [...event.currentTarget.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+            if (event.shiftKey && document.activeElement === buttons[0]) { event.preventDefault(); buttons[buttons.length - 1]?.focus(); }
+            else if (!event.shiftKey && document.activeElement === buttons[buttons.length - 1]) { event.preventDefault(); buttons[0]?.focus(); }
+          }
+        }}>
+        <h3 id={`${id}-leave`}>{tr("task.unsaved")}</h3>
+        <p>{tr("task.unsaved_message")}</p>
+        {error && <p role="alert" className="error">{error}</p>}
+        <div className="task-leave-actions">
+          <button className="btn-secondary" disabled={saving} onClick={() => resolveLeave(false)}>{tr("task.keep_editing")}</button>
+          <button className="btn-secondary" disabled={saving} onClick={() => resolveLeave(true)}>{tr("task.discard")}</button>
+          <button className="btn-primary" disabled={saving || imageBusy || !canSubmit} onClick={async () => { if (await save()) resolveLeave(true); }}>{tr("task.save_continue")}</button>
+        </div>
+      </div>
+    </div>, document.body)}
+  </aside>;
 }

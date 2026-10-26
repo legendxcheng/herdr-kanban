@@ -45,7 +45,7 @@ describe("任务优先级", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const card = (await screen.findByText("自动标题")).closest(".task-card")! as HTMLElement;
     fireEvent.click(within(card).getByRole("button", { name: "编辑" }));
-    const edit = screen.getByRole("dialog", { name: "编辑任务" });
+    const edit = screen.getByRole("complementary", { name: "编辑任务" });
     expect((within(edit).getByRole("textbox", { name: "标题" }) as HTMLInputElement).value).toBe("自动标题");
     expect(within(edit).getByRole("textbox", { name: "提示词" }).textContent).toBe("请检查新建表单");
     expect((within(edit).getByRole("combobox", { name: "优先级" }) as HTMLSelectElement).value).toBe("urgent");
@@ -79,14 +79,14 @@ describe("任务优先级", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const card = (await screen.findByText("自动标题")).closest(".task-card")! as HTMLElement;
     fireEvent.click(within(card).getByRole("button", { name: "编辑" }));
-    const editor = screen.getByRole("dialog", { name: "编辑任务" });
+    const editor = screen.getByRole("complementary", { name: "编辑任务" });
     const priority = within(editor).getByRole("combobox", { name: "优先级" });
     expect((priority as HTMLSelectElement).value).toBe("urgent");
     fireEvent.change(priority, { target: { value: "high" } });
     fireEvent.click(within(editor).getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑任务" })).toBeNull());
+    await waitFor(() => expect(within(editor).getByRole("status").textContent).toBe("已保存"));
     expect(board.extraTasks[0].priority).toBe("high");
     fireEvent.click(screen.getByRole("button", { name: /新建任务/ }));
-    expect((screen.getByRole("combobox", { name: "优先级" }) as HTMLSelectElement).value).toBe("normal");
+    expect((within(screen.getByRole("dialog", { name: "新建任务" })).getByRole("combobox", { name: "优先级" }) as HTMLSelectElement).value).toBe("normal");
   });
 });

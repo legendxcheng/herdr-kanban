@@ -1,4 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { flushSync } from "react-dom";
+import type { TaskEditorHandle } from "./TaskFormDialog";
 import { ProjectSidebar } from "./ProjectSidebar";
 import { KanbanBoard } from "./KanbanBoard";
 import { ToastContainer } from "./Toast";
@@ -20,6 +22,7 @@ export default function App() {
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [recoveryId, setRecoveryId] = useState<string | null>(null);
+  const editorRef = useRef<TaskEditorHandle>(null);
 
   useEffect(() => { setSelectedId((id) => projects.some((p) => p.id === id) ? id : projects[0]?.id ?? null); }, [projects]);
 
@@ -27,6 +30,15 @@ export default function App() {
   const selectedProject = recoveryProject ?? projects.find((p) => p.id === selectedId) ?? null;
   useEffect(() => { setTerminalMaximized(false); }, [selectedProject?.id]);
   const toggleTerminalMaximized = () => setTerminalMaximized(value => !value);
+
+  async function selectProject(id: string, recovery = false) {
+    // Close the overview before opening the editor's unsaved-changes dialog.
+    if (overviewOpen) flushSync(() => setOverviewOpen(false));
+    if (id !== selectedProject?.id && await editorRef.current?.requestLeave() === false) return;
+    setRecoveryId(recovery ? id : null);
+    if (!recovery) setSelectedId(id);
+    setOverviewOpen(false);
+  }
 
   return (
     <div className={`app${terminalMaximized ? " terminal-maximized" : ""}`}>
@@ -40,10 +52,10 @@ export default function App() {
         gitStatuses={gitStatuses}
         inProgressCounts={inProgressCounts}
         selectedId={selectedId}
-        onSelect={id => { setRecoveryId(null); setSelectedId(id); }}
-        onHide={hide}
+        onSelect={id => { void selectProject(id); }}
+        onHide={async id => { if (id !== selectedProject?.id || await editorRef.current?.requestLeave() !== false) await hide(id); }}
         recoveryProjects={navigation.recovery_projects}
-        onRecovery={setRecoveryId}
+        onRecovery={id => { void selectProject(id, true); }}
         onChanged={refresh}
         operations={operations}
         syncing={syncing}
@@ -55,7 +67,7 @@ export default function App() {
       />
       <main className="board-area">
         {selectedProject ? (
-          <KanbanBoard key={selectedProject.id} project={selectedProject}
+          <KanbanBoard key={selectedProject.id} project={selectedProject} editorRef={editorRef}
             machineName={machineLabel(selectedProject.machine_id ?? "local", machines.find(m => m.id === selectedProject.machine_id)?.name)}
             terminalMaximized={terminalMaximized} onToggleTerminalMaximized={toggleTerminalMaximized} />
         ) : (
@@ -74,7 +86,7 @@ export default function App() {
       </main>
       {overviewOpen && <TaskOverviewDialog projects={projects}
         onClose={() => setOverviewOpen(false)}
-        onSelect={id => { setRecoveryId(null); setSelectedId(id); setOverviewOpen(false); }} />}
+        onSelect={id => { void selectProject(id); }} />}
       {addOpen && <WorkspaceAddDialog machines={machines} onClose={() => setAddOpen(false)} onSaved={refresh} />}
     </div>
   );
