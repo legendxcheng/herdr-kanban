@@ -139,6 +139,7 @@ pub fn run() {
             project_commands::link_workspace,
             commands::list_tasks,
             commands::task_summary,
+            commands::board_tasks,
             commands::task_overview,
             commands::create_task,
             commands::update_task,

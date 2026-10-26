@@ -15,6 +15,29 @@ fn fixture() -> Connection {
     db
 }
 
+#[test]
+fn interactive_board_reads_full_tasks_only_from_visible_scope() {
+    let db = fixture();
+    task(&db, "local-normal", "p", TaskPriority::Normal);
+    task(&db, "remote-urgent", "remote", TaskPriority::Urgent);
+    task(&db, "hidden", "hidden", TaskPriority::Urgent);
+    task(&db, "missing", "missing", TaskPriority::Urgent);
+    task(&db, "unselected", "unselected", TaskPriority::Urgent);
+    let scope = ["p", "remote", "hidden", "missing", "unselected", "p"].map(String::from);
+    let rows = crate::tasks::list_visible(&db, &scope).unwrap();
+    assert_eq!(
+        rows.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        ["remote-urgent", "local-normal"]
+    );
+    let regular = crate::tasks::list(&db, "remote").unwrap();
+    assert_eq!(
+        serde_json::to_value(&rows[0]).unwrap(),
+        serde_json::to_value(&regular[0]).unwrap()
+    );
+    assert_eq!(rows[0].prompt_json, "large prompt excluded from summary");
+    assert!(crate::tasks::list_visible(&db, &[]).unwrap().is_empty());
+}
+
 fn task(db: &Connection, id: &str, project: &str, priority: TaskPriority) {
     crate::tasks::create(
         db,
@@ -103,6 +126,13 @@ fn summary_projection_matches_regular_board_and_overview_through_start_and_recov
             )
             .unwrap();
             let full = crate::tasks::list(&db, "p").unwrap().remove(0);
+            let interactive = crate::tasks::list_visible(&db, &["p".into()])
+                .unwrap()
+                .remove(0);
+            assert_eq!(
+                serde_json::to_value(&interactive).unwrap(),
+                serde_json::to_value(&full).unwrap()
+            );
             let status = full
                 .flow
                 .unwrap()

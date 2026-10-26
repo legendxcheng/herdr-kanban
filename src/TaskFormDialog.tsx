@@ -19,9 +19,10 @@ function hasTaskContent(json: string): boolean {
   try { return valid(JSON.parse(json)); } catch { return false; }
 }
 
-export interface TaskEditorHandle { requestLeave: () => Promise<boolean>; }
+export interface TaskEditorHandle { requestLeave: () => Promise<boolean>; projectId?: string; }
 interface TaskFormProps {
   project: Project; task?: Task; onClose: () => void; onSaved: () => void | Promise<void>;
+  unavailable?: boolean;
 }
 
 export function TaskFormDialog(props: TaskFormProps) { return <TaskForm {...props} />; }
@@ -30,7 +31,7 @@ export function TaskEditPanel(props: TaskFormProps & { task: Task; editorRef: Re
   return <TaskForm {...props} panel />;
 }
 
-function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef }: TaskFormProps & {
+function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, unavailable = false }: TaskFormProps & {
   panel?: boolean; editorRef?: Ref<TaskEditorHandle>;
 }) {
   const [name, setName] = useState(task?.name ?? "");
@@ -50,7 +51,7 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef }:
   const [leaving, setLeaving] = useState(false);
   const leaveResolver = useRef<((allow: boolean) => void) | null>(null);
   const leaveDialog = useRef<HTMLDivElement>(null);
-  const canSubmit = task ? !!name.trim() : hasTaskContent(promptJson);
+  const canSubmit = !unavailable && (task ? !!name.trim() : hasTaskContent(promptJson));
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
   const id = useId();
 
@@ -72,7 +73,7 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef }:
     setLeaving(true);
     return new Promise(resolve => { leaveResolver.current = resolve; });
   }
-  useImperativeHandle(editorRef, () => ({ requestLeave }));
+  useImperativeHandle(editorRef, () => ({ requestLeave, projectId: project.id }));
   useEffect(() => () => { leaveResolver.current?.(false); leaveResolver.current = null; }, []);
   useEffect(() => {
     if (!leaving) return;
@@ -163,6 +164,7 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef }:
           <label className="field-label" htmlFor={`${id}-priority`}>{tr("priority.label")}</label>
           <PrioritySelect id={`${id}-priority`} label={tr("priority.label")} value={priority} onChange={setPriority} disabled={saving} />
         </div>
+        {unavailable && <p role="alert" className="error">{tr("summary.project_unavailable")}</p>}
         {error && <p role="alert" className="error">{error}</p>}
       </div>
       <div className="task-form-footer">

@@ -1,6 +1,11 @@
 {
   "summary.title": "汇总看板",
-  "summary.scope": "查看侧栏已显示 Workspace 的全部未归档任务。点击任务进入所属 Workspace。",
+  "summary.scope": "集中管理侧栏已显示 Workspace 的全部未归档任务。",
+  "summary.choose_project": "选择任务所属 Workspace",
+  "summary.choose_placeholder": "请选择 Workspace",
+  "summary.continue": "继续",
+  "summary.project_unavailable": "所属 Workspace 已不再显示。草稿已保留，请重新显示该 Workspace 后保存。",
+  "summary.delete_confirm": "删除汇总看板中 {workspaces} 个 Workspace 的 {count} 个已完成任务？任务正文和本地会话记录将被删除，此操作无法撤销。",
   "summary.order": "紧急 → 优先 → 一般 · 同级按创建时间从早到晚",
   "summary.count": "{workspaces} 个 Workspace · {tasks} 个任务",
   "summary.open_task": "打开任务：{name} · {machine} / {workspace}",

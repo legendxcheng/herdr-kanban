@@ -1,6 +1,11 @@
 {
   "summary.title": "All tasks",
-  "summary.scope": "Unarchived tasks from workspaces shown in the sidebar. Open a task to visit its workspace.",
+  "summary.scope": "Manage unarchived tasks from workspaces shown in the sidebar.",
+  "summary.choose_project": "Choose the task's Workspace",
+  "summary.choose_placeholder": "Choose a Workspace",
+  "summary.continue": "Continue",
+  "summary.project_unavailable": "This Workspace is no longer shown. Your draft is retained; show the Workspace again to save.",
+  "summary.delete_confirm": "Across {workspaces} workspaces in All tasks, delete {count} completed tasks? Task content and local session records will be deleted. This cannot be undone.",
   "summary.order": "Urgent → High → Normal · Oldest first within each priority",
   "summary.count": "{workspaces} workspaces · {tasks} tasks",
   "summary.open_task": "Open task: {name} · {machine} / {workspace}",

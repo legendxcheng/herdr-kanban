@@ -109,6 +109,7 @@ describe("实时 Agent 状态", () => {
     const view = render(<KanbanBoard key={project.id} project={project} />);
     await screen.findByText(board.storedTask.name, { selector: ".task-name" });
     board.availableAgents = [liveAgent(board.storedTask, "working")];
+    board.storedTask.project_id = "other";
     view.rerender(<KanbanBoard key="other" project={{ ...project, id: "other" }} />);
     await waitFor(() => expect(cardDot(board.storedTask.name).getAttribute("data-status")).toBe("working"));
     await act(async () => { resolve([liveAgent(board.storedTask, "blocked")]); });

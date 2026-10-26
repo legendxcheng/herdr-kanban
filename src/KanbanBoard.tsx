@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type RefObject } from "react";
-import type { Task, Project, TaskStatus } from "./types";
+import type { Task, Project, TaskStatus, Machine } from "./types";
 import { TaskCard } from "./TaskCard";
 import { DispatchDialog } from "./DispatchDialog";
 import { TaskEditPanel, TaskFormDialog, type TaskEditorHandle } from "./TaskFormDialog";
@@ -14,6 +14,9 @@ import { flowUnresolved, taskColumn } from "./taskFlow";
 import { useTaskFlowUpdates } from "./useTaskFlowUpdates";
 import { useAgentStatus } from "./useAgentStatus";
 import { taskAgentStatus } from "./agentStatus";
+import { machineLabel } from "./WorkspaceAddDialog";
+import "./taskSummary.css";
+import { CreateTaskDialog } from "./CreateTaskDialog";
 
 interface KanbanBoardProps {
   project: Project;
@@ -31,8 +34,36 @@ const COLUMNS: { status: TaskStatus; label: string; emptyIcon: IconName; emptyTe
   { status: "done", label: "board.done", emptyIcon: "check", emptyText: "board.done_empty", hint: "board.done_hint" },
 ];
 
-export function KanbanBoard({ project, machineName, terminalMaximized = false, onToggleTerminalMaximized, editorRef: externalEditorRef, initialTaskId }: KanbanBoardProps) {
-  const [tasks, setTasks] = useState<Task[]>([]);
+export function KanbanBoard(props: KanbanBoardProps) {
+  return <TaskBoard {...props} projects={[props.project]} />;
+}
+
+export interface TaskBoardProps extends Omit<KanbanBoardProps, "project"> {
+  project?: Project;
+  projects: Project[];
+  machines?: Machine[];
+}
+
+export function TaskBoard({ project, projects, machines = [], machineName, terminalMaximized = false, onToggleTerminalMaximized, editorRef: externalEditorRef, initialTaskId }: TaskBoardProps) {
+  const summary = !project;
+  const scope = JSON.stringify(projects.map(p => p.id).sort());
+  const projectMap = new Map(projects.map(p => [p.id, p]));
+  const projectFor = (task: Task) => projectMap.get(task.project_id)!;
+  const machineFor = (task?: Task | null) => {
+    if (!summary) return machineName;
+    const owner = task && projectMap.get(task.project_id);
+    return owner ? machineLabel(owner.machine_id ?? "local", machines.find(m => m.id === owner.machine_id)?.name) : undefined;
+  };
+
+  const [storedTasks, setTasks] = useState<Task[]>([]);
+  const tasks = storedTasks.filter(t => projectMap.has(t.project_id));
+  const tasksRef = useRef(tasks);
+  tasksRef.current = tasks;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  const [readError, setReadError] = useLocalizedMessage();
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   // App keys this board by Project ID. Only the initial read replaces its UI;
   // an empty result is still loaded data and must stay visible during refreshes.
   const [initialLoading, setInitialLoading] = useState(true);
@@ -42,7 +73,7 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
   const draggingIdRef = useRef<string | null>(null);
   const dragFromControl = useRef(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const { agents, refreshAgents } = useAgentStatus(project);
+  const { agents, refreshAgents } = useAgentStatus(projects);
   const [pendingDispatch, setPendingDispatch] = useState<{ task: Task; paneId: string } | null>(null);
   const [recoveringTaskId, setRecoveringTaskId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -62,18 +93,19 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
   const removedTaskIds = useRef(new Set<string>());
   const selectedTask = tasks.find((task) => task.id === selectedTaskId && taskColumn(task) === "in_progress") ?? null;
   const suppressClick = useRef(false);
+  const selectionSequence = useRef(0);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resizing = useRef(false);
   const widthAdjusted = useRef(false);
   const [terminalWidth, setTerminalWidth] = useState<number | null>(null);
   const [maximumWidth, setMaximumWidth] = useState(800);
   const loadSequence = useRef(0);
-  const taskRequest = useRef<Promise<Task[]> | null>(null);
+  const taskRequest = useRef<{ scope: string; sequence: number; promise: Promise<Task[] | undefined> } | null>(null);
   const mounted = useRef(true);
   const pendingTaskSelection = useRef(initialTaskId);
-  const defaultSelectionSuppressed = useRef(!!initialTaskId);
+  const defaultSelectionSuppressed = useRef(summary || !!initialTaskId);
   const [locatedTaskId, setLocatedTaskId] = useState<string | null>(null);
-  const agentStatuses = new Map(tasks.map(task => [task.id, taskAgentStatus(task, agents, busyTasks.has(task.id))]));
+  const agentStatuses = new Map(tasks.map(task => [task.id, taskAgentStatus(task, agents[task.project_id] ?? [], busyTasks.has(task.id))]));
   useEffect(() => {
     if (!workspaceRef.current) return;
     const observer = new ResizeObserver(() => {
@@ -94,18 +126,25 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
     setTerminalWidth(Math.max(280, Math.min(maximumWidth, width)));
   };
 
-  async function load(refreshDiscovery = true) {
-    if (!mounted.current) return;
+  async function load(refreshDiscovery = true): Promise<Task[] | undefined> {
+    // Old dialog/batch callbacks cannot install a request into a new visible scope.
+    if (!mounted.current || scope !== scopeRef.current) return;
+    if (!refreshDiscovery && taskRequest.current?.scope === scope) return taskRequest.current.promise;
     if (refreshDiscovery) refreshAgents();
     const sequence = ++loadSequence.current;
-    const request = !refreshDiscovery && taskRequest.current ? taskRequest.current : api.listTasks(project.id);
-    taskRequest.current = request;
+    setRefreshing(true);
+    // All readers of this request share its reconciliation and result. A poll must
+    // not invalidate a click that is awaiting the very same database snapshot.
+    const promise = (async () => {
     try {
-      const result = await request;
+      const result = await (summary ? api.boardTasks(JSON.parse(scope)) : api.listTasks(project!.id));
       const t = result.filter(task => !removedTaskIds.current.has(task.id)).map(task => optimisticStarts.current.has(task.id)
         ? { ...task, flow: optimisticStarts.current.get(task.id) } : task);
-      if (sequence === loadSequence.current) {
+      if (mounted.current && scope === scopeRef.current && sequence === loadSequence.current) {
+        tasksRef.current = t;
         setTasks(t);
+        setHasLoaded(true);
+        setReadError("");
         if (pendingTaskSelection.current) {
           // Consume the request only on a successful fresh read. Never briefly connect the first task.
           const target = t.find(task => task.id === pendingTaskSelection.current);
@@ -118,19 +157,23 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
         } else {
           setSelectedTodoId(current => t.some(task => task.id === current && taskColumn(task) === "todo") ? current : null);
           setSelectedTaskId((current) => t.some((task) => task.id === current && taskColumn(task) === "in_progress")
-            ? current : (!initialTaskId || !defaultSelectionSuppressed.current || current ? t.find((task) => taskColumn(task) === "in_progress")?.id ?? null : null));
+            ? current : (!defaultSelectionSuppressed.current || current ? t.find((task) => taskColumn(task) === "in_progress")?.id ?? null : null));
         }
+        return t;
       }
     } catch (e) {
-      if (sequence === loadSequence.current) notify({ error: String(e) }, "error");
+      if (mounted.current && scope === scopeRef.current && sequence === loadSequence.current) { setReadError(String(e)); if (!summary) notify({ error: String(e) }, "error"); }
     } finally {
-      if (taskRequest.current === request) taskRequest.current = null;
-      if (sequence === loadSequence.current) setInitialLoading(false);
+      if (taskRequest.current?.sequence === sequence) taskRequest.current = null;
+      if (mounted.current && scope === scopeRef.current && sequence === loadSequence.current) { setInitialLoading(false); setRefreshing(false); }
     }
+    })();
+    taskRequest.current = { scope, sequence, promise };
+    return promise;
   }
 
-  useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false; ++loadSequence.current; }; }, [project.id]);
-  useTaskFlowUpdates(project.id, () => load(false));
+  useEffect(() => { mounted.current = true; taskRequest.current = null; void load(); return () => { mounted.current = false; ++loadSequence.current; }; }, [scope]);
+  useTaskFlowUpdates(projects.map(p => p.id), async () => { await load(false); });
 
   useEffect(() => {
     if (!locatedTaskId || initialLoading) return;
@@ -159,17 +202,30 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
     if (bulkTaskIdsRef.current.size) return;
     const snapshot = tasks.filter(task => taskColumn(task) === "done");
     if (!snapshot.length) return;
-    if (action === "delete" && !confirm(tr("batch.delete_confirm").replace("{count}", String(snapshot.length)))) return;
+    if (action === "delete" && !confirm(tr(summary ? "summary.delete_confirm" : "batch.delete_confirm", {
+      count: snapshot.length, workspaces: new Set(snapshot.map(t => t.project_id)).size,
+    }))) return;
     const ids = snapshot.map(task => task.id);
     bulkTaskIdsRef.current = new Set(ids);
     setBulkTaskIds(new Set(ids));
     setBulkAction(action);
     setBulkFeedback(null);
     try {
-      const result = await (action === "archive" ? api.archiveCompletedTasks : api.deleteCompletedTasks)(project.id, ids);
+      const groups = new Map<string, string[]>();
+      snapshot.forEach(task => groups.set(task.project_id, [...(groups.get(task.project_id) ?? []), task.id]));
+      const batches = await Promise.all([...groups].map(async ([projectId, taskIds]): Promise<api.BatchTaskResult> => {
+        try {
+          const result = await (action === "archive" ? api.archiveCompletedTasks : api.deleteCompletedTasks)(projectId, taskIds);
+          handleRemoved(result.succeeded);
+          return result;
+        } catch (error) {
+          return { succeeded: [], skipped: [], failed: taskIds.map(id => ({ id, error: String(error) })) };
+        }
+      }));
+      const result = { succeeded: batches.flatMap(r => r.succeeded), skipped: batches.flatMap(r => r.skipped), failed: batches.flatMap(r => r.failed) };
       if (!mounted.current) return;
       // Commit local removal before the reconciliation request can fail or return stale data.
-      handleRemoved(result.succeeded);
+      void load();
       const message = { key: `batch.${action}_result`, params: {
         succeeded: result.succeeded.length, skipped: result.skipped.length, failed: result.failed.length,
       } };
@@ -200,13 +256,20 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
         !(document.activeElement instanceof HTMLSelectElement) &&
         !(document.activeElement instanceof HTMLTextAreaElement)
       ) {
-        setCreatingTask(true);
+        void createTask();
         e.preventDefault();
       }
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [terminalMaximized]);
+
+  async function createTask() {
+    const selection = ++selectionSequence.current;
+    if (editorRef.current && !await leaveTodo()) return;
+    if (!mounted.current || selection !== selectionSequence.current) return;
+    setCreatingTask(true);
+  }
 
   async function leaveTodo() {
     if (await editorRef.current?.requestLeave() === false || !mounted.current) return false;
@@ -216,15 +279,30 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
 
   async function selectTask(task: Task) {
     if (suppressClick.current || selectedTodoId === task.id) return;
+    const selection = ++selectionSequence.current;
+    const selectionScope = scope;
     if (editorRef.current && !await leaveTodo()) return;
+    if (summary) {
+      const fresh = await load(false);
+      if (!fresh) return;
+      const target = fresh.find(t => t.id === task.id);
+      if (!target) { notify({ key: "summary.unavailable" }, "error"); return; }
+      task = target;
+    }
+    if (!mounted.current || selectionScope !== scopeRef.current || selection !== selectionSequence.current) return;
     if (taskColumn(task) === "todo") setSelectedTodoId(task.id);
-    else setSelectedTaskId(task.id);
+    else if (taskColumn(task) === "done") setEditingTaskId(task.id);
+    else { defaultSelectionSuppressed.current = false; setSelectedTaskId(task.id); }
   }
 
   function editTask(id: string | null) {
-    const task = tasks.find(task => task.id === id);
+    const task = tasksRef.current.find(task => task.id === id);
     if (task && taskColumn(task) === "todo") void selectTask(task);
-    else setEditingTaskId(id);
+    else { void (async () => {
+      const selection = ++selectionSequence.current;
+      if (editorRef.current && !await leaveTodo()) return;
+      if (mounted.current && selection === selectionSequence.current) setEditingTaskId(id);
+    })(); }
   }
 
   async function handleDrop(e: React.DragEvent, targetStatus: TaskStatus) {
@@ -244,6 +322,10 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
     if (activeFlows.current.has(task.id) || (flowUnresolved(task) && !(status === "done" && task.flow?.kind === "complete" && task.flow.state === "unknown"))) return;
     if (editorRef.current && (status === "in_progress" || selectedTodoId === task.id) && !await leaveTodo()) return;
     if (activeFlows.current.has(task.id) || !mounted.current) return;
+    const current = tasksRef.current.find(t => t.id === task.id);
+    if (!current) return;
+    task = current;
+    if (flowUnresolved(task) && !(status === "done" && task.flow?.kind === "complete" && task.flow.state === "unknown")) return;
     activeFlows.current.add(task.id);
     setBusyTasks(new Set(activeFlows.current));
     setFlowError("");
@@ -287,10 +369,10 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
   }
 
   return (
-    <div className="kanban-board board-workspace" ref={workspaceRef} style={terminalWidth === null ? undefined : { "--terminal-width": `${terminalWidth}px` } as React.CSSProperties} onDragOver={(e) => e.preventDefault()}>
+    <div role={summary ? "region" : undefined} aria-label={summary ? tr("summary.title") : undefined} className={`kanban-board board-workspace${summary ? " summary-board" : ""}`} ref={workspaceRef} style={terminalWidth === null ? undefined : { "--terminal-width": `${terminalWidth}px` } as React.CSSProperties} onDragOver={(e) => e.preventDefault()}>
       <div className="board-main" inert={terminalMaximized}>
         {initialLoading ? <div className="board-loading"><span className="spinner" /><span>{tr("common.loading")}</span></div> : <>
-        <div className="workspace-bar">
+        {project ? <div className="workspace-bar">
           <h1 className="workspace-project" title={project.name}>{project.name}</h1>
           {machineName && <span className="machine-source" title={machineName}>{machineName}</span>}
           <span className="breadcrumb-sep">/</span>
@@ -299,24 +381,28 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
             <Icon name="folder" />
             <span className="project-path" title={project.root_path}>{project.root_path}</span>
           </span>
-        </div>
+        </div> : <header className="summary-header"><div><h1><Icon name="board" />{tr("summary.title")}</h1><p>{tr("summary.scope")}</p></div><button className="btn-secondary" disabled={refreshing} onClick={() => void load()}>{tr(refreshing ? "overview.refreshing" : "overview.refresh")}</button></header>}
         <div className="board-content">
+          {summary && <div className="summary-meta"><span>{tr("summary.count", { workspaces: projects.length, tasks: tasks.length })}</span><span>{tr("summary.order")}</span></div>}
+          {readError && <p role="alert" className="error">{tr(hasLoaded ? "summary.stale" : "summary.failed")} {readError} <button className="btn-secondary" disabled={refreshing} onClick={() => void load()}>{tr("overview.retry")}</button></p>}
+          {summary && !projects.length && <p>{tr("summary.empty_workspaces")}</p>}
           {flowError && <p role="alert" className="error">{flowError}</p>}
           <div className="board-toolbar">
             <div className="board-view"><Icon name="board" /><h2>{tr("board.title")}</h2><span className="toolbar-count">{tasks.length}</span></div>
             <div className="board-toolbar-actions">
               <span className="board-summary">{tr("board.summary", { done: tasks.filter(task => taskColumn(task) === "done").length, total: tasks.length })}</span>
-              <button className="btn-primary" onClick={() => setCreatingTask(true)}><Icon name="plus" />{tr("task.create")}<kbd>N</kbd></button>
+              <button className="btn-primary" onClick={() => void createTask()}><Icon name="plus" />{tr("task.create")}<kbd>N</kbd></button>
             </div>
           </div>
-          <div className="kanban-columns">
+          {(hasLoaded || !summary) && <div className="kanban-columns">
           {COLUMNS.map(({ status, label, emptyIcon, emptyText, hint }) => {
             const col = tasks.filter((t) => taskColumn(t) === status);
-            if (status === "in_progress") col.sort((a, b) =>
+            if (!summary && status === "in_progress") col.sort((a, b) =>
               Number(agentStatuses.get(b.id) === "blocked") - Number(agentStatuses.get(a.id) === "blocked"));
             return (
               <div
                 key={status}
+                role={summary ? "region" : undefined} aria-label={summary ? tr(label) : undefined}
                 className={`kanban-col col-${status}${dragOverCol === status ? " drag-over" : ""}`}
                 onDragOver={(e) => { e.preventDefault(); setDragOverCol(status); }}
                 onDragLeave={(e) => {
@@ -378,6 +464,7 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
                       >
                         <TaskCard
                           task={task}
+                          source={summary ? `${machineFor(task)} · ${projectFor(task).name}` : undefined}
                           agentStatus={agentStatuses.get(task.id)!}
                           busy={busyTasks.has(task.id)}
                           removing={bulkTaskIds.has(task.id)}
@@ -388,12 +475,15 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
                           onRemoved={() => handleRemoved([task.id])}
                           onRecover={() => setRecoveringTaskId(task.id)}
                           selected={(selectedTodoId ?? selectedTaskId) === task.id}
-                          onSelect={taskColumn(task) !== "done" ? () => { void selectTask(task); } : undefined}
+                          onSelect={summary || taskColumn(task) !== "done" ? () => { void selectTask(task); } : undefined}
                           onEditTask={editTask}
                           onDispatchTask={async (id) => {
+                            const selection = ++selectionSequence.current;
                             if (editorRef.current && !await leaveTodo()) return;
-                            const t = tasks.find((x) => x.id === id);
-                            if (t) setPendingDispatch({ task: t, paneId: "" });
+                            // Mutation/refresh failure must never fall back to stale prompt content.
+                            const fresh = await load();
+                            const t = fresh?.find((x) => x.id === id);
+                            if (t && mounted.current && scope === scopeRef.current && selection === selectionSequence.current) setPendingDispatch({ task: t, paneId: "" });
                           }}
                         />
                       </div>
@@ -404,7 +494,7 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
               </div>
             );
           })}
-          </div>
+          </div>}
         </div>
         </>}
       </div>
@@ -414,26 +504,31 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
         onPointerDown={(e) => { resizing.current = true; e.currentTarget.setPointerCapture(e.pointerId); e.preventDefault(); }}
         onPointerMove={(e) => { if (resizing.current && workspaceRef.current) setWidth(workspaceRef.current.getBoundingClientRect().right - e.clientX); }}
         onPointerUp={() => { resizing.current = false; }} onLostPointerCapture={() => { resizing.current = false; }} />
-      {selectedTodo ? <TaskEditPanel key={selectedTodo.id} task={selectedTodo} project={project} editorRef={editorRef}
+      {selectedTodo ? <TaskEditPanel key={selectedTodo.id} task={selectedTodo} project={projectFor(selectedTodo)} editorRef={editorRef}
         onClose={() => {
           // An explicit return to the terminal ends the summary jump's selection guard.
           defaultSelectionSuppressed.current = false;
           setSelectedTodoId(null);
           setSelectedTaskId(current => current ?? tasks.find(task => taskColumn(task) === "in_progress")?.id ?? null);
-        }} onSaved={() => load(false)} /> :
-      <TerminalPanel task={selectedTask} machineName={machineName} maximized={terminalMaximized} onToggleMaximized={onToggleTerminalMaximized} onRepair={selectedTask ? () => {
+        }} onSaved={async () => { await load(); }} /> :
+      <TerminalPanel task={selectedTask} machineName={machineFor(selectedTask)} maximized={terminalMaximized} onToggleMaximized={onToggleTerminalMaximized} onRepair={selectedTask ? () => {
         if (selectedTask.binding?.operation) setRecoveringTaskId(selectedTask.id);
         else setRepairingTaskId(selectedTask.id);
       } : undefined} />}
-      {creatingTask && <TaskFormDialog project={project} onClose={() => setCreatingTask(false)} onSaved={load} />}
-      {pendingDispatch && (
+      {creatingTask && project && <TaskFormDialog project={project} onClose={() => setCreatingTask(false)} onSaved={async () => { await load(); }} />}
+      {creatingTask && summary && <CreateTaskDialog projects={projects} machines={machines} onClose={() => setCreatingTask(false)} onSaved={async () => { await load(); }} />}
+      {pendingDispatch && tasks.some(t => t.id === pendingDispatch.task.id) && (
         <DispatchDialog
           key={pendingDispatch.task.id}
           task={tasks.find((task) => task.id === pendingDispatch.task.id) ?? pendingDispatch.task}
-          project={project}
+          project={projectFor(pendingDispatch.task)}
           preselectedPaneId={pendingDispatch.paneId || undefined}
           onClose={() => setPendingDispatch(null)}
-          onDispatched={() => { setPendingDispatch(null); load(); }}
+          onDispatched={() => {
+            defaultSelectionSuppressed.current = false;
+            setSelectedTaskId(pendingDispatch.task.id);
+            setPendingDispatch(null); void load();
+          }}
           onRefresh={load}
         />
       )}
@@ -443,7 +538,7 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
       })()}
       {repairingTaskId && (() => {
         const task = tasks.find((task) => task.id === repairingTaskId);
-        return task ? <BindingDialog key={task.id} task={task} project={project} onClose={() => setRepairingTaskId(null)} onSaved={() => { setRepairingTaskId(null); load(); }} /> : null;
+        return task ? <BindingDialog key={task.id} task={task} project={projectFor(task)} onClose={() => setRepairingTaskId(null)} onSaved={() => { setRepairingTaskId(null); load(); }} /> : null;
       })()}
       {editingTaskId && (() => {
         const t = tasks.find((x) => x.id === editingTaskId);
@@ -451,7 +546,7 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
           <TaskFormDialog
             key={t.id}
             task={t}
-            project={project}
+            project={projectFor(t)}
             onClose={() => setEditingTaskId(null)}
             onSaved={() => { setEditingTaskId(null); load(); }}
           />

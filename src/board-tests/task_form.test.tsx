@@ -87,6 +87,6 @@ describe("任务优先级", () => {
     await waitFor(() => expect(within(editor).getByRole("status").textContent).toBe("已保存"));
     expect(board.extraTasks[0].priority).toBe("high");
     fireEvent.click(screen.getByRole("button", { name: /新建任务/ }));
-    expect((within(screen.getByRole("dialog", { name: "新建任务" })).getByRole("combobox", { name: "优先级" }) as HTMLSelectElement).value).toBe("normal");
+    expect((within(await screen.findByRole("dialog", { name: "新建任务" })).getByRole("combobox", { name: "优先级" }) as HTMLSelectElement).value).toBe("normal");
   });
 });

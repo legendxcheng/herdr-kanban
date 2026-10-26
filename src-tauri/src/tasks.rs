@@ -8,11 +8,23 @@ fn err(error: impl std::fmt::Display) -> String {
 }
 
 pub fn list(db: &Connection, project: &str) -> Result<Vec<Task>, String> {
-    let mut stmt = db.prepare("SELECT id,project_id,name,status,prompt_json,prompt_snapshot,
-        dispatched_at,dispatched_to,created_at,updated_at,priority FROM tasks WHERE project_id=?1 AND archived_at IS NULL
-        ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, created_at, id").map_err(err)?;
+    list_scope(db, &serde_json::to_string(&[project]).map_err(err)?, false)
+}
+
+/// Complete task views in a single local scope, with the same visibility rules as navigation.
+pub fn list_visible(db: &Connection, projects: &[String]) -> Result<Vec<Task>, String> {
+    list_scope(db, &serde_json::to_string(projects).map_err(err)?, true)
+}
+
+fn list_scope(db: &Connection, scope: &str, visible_only: bool) -> Result<Vec<Task>, String> {
+    let mut stmt = db.prepare("SELECT t.id,t.project_id,t.name,t.status,t.prompt_json,t.prompt_snapshot,
+        t.dispatched_at,t.dispatched_to,t.created_at,t.updated_at,t.priority FROM tasks t
+        WHERE t.project_id IN (SELECT value FROM json_each(?1)) AND t.archived_at IS NULL
+        AND (?2=0 OR EXISTS (SELECT 1 FROM projects p JOIN project_visibility v ON v.project_id=p.id
+            WHERE p.id=t.project_id AND v.visible=1 AND (p.workspace_id IS NULL OR p.sync_status!='missing')))
+        ORDER BY CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 ELSE 2 END, t.created_at, t.id").map_err(err)?;
     let rows = stmt
-        .query_map([project], |row| {
+        .query_map(params![scope, visible_only], |row| {
             let priority: String = row.get(10)?;
             Ok(Task {
                 id: row.get(0)?,

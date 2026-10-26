@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-26。All Tasks 页内交互（GitHub #26，子任务 #27–#34）：与普通看板共用 TaskBoard，支持编辑、终端、拖拽流转、派发恢复、新建及单项／批量整理；跨项目操作从任务归属解析上下文。查询、草稿与迟到意图保护见 6.2.6，实际验收与限制见[交互验收记录](docs/verification/2026-10-26-all-tasks-interactions.md)。
+
 更新日期：2026-10-26。文件引用对齐 Codex CLI 0.164.0：预览、手动派发、后台启动及图文混合派发直接输出 Workspace 相对路径，不展开正文、不加 `[文件:]` 或额外换行；含 Unicode 空白且不含双引号时加双引号。技能仍发送 `$技能名`，由 Codex 加载。相关前端 40 项、Rust 213 项测试通过（20 项跳过），限定本次模块及其依赖的 TypeScript 检查和 Vite 构建通过。实际序列化结果交给本机 Codex `debug prompt-input` 的三个案例也逐字一致。共享工作区全量前端当次为 215 通过、1 项汇总交互测试失败，常规构建另受汇总测试类型错误阻断；不将其他进行中改动计为本次通过。未重新打包安装或完成真实 TUI/Herdr 派发验收。提交前另将仅含本次 14 个文件/改动块的暂存树导出为隔离副本，完整前端 215 项、Rust 201 项测试通过（19 项环境依赖测试跳过），`npm run build` 通过；这些结果验证本提交不依赖共享工作区其他未提交改动。规则来源见[原生引用研究](docs/research/2026-10-26-codex-native-references.md)，实现见 6.4、6.6.1。
 
 更新日期：2026-10-26。远端 @/$ 使用预热索引和持久 SSH 查询通道；任务切换按电脑/session 复用 Herdr/WezTerm 客户端，切换期间关闭输入通路，确认新定位后恢复。实现、生命周期与实际测量见 6.3、6.5 及[长连接验收记录](docs/verification/2026-10-26-persistent-connections.md)。
@@ -119,7 +121,8 @@ herdr-kanban/
 │  ├─ WorkspaceActionDialog.tsx    侧栏隐藏/删除确认、目标身份、焦点与遮罩管理
 │  ├─ WorkspaceAddDialog.tsx       执行电脑选择、完整候选搜索/多选、远端接入与新建衔接
 │  ├─ TaskOverviewDialog.tsx       按需统计弹窗、本地日界线、查询合并及关闭清理
-│  ├─ TaskSummaryBoard.tsx / taskSummary.css  跨 Workspace 三列汇总、合并刷新与只读任务跳转
+│  ├─ TaskSummaryBoard.tsx / taskSummary.css  跨 Workspace 范围入口，复用 TaskBoard 页内交互
+│  ├─ CreateTaskDialog.tsx         先选择任务所属 Workspace，再进入共用新建表单
 │  ├─ ProjectFormDialog.tsx        新建/关联 Herdr workspace、改名及回退目录
 │  ├─ useProjectSync.ts            启动/焦点/前台 15 秒同步、重排与旧响应隔离
 │  ├─ useProjectGitStatus.ts       独立 Git 状态刷新、查询合并及项目/路径响应隔离
@@ -303,7 +306,7 @@ flowchart TD
 | [ProjectFormDialog.tsx](src/ProjectFormDialog.tsx) | 名称、目录、workspace ID、操作 ID、保存状态和错误 | 创建/关联/改名、回退目录、未知结果核实 |
 | [KanbanBoard.tsx](src/KanbanBoard.tsx) | 卡片列表、加载、创建弹窗、拖拽状态、Agent 列表、编辑 ID、Todo/终端选择、待派发对象 | 加载/创建/变更状态；协调右侧编辑/终端与弹层，启动前处理未保存修改 |
 | [TaskCard.tsx](src/TaskCard.tsx) | 展示名称、实时状态圆点、优先级、异常与紧凑图标操作 | 编辑/派发回调；完成交给看板流转；删除/归档调用 API |
-| [useAgentStatus.ts](src/useAgentStatus.ts) | 当前项目独立实时 Agent 列表；可见时 3 秒刷新及焦点刷新 | 共用在途查询、任务刷新作废旧观察，卸载清理监听，失败清空实时状态 |
+| [useAgentStatus.ts](src/useAgentStatus.ts) | 按项目隔离实时 Agent 列表；可见时 3 秒刷新及焦点刷新 | 共用在途查询；本机 2 槽与远端 3 槽独立，任务刷新作废旧观察，卸载清理监听，失败显示未知 |
 | [TaskFormDialog.tsx](src/TaskFormDialog.tsx) | 提示词、优先级、标题草稿与保存基线 | TaskFormDialog 与 TaskEditPanel 共用表单；Todo 保存后保持面板；requestLeave 处理保存/放弃/继续编辑；主动改名才提交 name |
 | [PromptEditor.tsx](src/PromptEditor.tsx) | Tiptap Editor 实例 | 接收 JSON 字符串；每次编辑输出序列化 JSON |
 | [MentionPopover.tsx](src/MentionPopover.tsx) | 搜索词、引用种类、候选项、选择下标、展开状态 | 查询文件/技能；写入编辑器 transaction |
@@ -418,6 +421,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `update_project` | id、name、可选 fallbackPath | 稳定 ID 改名，读回实际结果并返回 Project |
 | `delete_project` | id | 本地删除并记录排除；不关闭 Herdr workspace/Agent |
 | `list_tasks` | projectId | 项目内未归档 Task[]，优先级降序，同级创建时间升序、ID 稳定排序 |
+| `board_tasks` | projectIds | 后台线程在同一数据库锁内读取当前可见范围的完整 Task；复用普通列表正文、绑定、生命周期与清理状态组装，按全局优先级排序；不查询 Herdr |
 | `task_summary` | projectIds | 后台线程一次本地 SQL，范围与当前可见 Project 取交集；返回 id / project_id / name / status（投影列）/ priority / created_at，跨项目按优先级、创建时间、ID 排序，不读取正文、绑定或查询 Herdr |
 | `task_overview` | projectIds、dayStart、dayEnd | 后台线程持数据库锁执行单次聚合；返回各 project_id 的 todo / in_progress / done / today_done；日期参数为本地当天起止转换的 RFC3339 时间，区间左闭右开；不读取提示词或查询 Herdr |
 | `create_task` | projectId、priority、可选 name/promptJson/draftId/locale | 新 UI 不传 name；事务保存摘要标题、正文/图片及生成意图，立即返回 todo Task；旧调用显式 name 保留原名且不生成，允许省略正文 |
@@ -587,17 +591,25 @@ IPC 使用后台线程执行本地事务。每个去重后的 ID 都在自己的
 
 Todo 面板与 TerminalPanel 条件互斥。切到 Todo 卸载 TerminalPanel，通过原 `terminal_close(connectionId)` 关闭本应用查看连接，不完成任务、不关闭底层 Agent pane、不发送提示词。点击进行中任务或关闭编辑面板后按原选择逻辑重新连接。无新增数据库、Rust 接口或迁移。组件测试验证关闭/重开调用和不派发；本次真实原生窗口切换未完成，详见 [验收记录](docs/verification/2026-10-26-todo-editor-panel.md)。
 
-### 6.2.6 跨 Workspace 汇总看板（2026-10-26，GitHub #22）
+### 6.2.6 All Tasks 跨 Workspace 页内交互（2026-10-26，GitHub #26）
 
-`ProjectSidebar → App → TaskSummaryBoard → api.taskSummary → commands::task_summary → task_summary::read`。侧栏固定「汇总看板」入口与原统计弹窗并存；App 显式区分汇总与单项目视图，进入汇总不改变 Workspace 显示偏好。来源为侧栏当前已显示的本机及远端 Project；后端同时复核 project_visibility 与 missing 规则，隐藏、未选入、确认已不存在的项目及归档任务均排除。离线或停用机器的仍可见项目保留本地任务摘要。
+`ProjectSidebar → App → TaskSummaryBoard → TaskBoard`。普通 `KanbanBoard` 以单 Project 包装同一个 `TaskBoard`；卡片、编辑／派发／恢复弹层、拖拽和右侧区域共用。All Tasks 保持导航选中，点击任务在当前页面编辑或查看终端，不再切回所属 Workspace。原 #22 的只读摘要接口仍保留，但交互页面改用 `api.boardTasks → commands::board_tasks → tasks::list_visible`。
 
-摘要模型只包含任务 ID、Project ID、标题、投影状态、优先级和创建时间。SQL 联接最新生命周期操作和 start_requests，pending/unknown 启动投影为 in_progress；明确失败或没有启动请求时使用原状态，与正式任务列表及任务概况一致。三列显示未开发／开发中／完成，每列严格保持 urgent → high → normal、created_at、id 的跨项目顺序；不应用单 Workspace 的 blocked 置顶，不加载实时 Agent 状态。卡片提供完整电脑／Workspace 可访问名称和悬浮提示；汇总页不提供流转或批量修改操作。
+`list_visible` 与普通 `tasks::list` 共用 `list_scope` 的完整 Task 组装，包括正文、绑定、生命周期和清理状态；批量读取在后台线程、同一数据库锁内完成。后端校验 project_visibility 与 missing，隐藏、未选入、不再存在的项目及归档任务排除；离线电脑的仍可见任务保留本地数据。无数据库迁移。三列通过共用 `taskColumn` 投影启动状态，跨项目按 urgent → high → normal、created_at、id 排序；All Tasks 展示实时 Agent 状态但不作 blocked 置顶，普通看板仍保留该规则。
 
-刷新在前台每 2 秒、焦点、恢复可见、启动事件及标题事件触发；同范围串行合并，普通轮询不持续淘汰慢请求，范围变化及卸载隔离旧响应并清理监听。成功刷新保留列与任务 DOM，初次查询才展示加载占位；失败保留已有快照并明确标记刷新失败及重试，初次失败不显示空任务成功状态。范围按排序后的 ID 集合识别，重排和改名不重新加载整个页面。
+所有表单、资源引用、派发和绑定修复从 `task.project_id` 查找真实 Project；终端显示对应电脑身份。Todo 使用右侧 TaskEditPanel，保存后保持面板；进行中任务选择原生 Herdr 终端，其他状态使用原编辑弹窗。初次进入汇总不自动连接其他任务，明确选择、启动／派发或关闭编辑面板后沿用对应选择流程。调宽、最大化／恢复与普通看板共用；切视图只释放本 App 查看连接，不停止底层 Agent。
 
-点击摘要通过 project_id/task_id 跳转，原 KanbanBoard 仅在成功读取任务后消费一次 initialTaskId。Todo 打开右侧编辑面板，in_progress 选择对应终端，done 打开原编辑弹窗，并滚动到卡片；以新鲜 taskColumn 为准，过期摘要不会按旧状态误开终端。初次读取和后台刷新都不会为缺失目标或 Todo/done 跳转自动打开其他任务；不存在的任务提示已删除／归档／不再显示。用户明确关闭 Todo 编辑面板后解除默认选择抑制，保留原终端选择或选择首张进行中任务，恢复既有关闭行为。普通项目进入仍保留原首张进行中自动选择，已选择任务后手动操作沿用原逻辑。进入汇总前复用未保存草稿确认；卸载原看板只释放本 App 查看连接，不启动、派发、完成或关闭底层 Agent。
+拖拽和卡片按钮调用既有启动、完成、恢复、核实和派发 IPC，不新增生命周期协议。移动前复核最新本地任务，保留忙碌防重、未知结果核实及原会话恢复不重发约束。新建按钮／N 先进入 `CreateTaskDialog` 选择已显示 Workspace，再复用任务表单；没有项目时提示添加，所选项目不再显示时保留新建草稿并禁止保存。
 
-无新增数据库迁移。后端采用与任务概况一致的 SQL 投影，回归同时对照正式任务列表与统计，后续改变状态投影时需同步维护。前端新增 13 项交互回归，后端新增 2 项真实 SQLite 用例；真实 Tauri/WebView2、隔离 SQLite 已验证排序、Todo 保存后重新排序、草稿保护、完成任务弹窗、隐藏恢复读取、空列表轮询及中英／窄窗口布局。真实本机两任务及 SSH 一任务的五次汇总跳转已核对原生终端标记、机器和 pane 身份，导航未改变派发时间或生命周期操作；专用任务均已正常完成。未生成或安装新安装包，审查修复及具体验收边界见记录。
+`TaskEditorHandle` 提供 `projectId` 和 `requestLeave`。App 在汇总切回原先选中的项目时也保护草稿，隐藏操作检查实际正在编辑的项目。新建、任务切换、关闭及启动／派发沿用继续编辑／放弃／保存并继续；保存后强制新读取，派发准备再读取最新内容，失败不回退旧正文。选择、编辑、新建和派发准备共用交互代次，迟到结果不会在用户切走后打开旧目标。
+
+单项删除／归档提交成功后立即移除卡片并清理关联选择和弹层，保留已移除 ID，迟到旧列表不会复活任务。完成列批量操作固定点击时的 ID 快照，按 Project 分组调用既有批量服务；删除一次确认说明跨 Workspace 数量与影响。各组独立返回成功／跳过／失败，成功组立即移除，失败组保留卡片并展示原因，不承诺跨项目原子性。
+
+前台 2 秒、焦点、可见性恢复和启动／标题事件触发任务刷新。每个在途读取携带 scope、sequence 与统一对账 Promise；普通轮询共享该结果，不使正在等待的点击失效。修改后的强制读取作废旧快照；旧 scope 回调在入口被拒绝，范围变化立即过滤隐藏项目。失败保留已展示内容和重试入口，首次失败不伪装空列表；刷新不覆盖草稿或抢走有效选择。
+
+实时 Agent 查询按项目隔离，前台 3 秒与焦点刷新；本机最多 2 个、远端最多 3 个在途读取，远端慢请求不占用本机容量。跨 StrictMode／导航合并同项目请求，卸载后忽略旧结果并清理订阅；只查询状态，不打开全部原生终端。
+
+验证在 App／Tauri IPC 交互边界及真实 SQLite 查询边界进行；继承普通看板回归并新增汇总交互用例，包含保存前旧轮询、点击期间刷新、旧范围批次完成、远端查询占满和迟到派发准备。真实桌面、本机／SSH Herdr 结果及未覆盖项独立记录于[本次验收记录](docs/verification/2026-10-26-all-tasks-interactions.md)，不能沿用 #22 只读跳转的历史通过结果。
 
 ### 6.3 @ 文件与 $ 技能引用
 

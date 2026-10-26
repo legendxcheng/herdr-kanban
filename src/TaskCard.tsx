@@ -9,6 +9,7 @@ import { AgentStatusDot, type AgentStatus } from "./agentStatus";
 
 interface TaskCardProps {
   task: Task;
+  source?: string;
   agentStatus: AgentStatus;
   onChanged: () => void;
   onRemoved: () => void;
@@ -24,7 +25,7 @@ interface TaskCardProps {
   onFlowRecover?: () => void;
 }
 
-export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, removing, onComplete, onStart, onFlowRecover }: TaskCardProps) {
+export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, removing, onComplete, onStart, onFlowRecover }: TaskCardProps) {
   const archivingRef = useRef(false);
   const deletingRef = useRef(false);
   const [deleting, setDeleting] = useState(false);
@@ -75,9 +76,10 @@ export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, 
 
   return (
     <div className={`task-card status-${taskColumn(task)}${selected ? " selected" : ""}`} onClick={onSelect}>
+      {source && <div className="summary-card-source" title={source}>{source}</div>}
       <div className="task-heading">
         <div className="task-header" role={onSelect ? "button" : undefined} tabIndex={onSelect ? 0 : undefined}
-          aria-label={onSelect ? `${tr(taskColumn(task) === "todo" ? "task.view_edit" : "terminal.view")}${task.name}` : undefined} aria-pressed={onSelect ? !!selected : undefined}
+          aria-label={onSelect ? `${tr(taskColumn(task) !== "in_progress" ? "task.view_edit" : "terminal.view")}${task.name}` : undefined} aria-pressed={onSelect ? !!selected : undefined}
           onKeyDown={(event) => { if (onSelect && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onSelect(); } }}>
           <AgentStatusDot status={agentStatus} />
           <span className="task-name" title={task.name}>{task.name}</span>

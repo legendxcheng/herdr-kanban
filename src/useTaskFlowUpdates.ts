@@ -2,10 +2,12 @@ import { useEffect, useRef } from "react";
 import { onStartChanged, onTitleChanged } from "./api";
 
 /** Events prompt authoritative reads; polling/focus also recover missed notifications. */
-export function useTaskFlowUpdates(projectId: string, reload: () => Promise<void>) {
+export function useTaskFlowUpdates(projectIds: string | string[], reload: () => Promise<void>) {
+  const scope = JSON.stringify(typeof projectIds === "string" ? [projectIds] : [...projectIds].sort());
   const latest = useRef(reload);
   latest.current = reload;
   useEffect(() => {
+    const ids: string[] = JSON.parse(scope);
     let active = true;
     let running = false;
     let queued = false;
@@ -22,7 +24,7 @@ export function useTaskFlowUpdates(projectId: string, reload: () => Promise<void
       }
     }
     void onStartChanged(event => {
-      if (event.project_id === projectId) void reconcile();
+      if (ids.includes(event.project_id)) void reconcile();
     }).then(stop => {
       if (!active) { stop(); return; }
       unlisten = stop;
@@ -30,7 +32,7 @@ export function useTaskFlowUpdates(projectId: string, reload: () => Promise<void
       void reconcile();
     }).catch(() => { /* Polling remains available if the event transport fails. */ });
     void onTitleChanged(event => {
-      if (event.project_id === projectId) void reconcile();
+      if (ids.includes(event.project_id)) void reconcile();
     }).then(stop => {
       if (!active) stop();
       else { unlistenTitle = stop; void reconcile(); }
@@ -46,5 +48,5 @@ export function useTaskFlowUpdates(projectId: string, reload: () => Promise<void
       unlisten?.();
       unlistenTitle?.();
     };
-  }, [projectId]);
+  }, [scope]);
 }

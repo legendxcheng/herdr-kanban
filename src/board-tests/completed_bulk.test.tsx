@@ -137,6 +137,7 @@ describe("已完成区域批量操作", () => {
     await screen.findByText(board.storedTask.name);
     fireEvent.click(screen.getByRole("button", { name: "一键归档" }));
     old.unmount();
+    board.storedTask.project_id = "next-project";
     render(<KanbanBoard project={{ ...project, id: "next-project", name: "另一个项目" }} />);
     await screen.findByText(board.storedTask.name);
     await act(async () => finish({ succeeded: ["task-1"], skipped: [], failed: [] }));
