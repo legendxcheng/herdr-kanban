@@ -5,6 +5,8 @@
   "overview.scope": "All Workspaces in the current project list. Select a name to open its board.",
   "overview.todo": "To do",
   "overview.in_progress": "In progress",
+  "workspace.count_help": "In-progress tasks in this workspace, matching the board and excluding archived tasks.",
+  "workspace.count_unavailable": "The in-progress count is loading or temporarily unavailable.",
   "overview.done": "Completed",
   "overview.today_done": "Completed today",
   "overview.loading": "Loading task overview…",

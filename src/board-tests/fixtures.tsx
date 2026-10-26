@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { KanbanBoard } from "../KanbanBoard";
+import { taskColumn } from "../taskFlow";
 import type { HerdrAgent, Project, Task, TaskStatus } from "../types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: class { onmessage = () => {}; } }));
@@ -50,6 +51,11 @@ beforeEach(() => {
     switch (command) {
       case "list_projects": return [];
       case "project_git_statuses": return (args as { projectIds: string[] }).projectIds.map(project_id => ({ project_id, root_path: project.root_path, state: "branch", head: "feature/fixture" }));
+      case "task_overview": return (args as { projectIds: string[] }).projectIds.map(project_id => ({
+        project_id, todo: 0, done: 0, today_done: 0,
+        in_progress: [...(board.deleted ? [] : [board.storedTask]), ...board.extraTasks]
+          .filter(task => task.project_id === project_id && !task.archived_at && taskColumn(task) === "in_progress").length,
+      }));
       case "list_tasks": return [...(board.deleted ? [] : [{ ...board.storedTask }]), ...board.extraTasks];
       case "delete_task": board.deleted = true; return;
       case "archive_task": board.deleted = true; return;

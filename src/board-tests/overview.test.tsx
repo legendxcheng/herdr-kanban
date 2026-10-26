@@ -27,13 +27,13 @@ it("overview is opt-in, summarizes all visible projects and selecting a row swit
   mockOverview(); render(<App />);
   await screen.findByRole("button", { name: /^第二项目/ });
   expect(screen.queryByRole("dialog")).toBeNull();
-  expect(calls()).toHaveLength(0);
+  await waitFor(() => expect(document.querySelector(".project-in-progress")?.textContent).toBe("进行中 2"));
   fireEvent.click(screen.getByRole("button", { name: "任务概况" }));
   const dialog = await screen.findByRole("dialog", { name: "任务概况" });
   const table = await within(dialog).findByRole("table");
   expect(within(table).getByRole("row", { name: /测试项目/ }).textContent).toBe("测试项目82123");
   expect(Array.from(dialog.querySelectorAll(".overview-totals strong")).map(el => el.textContent)).toEqual(["12", "3", "4"]);
-  expect(calls()[0][1]).toMatchObject({ projectIds: [project.id, other.id] });
+  expect(calls()[0][1]).toMatchObject({ projectIds: expect.arrayContaining([project.id, other.id]) });
   fireEvent.click(within(dialog).getByRole("button", { name: other.name }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   expect(document.querySelector('.project-row[aria-current="page"]')?.textContent).toContain(other.name);

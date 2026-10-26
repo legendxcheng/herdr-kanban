@@ -20,13 +20,16 @@ it("keeps Local refreshing while a remote computer is disconnected and retains r
     return base(command, args, options);
   });
   render(<App />);
-  await screen.findByRole("heading", { name: /devpc/ });
+  await screen.findByRole("region", { name: /devpc/ });
   await screen.findByRole("button", { name: /^远端项目/ });
   localName = "本机仍可刷新";
   fireEvent(window, new Event("focus"));
   await screen.findByRole("button", { name: /^本机仍可刷新/ });
   await act(async () => rejectRemote(new Error("machine.timeout")));
-  expect(screen.getByRole("button", { name: /^远端项目/ })).toBeTruthy();
+  const remoteRow = screen.getByRole("button", { name: /^远端项目/ });
+  expect(remoteRow.getAttribute("aria-label")).toContain("devpc");
+  expect(remoteRow.getAttribute("title")).toContain("连接中断");
+  expect(remoteRow.querySelector(".project-machine")?.textContent).toBe("devpc");
 });
 
 it("groups existing projects under the Local execution computer", async () => {
@@ -37,8 +40,10 @@ it("groups existing projects under the Local execution computer", async () => {
     return original(command, args);
   });
   render(<App />);
-  expect(await screen.findByRole("heading", { name: "Local · 本机" })).toBeTruthy();
+  expect(await screen.findByRole("region", { name: "Local · 本机" })).toBeTruthy();
   expect(await screen.findByRole("button", { name: new RegExp(`^${project.name}`) })).toBeTruthy();
+  expect(document.querySelector(".project-machine")?.textContent).toBe("local");
+  expect(screen.queryByRole("heading", { name: "Local · 本机" })).toBeNull();
 });
 
 it("synchronizes Herdr workspaces on focus while retaining local tasks on failure", async () => {

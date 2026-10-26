@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-26。侧栏 Workspace 紧凑卡片：第一行显示 local/远端机器名与项目名，第二行显示 Git 分支与进行中任务数；操作按钮在悬停或键盘聚焦时横向展开第三行，隐藏时不占位。机器状态并入标识，进行中计数复用本地批量统计、前台每 2 秒刷新。实现见 3.1、6.2.3 节，验证及边界见 [紧凑侧栏验收记录](docs/verification/2026-10-26-compact-sidebar.md)。
+
 更新日期：2026-10-26。Workspace 选择性显示与 SSH 接入界面（GitHub #14、#15–#20）：本地和远端均支持隐藏、搜索/多选添加已有、新建后同步 Herdr 并显示；schema 13 独立保存显示偏好，外部发现不再自动加入左栏。Local/Remote 来源与连接状态分开显示；授权操作有明确结果，连接检查通过后进入目标电脑的 Workspace 选择。实现见 6.1.3 和第 12 节，验证及首次密码交互未覆盖项见 [本次验证记录](docs/verification/2026-10-26-workspace-selection.md)。
 
 2026-10-25 SSH 多机支持正在实施：一个本地数据库按稳定机器身份管理本机及 Windows SSH 电脑。机器注册、隔离迁移、远端资源/任务路由和官方原生终端桥接已接入；真实远端文件/技能/图片、完成与原会话精确恢复已分阶段通过；真实 Tauri 跨机输入、最大化和专用 SSH 断线重连也已通过；具体边界见验证记录。实现与验证边界见第 12 节及 [SSH 验证记录](docs/verification/2026-10-25-ssh-multi-machine.md)。
@@ -20,7 +22,7 @@
 
 2026-10-25 独立仓库迁移：应用平铺于仓库根目录，开发技能及其规则文档一并迁移，新增需求指向 `legendxcheng/herdr-kanban`。旧仓库 Issue 与历史验收路径保留来源含义；本次迁移范围及验证见[独立仓库迁移记录](docs/verification/2026-10-25-kanban-repository-migration.md)。
 
-2026-10-25 任务概况增量：项目标题旁新增按需打开的统计弹窗，汇总当前导航中的各 Workspace 待办、进行中、未归档已完成及今日已完成；主界面不常驻统计。新增完成时间迁移 10 和批量统计 IPC，交互、口径及验证见 6.2.3 节。
+2026-10-25 任务概况增量：项目标题旁新增按需打开的统计弹窗，汇总当前导航中的各 Workspace 待办、进行中、未归档已完成及今日已完成；2026-10-26 起侧栏卡片另常驻显示各项目进行中数量。新增完成时间迁移 10 和批量统计 IPC，交互、口径及验证见 6.2.3 节。
 
 2026-10-24 图片输入增量：新建/编辑任务支持剪贴板图片、120px 缩略图、悬停删除及点击放大；图片持久化与两种派发路径见 6.3.1。实际通过的验证及原生 Ctrl+V 未覆盖项见[图片输入验收记录](docs/verification/2026-10-24-kanban-image-input.md)。
 
@@ -99,6 +101,7 @@ herdr-kanban/
 │  ├─ ProjectFormDialog.tsx        新建/关联 Herdr workspace、改名及回退目录
 │  ├─ useProjectSync.ts            启动/焦点/前台 15 秒同步、重排与旧响应隔离
 │  ├─ useProjectGitStatus.ts       独立 Git 状态刷新、查询合并及项目/路径响应隔离
+│  ├─ useProjectTaskCounts.ts      可见 Workspace 进行中数量；本地批量统计、前台轮询/事件刷新与旧范围响应隔离
 │  ├─ WorkspaceRecovery.tsx        未决 workspace 创建核实与显式认领
 │  ├─ board-tests/                 按导航、表单、删除归档、状态、选择、派发与后台启动分组的组件回归；fixtures 隔离每个用例
 │  ├─ KanbanBoard.tsx              卡片加载、三列、拖拽及弹层协调
@@ -262,6 +265,7 @@ flowchart TD
 | [App.tsx](src/App.tsx) | `selectedId`、`terminalMaximized`；从同步列表派生当前项目 | 将同步、排序状态与操作下传侧栏；按 Project ID 保持看板；协调终端最大化和背景禁用，项目变化后恢复分栏 |
 | [useProjectSync.ts](src/useProjectSync.ts) | 项目、session、未决记录、刷新及排序状态 | 请求合并；重排前后增加代次，隔离旧刷新；失败只读回实际顺序 |
 | [useProjectGitStatus.ts](src/useProjectGitStatus.ts) | 独立于 Herdr 的项目 Git 状态 | 启动、目录变化及已有刷新触发查询；串行合并在途请求，拒绝迟到结果 |
+| [useProjectTaskCounts.ts](src/useProjectTaskCounts.ts) | 可见项目按 ID 隔离的进行中数量 | 全部电脑一次本地批量读取；前台 2 秒、启动事件和焦点刷新；失败显示未知，旧项目范围结果不回写 |
 | [ProjectSidebar.tsx](src/ProjectSidebar.tsx) | 添加弹窗、编辑目标、隐藏操作、拖动来源与插入位置 | 当前 session 的 ready 项可拖；同电脑移动；隐藏只修改本地偏好，未决记录保留入口 |
 | [WorkspaceAddDialog.tsx](src/WorkspaceAddDialog.tsx) | 电脑、候选、搜索、多选及接入/新建子流程 | 完整候选不依赖可见导航；迟到查询隔离；连接成功刷新不关闭添加流程 |
 | [ProjectFormDialog.tsx](src/ProjectFormDialog.tsx) | 名称、目录、workspace ID、操作 ID、保存状态和错误 | 创建/关联/改名、回退目录、未知结果核实 |
@@ -280,7 +284,9 @@ flowchart TD
 
 ### 3.1 样式与交互实现
 
-[App.css](src/App.css) 集中定义深色中性色阶、语义色、间距、圆角以及组件样式。2026-10-24 界面调整借鉴 [Supabase 官网](https://supabase.com/) 的中性色、绿色强调、细边框和留白，在现有深色界面上实现：炭灰背景、`#3ecf8e` 主色、6/8px 圆角；根字号为 16px，任务标题、列标题与编辑正文为 16px，操作按钮和辅助文字为 14px，紧凑状态标签为 12px；侧栏宽度 200px，1100px 及以下窗口收为 180px，品牌、底部留白和纵向项目操作按钮适应窄侧栏。左侧三列 grid 等宽、每列至少 180px、间距 8px，看板内容左右留白 12px。右侧终端从窗口内容区顶部贯通到底部，默认占整个应用内容宽度的 1/3，侧栏、看板及分隔线合计占 2/3。首次测量前通过 CSS viewport 宽度保留相同比例；ResizeObserver 在未手调时持续维护默认比例。分隔线支持拖动和方向键，手调后保持像素宽度并随窗口缩小约束上限；最小终端 280px，左侧看板至少 320px。切项目重置默认宽度，不跨重启保存。项目面包屑、目录与任务工具栏位于左侧看板，三列任务区域紧接工具栏，顶部 Agent 派发栏已移除，终端标题和连接状态合并为单行。左侧根据自身宽度收起辅助文字。空间不足时仅三列区域横向滚动；任务新建/编辑弹窗通过 Portal 挂载至 body，相对整个窗口居中，宽 720px、最大宽度 94vw、最大高度 calc(100dvh - 48px)，正文区滚动而头尾固定。弹窗打开时应用根节点 inert，Tab 在表单内循环，关闭后恢复入口焦点。动画包括遮罩淡入、Toast 滑入和加载旋转，并响应系统减少动效设置。
+2026-10-26 侧栏卡片改为两行：第一行 `[local/远端机器名] 项目名`，第二行 Git 分支与 `进行中 N`（英文 `In progress N`）。分支及名称各自省略并保留完整提示，计数不换行；项目名称 14px、分支 12px、机器标识及数量 11px。隐藏/编辑/删除排成第三行，默认 `display: none` 不占高度，悬停或 `focus-within` 时展开；无悬停设备保持可操作，拖动期间收起操作行以稳定落点。机器分组仍决定顺序和重排边界，去掉常驻标题及 Online 行，状态圆点和完整提示置于机器标识；断线重试同时保留上次错误与同步状态，没有可见项目的机器仍可显示错误。浏览器实测普通卡片约 55px，5 项列表从约 600px 减至 292px，详见本次验收记录。
+
+[App.css](src/App.css) 集中定义深色中性色阶、语义色、间距、圆角以及组件样式。2026-10-24 界面调整借鉴 [Supabase 官网](https://supabase.com/) 的中性色、绿色强调、细边框和留白，在现有深色界面上实现：炭灰背景、`#3ecf8e` 主色、6/8px 圆角；根字号为 16px，任务标题、列标题与编辑正文为 16px，操作按钮和辅助文字为 14px，紧凑状态标签为 12px；侧栏宽度 200px，1100px 及以下窗口收为 180px，品牌、底部留白及紧凑两行项目卡片适应窄侧栏，操作按钮按需横向展开。左侧三列 grid 等宽、每列至少 180px、间距 8px，看板内容左右留白 12px。右侧终端从窗口内容区顶部贯通到底部，默认占整个应用内容宽度的 1/3，侧栏、看板及分隔线合计占 2/3。首次测量前通过 CSS viewport 宽度保留相同比例；ResizeObserver 在未手调时持续维护默认比例。分隔线支持拖动和方向键，手调后保持像素宽度并随窗口缩小约束上限；最小终端 280px，左侧看板至少 320px。切项目重置默认宽度，不跨重启保存。项目面包屑、目录与任务工具栏位于左侧看板，三列任务区域紧接工具栏，顶部 Agent 派发栏已移除，终端标题和连接状态合并为单行。左侧根据自身宽度收起辅助文字。空间不足时仅三列区域横向滚动；任务新建/编辑弹窗通过 Portal 挂载至 body，相对整个窗口居中，宽 720px、最大宽度 94vw、最大高度 calc(100dvh - 48px)，正文区滚动而头尾固定。弹窗打开时应用根节点 inert，Tab 在表单内循环，关闭后恢复入口焦点。动画包括遮罩淡入、Toast 滑入和加载旋转，并响应系统减少动效设置。
 
 `App` 负责项目侧栏与主区域，`KanbanBoard` 在左侧渲染工作空间面包屑和项目目录层级；`ProjectSidebar` 增加品牌区、项目数量与明确的新建入口，项目选择使用原生按钮；`KanbanBoard` 增加任务总数、完成数量及打开创建表单的顶部新建按钮。`Icon.tsx` 提供本地 SVG 线性图标，替换看板空态与项目操作的字符图标，不加载远程字体或样式。任务卡片、项目表单、任务表单弹窗、派发对话框、引用候选与通知使用同一套主题。
 
@@ -505,7 +511,9 @@ IPC 使用后台线程执行本地事务。每个去重后的 ID 都在自己的
 
 ### 6.2.3 任务概况弹窗（2026-10-25）
 
-`App → ProjectSidebar.onOverview → TaskOverviewDialog → api.taskOverview → commands::task_overview → task_overview::read`。入口位于侧栏项目标题旁，主界面只显示按钮；弹窗打开才查询。顶部显示待办、进行中、今日已完成总数，下方按当前导航顺序列出所有 Workspace 的四项计数，包括零任务项目。点击名称关闭弹窗并切换看板。弹窗通过 portal 渲染到 body，背景 root inert，支持关闭按钮、Esc、遮罩点击、焦点循环与关闭后恢复；长列表在弹窗内滚动。
+`App → ProjectSidebar.onOverview → TaskOverviewDialog → api.taskOverview → commands::task_overview → task_overview::read`。概况弹窗入口位于侧栏项目标题旁，弹窗自身的查询与刷新只在打开期间运行。顶部显示待办、进行中、今日已完成总数，下方按当前导航顺序列出所有 Workspace 的四项计数，包括零任务项目。点击名称关闭弹窗并切换看板。弹窗通过 portal 渲染到 body，背景 root inert，支持关闭按钮、Esc、遮罩点击、焦点循环与关闭后恢复；长列表在弹窗内滚动。
+
+2026-10-26 侧栏计数：`App → useProjectTaskCounts → api.taskOverview` 复用同一批量查询，将 `in_progress` 按 Project ID 传入 `ProjectSidebar`。Local 与远端项目都从本机 SQLite 读取，不依赖 SSH 在线；统计范围是可见项目集合，重排或改名不重建查询。前台每 2 秒、窗口焦点/恢复可见和相关启动事件刷新；慢查询合并，显式刷新在已有请求之后补查，项目范围改变后忽略旧响应，卸载清理监听和定时器。未读取、失败或响应缺少该项目时显示 `—`，实际零任务显示 `0`；正在启动或待核实的投影口径与下述统计一致。不增加 IPC 或数据库迁移。
 
 统计只覆盖传入的当前导航项目 ID，不遍历所有任务正文或逐项目调用 `list_tasks`。SQL 按最新生命周期操作与 start_requests 判断 pending/unknown 启动投影，与 `taskColumn` 的开发中显示一致；明确启动失败后恢复原列计数。前三项排除归档任务；今日已完成要求当前投影仍为 done 且 completed_at 位于当天，包含已归档任务。删除或重新打开后不计，重复完成/关闭重试不增加数量。完成清理失败不撤销业务完成，也不撤销完成计数。旧任务完成日期未知时仅计入已完成。
 
@@ -826,7 +834,7 @@ Herdr 对外仍使用 `Cli` 与 `Herdr`。内部 `herdr_cli` 承担进程执行�
 | `native_ssh.rs` / `native_client_connection.rs` | 官方 remote-client-bridge 原始帧流，私有客户端连接内 pane.zoom 与快照确认；取消只终止本连接及本看板 WezTerm |
 | `MachineDialog.tsx` / `useRemoteMachines.ts` | 接入管理、授权结果轮询、检查后回到 Workspace 选择；远端慢查询不阻塞 Local，迟到快照按机器和选择代次隔离 |
 | `machine_enrollment.rs` / `enroll-windows-machine.ps1` | 独立操作 ID、原生进程及结果文件；仅在进程退出且结果身份匹配时报告成功/失败，无结果退出为取消；按阶段显示可处理错误 |
-| `ProjectSidebar.tsx` / `ProjectFormDialog.tsx` | 机器分组、状态、同机器重排和新项目机器选择；远端目录手动输入，不弹本机目录选择器 |
+| `ProjectSidebar.tsx` / `ProjectFormDialog.tsx` | 按机器保留顺序与同机器重排；机器名/状态在卡片内显示，新项目支持机器选择；远端目录手动输入，不弹本机目录选择器 |
 
 新增 IPC：`list_machines`、`saved_machines`、`enroll_machine`、`connect_machine`、`rename_machine`、`remove_machine`、`machine_status`。`sync_projects` / `workspace_operations` / `create_project` / 新建关联接受可选 machineId；已有 Project/Task 操作从本地记录推导归属，不信任前端指定目标机器。文件/技能搜索和读取接受可选 projectId；旧本机调用继续可用。
 

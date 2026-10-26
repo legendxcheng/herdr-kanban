@@ -18,6 +18,7 @@ interface ProjectSidebarProps {
   inert?: boolean;
   projects: Project[];
   gitStatuses?: Record<string, ProjectGitStatus>;
+  inProgressCounts?: Record<string, number>;
   selectedId: string | null;
   onSelect: (id: string) => void;
   onHide?: (id: string) => Promise<void>;
@@ -33,7 +34,7 @@ interface ProjectSidebarProps {
   onMove?: (projectId: string, beforeProjectId: string | null) => Promise<void>;
 }
 
-export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy = {}, inert = false, projects, gitStatuses = {}, selectedId, onSelect, onHide, recoveryProjects = [], onRecovery, onChanged, onOverview, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
+export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy = {}, inert = false, projects, gitStatuses = {}, inProgressCounts = {}, selectedId, onSelect, onHide, recoveryProjects = [], onRecovery, onChanged, onOverview, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
   useLocale();
   const [showNew, setShowNew] = useState(false);
   const [manageMachines, setManageMachines] = useState(false);
@@ -90,15 +91,25 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
         {onOverview && <button onClick={onOverview} className="btn-icon" aria-label={tr("overview.title")} title={tr("overview.title")}><Icon name="board" /></button>}
         <button onClick={() => setShowNew(true)} className="btn-icon" aria-label={tr("workspace.add")} title={tr("workspace.add")}><Icon name="plus" /></button>
       </div>
-      <div className="project-list" aria-busy={reordering} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setInsertion(null); }}>
-        {groups.map(group => <section key={group.id} className="machine-group">
-        <h3 className="machine-heading" title={machineLabel(group.id,group.name)}>{machineLabel(group.id,group.name)}</h3>
-        {group.disabled && <p className="hint">{tr("machine.disabled")}</p>}
-        {machineBusy[group.id] && <p role="status">{tr("workspace.syncing")}</p>}
-        {group.id !== "local" && !group.disabled && !machineBusy[group.id] && machineErrors[group.id] === "" && <p className="hint">{tr("machine.online")}</p>}
-        {machineErrors[group.id] && <p className="error" role="alert">{tr("machine.offline")} · {errorText(machineErrors[group.id])}</p>}
-        {projects.filter(p => machineOf(p) === group.id).map((p) => {
+      <div className="project-list" aria-busy={reordering} data-dragging={draggingId !== null} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setInsertion(null); }}>
+        {groups.map(group => {
+          const groupProjects = projects.filter(p => machineOf(p) === group.id);
+          const machineState = group.disabled ? "disabled" : machineErrors[group.id] ? "offline"
+            : machineBusy[group.id] ? "syncing"
+            : group.id !== "local" && machineErrors[group.id] === "" ? "online" : "unknown";
+          const status = machineState === "syncing" ? tr("workspace.syncing")
+            : machineState === "offline" ? `${tr("machine.offline")} · ${errorText(machineErrors[group.id])}`
+            : machineState === "unknown" ? "" : tr(`machine.${machineState}`);
+          const machineTitle = [machineLabel(group.id, group.name), status,
+            machineState === "offline" && machineBusy[group.id] ? tr("workspace.syncing") : "",
+          ].filter(Boolean).join(" · ");
+          if (!groupProjects.length && !machineErrors[group.id]) return null;
+          return <section key={group.id} className="machine-group" aria-label={machineLabel(group.id, group.name)}>
+        {!groupProjects.length && machineErrors[group.id] && <p className="error" role="alert">{machineTitle}</p>}
+        {groupProjects.map((p) => {
           const git = gitStatuses[p.id];
+          const inProgress = inProgressCounts[p.id];
+          const countLabel = `${tr("overview.in_progress")} ${inProgress ?? "—"}`;
           const label = p.sync_status !== "ready" ? tr(`workspace.${p.sync_status}`)
             : !git ? tr("workspace.git_loading")
             : git.state === "branch" ? git.head
@@ -120,11 +131,19 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
             onDragOver={(e) => { const position = dropPosition(e, p); if (position) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setInsertion(position); } }}
             onDrop={(e) => handleDrop(e, p)}
           >
-            <button className="project-row" onPointerDown={() => { suppressClick.current = false; }} onKeyDown={() => { suppressClick.current = false; }} onClick={() => { if (!suppressClick.current) onSelect(p.id); }} aria-current={p.id === selectedId ? "page" : undefined} title={movable(p) ? `${p.name} · ${tr("workspace.drag_sort")}` : p.name}>
-              <Icon name="folder" />
+            <button className="project-row" onPointerDown={() => { suppressClick.current = false; }} onKeyDown={() => { suppressClick.current = false; }} onClick={() => { if (!suppressClick.current) onSelect(p.id); }} aria-current={p.id === selectedId ? "page" : undefined} aria-label={`${p.name} · ${machineTitle} · ${label} · ${countLabel}`} title={[p.name, machineTitle, p.root_path, movable(p) ? tr("workspace.drag_sort") : ""].filter(Boolean).join("\n")}>
               <span className="project-info">
-                <span className="project-name">{p.name}</span>
-                <span className="project-ws" title={`${label}\n${p.root_path}`}><Icon name="branch" size={13} /><span>{label}</span></span>
+                <span className="project-title">
+                  <span className={`project-machine machine-${machineState}`} title={machineTitle}>
+                    <span className="project-machine-name">{group.id === "local" ? "local" : group.name}</span>
+                    {machineState !== "unknown" && <span className="project-machine-status" aria-hidden="true" />}
+                  </span>
+                  <span className="project-name">{p.name}</span>
+                </span>
+                <span className="project-meta">
+                  <span className="project-ws" title={`${label}\n${p.root_path}`}><Icon name="branch" size={13} /><span>{label}</span></span>
+                  <span className="project-in-progress" title={tr(inProgress === undefined ? "workspace.count_unavailable" : "workspace.count_help")}>{countLabel}</span>
+                </span>
               </span>
             </button>
             <div className="project-actions">
@@ -135,7 +154,8 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
           </div>
           );
         })}
-        </section>)}
+        </section>;
+        })}
       </div>
       <div className="workspace-sync"><button className="btn-secondary" disabled={syncing} onClick={onChanged}>{tr(syncing ? "workspace.syncing" : "workspace.refresh")}</button>
         {reordering && <p role="status">{tr("workspace.reordering")}</p>}

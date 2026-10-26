@@ -6,6 +6,7 @@ import { Icon } from "./Icon";
 import { TerminalPanel } from "./TerminalPanel";
 import { useProjectSync } from "./useProjectSync";
 import { TaskOverviewDialog } from "./TaskOverviewDialog";
+import { useProjectTaskCounts } from "./useProjectTaskCounts";
 import "./App.css";
 import { tr, useLocale } from "./i18n";
 import { WorkspaceAddDialog, machineLabel } from "./WorkspaceAddDialog";
@@ -13,6 +14,7 @@ import { WorkspaceAddDialog, machineLabel } from "./WorkspaceAddDialog";
 export default function App() {
   useLocale();
   const { projects, navigation, hide, machines, machineErrors, machineBusy, gitStatuses, operations, syncing, error, refresh, session, reordering, move } = useProjectSync();
+  const inProgressCounts = useProjectTaskCounts(projects);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [terminalMaximized, setTerminalMaximized] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(false);
@@ -36,6 +38,7 @@ export default function App() {
         inert={terminalMaximized}
         projects={projects}
         gitStatuses={gitStatuses}
+        inProgressCounts={inProgressCounts}
         selectedId={selectedId}
         onSelect={id => { setRecoveryId(null); setSelectedId(id); }}
         onHide={hide}

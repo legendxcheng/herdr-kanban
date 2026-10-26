@@ -5,6 +5,8 @@
   "overview.scope": "汇总当前项目列表中的所有 Workspace，点击名称进入看板。",
   "overview.todo": "待办",
   "overview.in_progress": "进行中",
+  "workspace.count_help": "当前 Workspace 的进行中任务数，与看板一致，不含归档任务。",
+  "workspace.count_unavailable": "正在读取或暂时无法获取进行中任务数。",
   "overview.done": "已完成",
   "overview.today_done": "今日已完成",
   "overview.loading": "正在读取任务概况…",
