@@ -1,6 +1,16 @@
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskPriority = "normal" | "high" | "urgent";
 
+/** Lightweight read model; status already includes pending/unknown start projection. */
+export interface TaskSummary {
+  id: string;
+  project_id: string;
+  name: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  created_at: string;
+}
+
 export interface Machine {
   id: string; name: string; kind: "local" | "ssh"; session: string;
   profile_id: string | null; ssh_target: string | null; disabled: boolean;

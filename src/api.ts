@@ -2,7 +2,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
 import type {
-  Machine, SavedMachine, EnrollmentStatus, WorkspaceChoices, NavigationState, Project, ProjectGitStatus, ProjectSnapshot, WorkspaceOperation, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
+  Machine, SavedMachine, EnrollmentStatus, WorkspaceChoices, NavigationState, Project, ProjectGitStatus, ProjectSnapshot, WorkspaceOperation, Task, TaskSummary, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
 } from "./types";
 
 // Projects
@@ -34,6 +34,7 @@ export interface ProjectCounts { project_id: string; todo: number; in_progress: 
 export const taskOverview = (projectIds: string[], dayStart: string, dayEnd: string) =>
   invoke<ProjectCounts[]>("task_overview", { projectIds, dayStart, dayEnd });
 export const listTasks = (projectId: string) => invoke<Task[]>("list_tasks", { projectId });
+export const taskSummary = (projectIds: string[]) => invoke<TaskSummary[]>("task_summary", { projectIds });
 export const createTask = (projectId: string, priority: TaskPriority, promptJson: string, draftId?: string) =>
   invoke<Task>("create_task", { projectId, priority, promptJson, draftId, locale: document.documentElement.lang });
 export const updateTask = (id: string, name: string | undefined, promptJson: string, priority: TaskPriority, draftId?: string) =>

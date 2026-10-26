@@ -1,4 +1,13 @@
 {
+  "summary.title": "汇总看板",
+  "summary.scope": "查看侧栏已显示 Workspace 的全部未归档任务。点击任务进入所属 Workspace。",
+  "summary.order": "紧急 → 优先 → 一般 · 同级按创建时间从早到晚",
+  "summary.count": "{workspaces} 个 Workspace · {tasks} 个任务",
+  "summary.open_task": "打开任务：{name} · {machine} / {workspace}",
+  "summary.empty_workspaces": "尚未选择显示的 Workspace，请从侧栏添加。",
+  "summary.failed": "汇总任务加载失败。",
+  "summary.stale": "刷新失败，当前显示上次成功读取的任务。",
+  "summary.unavailable": "该任务已删除、归档，或所属 Workspace 已不再显示。",
   "task.view_edit": "查看并编辑：",
   "task.unsaved": "有未保存的修改",
   "task.saved": "已保存",

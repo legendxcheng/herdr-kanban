@@ -37,6 +37,7 @@ mod projects;
 mod skill_discovery;
 mod start;
 mod task_overview;
+mod task_summary;
 mod task_titles;
 mod tasks;
 #[cfg(test)]
@@ -131,6 +132,7 @@ pub fn run() {
             project_commands::recover_workspace,
             project_commands::link_workspace,
             commands::list_tasks,
+            commands::task_summary,
             commands::task_overview,
             commands::create_task,
             commands::update_task,

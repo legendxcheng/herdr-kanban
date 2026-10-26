@@ -26,6 +26,8 @@ interface ProjectSidebarProps {
   onRecovery?: (id: string) => void;
   onChanged: () => void;
   onOverview?: () => void;
+  summarySelected?: boolean;
+  onSummary?: () => void;
   operations?: WorkspaceOperation[];
   syncing?: boolean;
   syncError?: string;
@@ -34,7 +36,7 @@ interface ProjectSidebarProps {
   onMove?: (projectId: string, beforeProjectId: string | null) => Promise<void>;
 }
 
-export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy = {}, inert = false, projects, gitStatuses = {}, inProgressCounts = {}, selectedId, onSelect, onHide, recoveryProjects = [], onRecovery, onChanged, onOverview, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
+export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy = {}, inert = false, projects, gitStatuses = {}, inProgressCounts = {}, selectedId, onSelect, onHide, recoveryProjects = [], onRecovery, onChanged, onOverview, summarySelected = false, onSummary, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
   useLocale();
   const [showNew, setShowNew] = useState(false);
   const [manageMachines, setManageMachines] = useState(false);
@@ -86,6 +88,7 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
         <span>herdr<span className="brand-subtitle"> / kanban</span></span>
       </div>
       <div className="sidebar-intro">{tr("sidebar.intro")}</div>
+      {onSummary && <button className="sidebar-summary" aria-pressed={summarySelected} onClick={onSummary}><Icon name="board" />{tr("summary.title")}</button>}
       <div className="sidebar-header">
         <h2>{tr("sidebar.projects")} <span className="sidebar-count">{projects.length}</span></h2>
         {onOverview && <button onClick={onOverview} className="btn-icon" aria-label={tr("overview.title")} title={tr("overview.title")}><Icon name="board" /></button>}

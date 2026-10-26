@@ -1,4 +1,13 @@
 {
+  "summary.title": "All tasks",
+  "summary.scope": "Unarchived tasks from workspaces shown in the sidebar. Open a task to visit its workspace.",
+  "summary.order": "Urgent → High → Normal · Oldest first within each priority",
+  "summary.count": "{workspaces} workspaces · {tasks} tasks",
+  "summary.open_task": "Open task: {name} · {machine} / {workspace}",
+  "summary.empty_workspaces": "No workspaces selected. Add a workspace from the sidebar.",
+  "summary.failed": "Unable to load tasks.",
+  "summary.stale": "Refresh failed. Showing the last successful snapshot.",
+  "summary.unavailable": "This task was deleted or archived, or its workspace is no longer shown.",
   "task.view_edit": "View and edit: ",
   "task.unsaved": "Unsaved changes",
   "task.saved": "Saved",

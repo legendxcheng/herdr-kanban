@@ -24,6 +24,20 @@ pub fn list_tasks(state: State<DbState>, project_id: String) -> Result<Vec<Task>
 }
 
 #[tauri::command]
+pub async fn task_summary(
+    state: State<'_, DbState>,
+    project_ids: Vec<String>,
+) -> Result<Vec<crate::task_summary::TaskSummary>, String> {
+    let db = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        crate::task_summary::read(&conn, &project_ids)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn task_overview(
     state: State<'_, DbState>,
     project_ids: Vec<String>,

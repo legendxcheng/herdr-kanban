@@ -3,11 +3,12 @@ import { flushSync } from "react-dom";
 import type { TaskEditorHandle } from "./TaskFormDialog";
 import { ProjectSidebar } from "./ProjectSidebar";
 import { KanbanBoard } from "./KanbanBoard";
-import { ToastContainer } from "./Toast";
+import { ToastContainer, notify } from "./Toast";
 import { Icon } from "./Icon";
 import { TerminalPanel } from "./TerminalPanel";
 import { useProjectSync } from "./useProjectSync";
 import { TaskOverviewDialog } from "./TaskOverviewDialog";
+import { TaskSummaryBoard } from "./TaskSummaryBoard";
 import { useProjectTaskCounts } from "./useProjectTaskCounts";
 import "./App.css";
 import { tr, useLocale } from "./i18n";
@@ -18,6 +19,8 @@ export default function App() {
   const { projects, navigation, hide, machines, machineErrors, machineBusy, gitStatuses, operations, syncing, error, refresh, session, reordering, move } = useProjectSync();
   const inProgressCounts = useProjectTaskCounts(projects);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [taskToOpen, setTaskToOpen] = useState<{ projectId: string; taskId: string } | null>(null);
   const [terminalMaximized, setTerminalMaximized] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
@@ -31,13 +34,31 @@ export default function App() {
   useEffect(() => { setTerminalMaximized(false); }, [selectedProject?.id]);
   const toggleTerminalMaximized = () => setTerminalMaximized(value => !value);
 
-  async function selectProject(id: string, recovery = false) {
+  async function selectProject(id: string, recovery = false, taskId?: string) {
     // Close the overview before opening the editor's unsaved-changes dialog.
     if (overviewOpen) flushSync(() => setOverviewOpen(false));
     if (id !== selectedProject?.id && await editorRef.current?.requestLeave() === false) return;
+    setTaskToOpen(taskId ? { projectId: id, taskId } : null);
+    setSummaryOpen(false);
     setRecoveryId(recovery ? id : null);
     if (!recovery) setSelectedId(id);
     setOverviewOpen(false);
+  }
+
+  async function openSummary() {
+    if (summaryOpen) return;
+    if (await editorRef.current?.requestLeave() === false) return;
+    setTerminalMaximized(false);
+    setTaskToOpen(null);
+    setSummaryOpen(true);
+  }
+
+  function openSummaryTask(projectId: string, taskId: string) {
+    if (!projects.some(project => project.id === projectId)) {
+      notify({ key: "summary.unavailable" }, "error");
+      return;
+    }
+    void selectProject(projectId, false, taskId);
   }
 
   return (
@@ -51,7 +72,9 @@ export default function App() {
         projects={projects}
         gitStatuses={gitStatuses}
         inProgressCounts={inProgressCounts}
-        selectedId={selectedId}
+        selectedId={summaryOpen ? null : selectedId}
+        summarySelected={summaryOpen}
+        onSummary={() => { void openSummary(); }}
         onSelect={id => { void selectProject(id); }}
         onHide={async id => { if (id !== selectedProject?.id || await editorRef.current?.requestLeave() !== false) await hide(id); }}
         recoveryProjects={navigation.recovery_projects}
@@ -66,8 +89,9 @@ export default function App() {
         onOverview={() => setOverviewOpen(true)}
       />
       <main className="board-area">
-        {selectedProject ? (
+        {summaryOpen ? <TaskSummaryBoard projects={projects} machines={machines} onSelect={openSummaryTask} /> : selectedProject ? (
           <KanbanBoard key={selectedProject.id} project={selectedProject} editorRef={editorRef}
+            initialTaskId={taskToOpen?.projectId === selectedProject.id ? taskToOpen.taskId : undefined}
             machineName={machineLabel(selectedProject.machine_id ?? "local", machines.find(m => m.id === selectedProject.machine_id)?.name)}
             terminalMaximized={terminalMaximized} onToggleTerminalMaximized={toggleTerminalMaximized} />
         ) : (

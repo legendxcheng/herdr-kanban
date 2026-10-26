@@ -22,6 +22,7 @@ interface KanbanBoardProps {
   terminalMaximized?: boolean;
   onToggleTerminalMaximized?: () => void;
   editorRef?: RefObject<TaskEditorHandle | null>;
+  initialTaskId?: string;
 }
 
 const COLUMNS: { status: TaskStatus; label: string; emptyIcon: IconName; emptyText: string; hint: string }[] = [
@@ -30,7 +31,7 @@ const COLUMNS: { status: TaskStatus; label: string; emptyIcon: IconName; emptyTe
   { status: "done", label: "board.done", emptyIcon: "check", emptyText: "board.done_empty", hint: "board.done_hint" },
 ];
 
-export function KanbanBoard({ project, machineName, terminalMaximized = false, onToggleTerminalMaximized, editorRef: externalEditorRef }: KanbanBoardProps) {
+export function KanbanBoard({ project, machineName, terminalMaximized = false, onToggleTerminalMaximized, editorRef: externalEditorRef, initialTaskId }: KanbanBoardProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   // App keys this board by Project ID. Only the initial read replaces its UI;
   // an empty result is still loaded data and must stay visible during refreshes.
@@ -69,6 +70,9 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
   const loadSequence = useRef(0);
   const taskRequest = useRef<Promise<Task[]> | null>(null);
   const mounted = useRef(true);
+  const pendingTaskSelection = useRef(initialTaskId);
+  const defaultSelectionSuppressed = useRef(!!initialTaskId);
+  const [locatedTaskId, setLocatedTaskId] = useState<string | null>(null);
   const agentStatuses = new Map(tasks.map(task => [task.id, taskAgentStatus(task, agents, busyTasks.has(task.id))]));
   useEffect(() => {
     if (!workspaceRef.current) return;
@@ -102,9 +106,20 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
         ? { ...task, flow: optimisticStarts.current.get(task.id) } : task);
       if (sequence === loadSequence.current) {
         setTasks(t);
-        setSelectedTodoId(current => t.some(task => task.id === current && taskColumn(task) === "todo") ? current : null);
-        setSelectedTaskId((current) => t.some((task) => task.id === current && taskColumn(task) === "in_progress")
-          ? current : t.find((task) => taskColumn(task) === "in_progress")?.id ?? null);
+        if (pendingTaskSelection.current) {
+          // Consume the request only on a successful fresh read. Never briefly connect the first task.
+          const target = t.find(task => task.id === pendingTaskSelection.current);
+          pendingTaskSelection.current = undefined;
+          setSelectedTodoId(target && taskColumn(target) === "todo" ? target.id : null);
+          setSelectedTaskId(target && taskColumn(target) === "in_progress" ? target.id : null);
+          setEditingTaskId(target && taskColumn(target) === "done" ? target.id : null);
+          setLocatedTaskId(target?.id ?? null);
+          if (!target) notify({ key: "summary.unavailable" }, "error");
+        } else {
+          setSelectedTodoId(current => t.some(task => task.id === current && taskColumn(task) === "todo") ? current : null);
+          setSelectedTaskId((current) => t.some((task) => task.id === current && taskColumn(task) === "in_progress")
+            ? current : (!initialTaskId || !defaultSelectionSuppressed.current || current ? t.find((task) => taskColumn(task) === "in_progress")?.id ?? null : null));
+        }
       }
     } catch (e) {
       if (sequence === loadSequence.current) notify({ error: String(e) }, "error");
@@ -116,6 +131,13 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
 
   useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false; ++loadSequence.current; }; }, [project.id]);
   useTaskFlowUpdates(project.id, () => load(false));
+
+  useEffect(() => {
+    if (!locatedTaskId || initialLoading) return;
+    const card = Array.from(workspaceRef.current?.querySelectorAll<HTMLElement>("[data-task-id]") ?? [])
+      .find(element => element.dataset.taskId === locatedTaskId);
+    card?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [locatedTaskId, initialLoading]);
 
   function handleRemoved(ids: string[]) {
     if (!mounted.current) return;
@@ -338,6 +360,7 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
                     {col.map((task) => (
                       <div
                         key={task.id}
+                        data-task-id={task.id}
                         draggable={!bulkTaskIds.has(task.id) && !busyTasks.has(task.id) && !flowUnresolved(task)}
                         onPointerDownCapture={(event) => {
                           dragFromControl.current = event.target instanceof Element && !!event.target.closest("button, input, select, textarea");
@@ -392,7 +415,12 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
         onPointerMove={(e) => { if (resizing.current && workspaceRef.current) setWidth(workspaceRef.current.getBoundingClientRect().right - e.clientX); }}
         onPointerUp={() => { resizing.current = false; }} onLostPointerCapture={() => { resizing.current = false; }} />
       {selectedTodo ? <TaskEditPanel key={selectedTodo.id} task={selectedTodo} project={project} editorRef={editorRef}
-        onClose={() => setSelectedTodoId(null)} onSaved={() => load(false)} /> :
+        onClose={() => {
+          // An explicit return to the terminal ends the summary jump's selection guard.
+          defaultSelectionSuppressed.current = false;
+          setSelectedTodoId(null);
+          setSelectedTaskId(current => current ?? tasks.find(task => taskColumn(task) === "in_progress")?.id ?? null);
+        }} onSaved={() => load(false)} /> :
       <TerminalPanel task={selectedTask} machineName={machineName} maximized={terminalMaximized} onToggleMaximized={onToggleTerminalMaximized} onRepair={selectedTask ? () => {
         if (selectedTask.binding?.operation) setRecoveringTaskId(selectedTask.id);
         else setRepairingTaskId(selectedTask.id);

@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-26。跨 Workspace 汇总看板（GitHub #22，子任务 #23–#25）：侧栏固定入口汇总已显示 Workspace 的未归档任务，三列跨项目按紧急／优先／一般、创建时间、任务 ID 排序。卡片标明电脑与 Workspace，点击按最新状态定位原项目的编辑面板、任务终端或完成任务弹窗；明确关闭 Todo 面板后恢复进行中任务选择。新增只读批量摘要 IPC，不新增迁移；实现见 6.2.6，含真实本机／SSH Herdr 的证据与边界见[汇总看板验收记录](docs/verification/2026-10-26-task-summary.md)。
+
 更新日期：2026-10-26。修复复用旧 Codex 窗格时 `agent_pane_busy` 导致启动卡住：仅对明确拒绝的启动请求，在同一窗格身份下有界等待重试；持续明确拒绝转为可重试失败，旧卡片可通过“核实启动结果”释放本次预占。超时和不确定响应仍保留核实保护。实现见 6.6.2，真实 Herdr 三次复用均触发原错误并成功恢复，验证及运行中应用未替换的边界见 [启动时序验收记录](docs/verification/2026-10-26-agent-start-busy.md)。
 
 更新日期：2026-10-26。空 Workspace 定时闪烁修复：看板仅首次查询期间显示加载占位；空列表、后台轮询、焦点刷新、删除最后一张任务及失败重试均保留已展示的看板。已重新生成 0.1.0 Windows x64 NSIS 安装包并核对 SHA-256，未执行安装验证。实现与验证边界见 [空看板刷新验收记录](docs/verification/2026-10-26-empty-board-refresh.md)。
@@ -108,6 +110,7 @@ herdr-kanban/
 │  ├─ ProjectSidebar.tsx           项目列表、Workspace 拖动排序和管理入口
 │  ├─ WorkspaceAddDialog.tsx       执行电脑选择、完整候选搜索/多选、远端接入与新建衔接
 │  ├─ TaskOverviewDialog.tsx       按需统计弹窗、本地日界线、查询合并及关闭清理
+│  ├─ TaskSummaryBoard.tsx / taskSummary.css  跨 Workspace 三列汇总、合并刷新与只读任务跳转
 │  ├─ ProjectFormDialog.tsx        新建/关联 Herdr workspace、改名及回退目录
 │  ├─ useProjectSync.ts            启动/焦点/前台 15 秒同步、重排与旧响应隔离
 │  ├─ useProjectGitStatus.ts       独立 Git 状态刷新、查询合并及项目/路径响应隔离
@@ -158,6 +161,7 @@ herdr-kanban/
 │     ├─ title_cli.rs / title_process.rs  最小 Codex 配置、结构化结果、有界进程及后代清理
 │     ├─ title_tests.rs / title_process_tests.rs  真实 SQLite、可控生成器/进程及显式 CLI live 验收
 │     ├─ task_overview.rs / task_overview_tests.rs  跨项目列计数、今日完成聚合及迁移/日界线验证
+│     ├─ task_summary.rs / task_summary_tests.rs  可见 Workspace 未归档任务摘要、跨项目优先级排序与启动状态投影
 │     ├─ completed_task_tests.rs   批量范围、后台启动投影、部分失败回滚、归档重开与异常删除回归
 │     ├─ agent_status.rs           只读 Agent 发现、完整身份匹配及有效任务归属
 │     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
@@ -399,6 +403,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `update_project` | id、name、可选 fallbackPath | 稳定 ID 改名，读回实际结果并返回 Project |
 | `delete_project` | id | 本地删除并记录排除；不关闭 Herdr workspace/Agent |
 | `list_tasks` | projectId | 项目内未归档 Task[]，优先级降序，同级创建时间升序、ID 稳定排序 |
+| `task_summary` | projectIds | 后台线程一次本地 SQL，范围与当前可见 Project 取交集；返回 id / project_id / name / status（投影列）/ priority / created_at，跨项目按优先级、创建时间、ID 排序，不读取正文、绑定或查询 Herdr |
 | `task_overview` | projectIds、dayStart、dayEnd | 后台线程持数据库锁执行单次聚合；返回各 project_id 的 todo / in_progress / done / today_done；日期参数为本地当天起止转换的 RFC3339 时间，区间左闭右开；不读取提示词或查询 Herdr |
 | `create_task` | projectId、priority、可选 name/promptJson/draftId/locale | 新 UI 不传 name；事务保存摘要标题、正文/图片及生成意图，立即返回 todo Task；旧调用显式 name 保留原名且不生成，允许省略正文 |
 | `update_task` | id、promptJson、priority、可选 name/draftId | name 省略则保留库内最新标题；显式改名或正文变更使旧生成失效；同一事务更新正文和图片引用，失败保留原数据 |
@@ -561,6 +566,18 @@ IPC 使用后台线程执行本地事务。每个去重后的 ID 都在自己的
 `TaskEditorHandle.requestLeave` 用于切换 Todo/进行中任务、关闭面板、启动/派发、切换或隐藏当前 Workspace。有修改时显示“继续编辑 / 放弃修改 / 保存并继续”，确认保存失败时停留原任务；保存完成才执行待定导航或启动。App 的概况入口先关闭概况再打开确认，避免两层模态 root inert 恢复互相干扰。删除任务沿用原删除确认，删除后直接卸载面板；列表显示任务已离开 Todo 时也释放该面板。
 
 Todo 面板与 TerminalPanel 条件互斥。切到 Todo 卸载 TerminalPanel，通过原 `terminal_close(connectionId)` 关闭本应用查看连接，不完成任务、不关闭底层 Agent pane、不发送提示词。点击进行中任务或关闭编辑面板后按原选择逻辑重新连接。无新增数据库、Rust 接口或迁移。组件测试验证关闭/重开调用和不派发；本次真实原生窗口切换未完成，详见 [验收记录](docs/verification/2026-10-26-todo-editor-panel.md)。
+
+### 6.2.6 跨 Workspace 汇总看板（2026-10-26，GitHub #22）
+
+`ProjectSidebar → App → TaskSummaryBoard → api.taskSummary → commands::task_summary → task_summary::read`。侧栏固定「汇总看板」入口与原统计弹窗并存；App 显式区分汇总与单项目视图，进入汇总不改变 Workspace 显示偏好。来源为侧栏当前已显示的本机及远端 Project；后端同时复核 project_visibility 与 missing 规则，隐藏、未选入、确认已不存在的项目及归档任务均排除。离线或停用机器的仍可见项目保留本地任务摘要。
+
+摘要模型只包含任务 ID、Project ID、标题、投影状态、优先级和创建时间。SQL 联接最新生命周期操作和 start_requests，pending/unknown 启动投影为 in_progress；明确失败或没有启动请求时使用原状态，与正式任务列表及任务概况一致。三列显示未开发／开发中／完成，每列严格保持 urgent → high → normal、created_at、id 的跨项目顺序；不应用单 Workspace 的 blocked 置顶，不加载实时 Agent 状态。卡片提供完整电脑／Workspace 可访问名称和悬浮提示；汇总页不提供流转或批量修改操作。
+
+刷新在前台每 2 秒、焦点、恢复可见、启动事件及标题事件触发；同范围串行合并，普通轮询不持续淘汰慢请求，范围变化及卸载隔离旧响应并清理监听。成功刷新保留列与任务 DOM，初次查询才展示加载占位；失败保留已有快照并明确标记刷新失败及重试，初次失败不显示空任务成功状态。范围按排序后的 ID 集合识别，重排和改名不重新加载整个页面。
+
+点击摘要通过 project_id/task_id 跳转，原 KanbanBoard 仅在成功读取任务后消费一次 initialTaskId。Todo 打开右侧编辑面板，in_progress 选择对应终端，done 打开原编辑弹窗，并滚动到卡片；以新鲜 taskColumn 为准，过期摘要不会按旧状态误开终端。初次读取和后台刷新都不会为缺失目标或 Todo/done 跳转自动打开其他任务；不存在的任务提示已删除／归档／不再显示。用户明确关闭 Todo 编辑面板后解除默认选择抑制，保留原终端选择或选择首张进行中任务，恢复既有关闭行为。普通项目进入仍保留原首张进行中自动选择，已选择任务后手动操作沿用原逻辑。进入汇总前复用未保存草稿确认；卸载原看板只释放本 App 查看连接，不启动、派发、完成或关闭底层 Agent。
+
+无新增数据库迁移。后端采用与任务概况一致的 SQL 投影，回归同时对照正式任务列表与统计，后续改变状态投影时需同步维护。前端新增 13 项交互回归，后端新增 2 项真实 SQLite 用例；真实 Tauri/WebView2、隔离 SQLite 已验证排序、Todo 保存后重新排序、草稿保护、完成任务弹窗、隐藏恢复读取、空列表轮询及中英／窄窗口布局。真实本机两任务及 SSH 一任务的五次汇总跳转已核对原生终端标记、机器和 pane 身份，导航未改变派发时间或生命周期操作；专用任务均已正常完成。未生成或安装新安装包，审查修复及具体验收边界见记录。
 
 ### 6.3 @ 文件与 $ 技能引用
 
