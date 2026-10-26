@@ -32,7 +32,9 @@ const COLUMNS: { status: TaskStatus; label: string; emptyIcon: IconName; emptyTe
 
 export function KanbanBoard({ project, machineName, terminalMaximized = false, onToggleTerminalMaximized, editorRef: externalEditorRef }: KanbanBoardProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
+  // App keys this board by Project ID. Only the initial read replaces its UI;
+  // an empty result is still loaded data and must stay visible during refreshes.
+  const [initialLoading, setInitialLoading] = useState(true);
   const [creatingTask, setCreatingTask] = useState(false);
   const [dragOverCol, setDragOverCol] = useState<TaskStatus | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -92,7 +94,6 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
     if (!mounted.current) return;
     if (refreshDiscovery) refreshAgents();
     const sequence = ++loadSequence.current;
-    setLoading(true);
     const request = !refreshDiscovery && taskRequest.current ? taskRequest.current : api.listTasks(project.id);
     taskRequest.current = request;
     try {
@@ -109,7 +110,7 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
       if (sequence === loadSequence.current) notify({ error: String(e) }, "error");
     } finally {
       if (taskRequest.current === request) taskRequest.current = null;
-      if (sequence === loadSequence.current) setLoading(false);
+      if (sequence === loadSequence.current) setInitialLoading(false);
     }
   }
 
@@ -266,7 +267,7 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
   return (
     <div className="kanban-board board-workspace" ref={workspaceRef} style={terminalWidth === null ? undefined : { "--terminal-width": `${terminalWidth}px` } as React.CSSProperties} onDragOver={(e) => e.preventDefault()}>
       <div className="board-main" inert={terminalMaximized}>
-        {loading && tasks.length === 0 ? <div className="board-loading"><span className="spinner" /><span>{tr("common.loading")}</span></div> : <>
+        {initialLoading ? <div className="board-loading"><span className="spinner" /><span>{tr("common.loading")}</span></div> : <>
         <div className="workspace-bar">
           <h1 className="workspace-project" title={project.name}>{project.name}</h1>
           {machineName && <span className="machine-source" title={machineName}>{machineName}</span>}

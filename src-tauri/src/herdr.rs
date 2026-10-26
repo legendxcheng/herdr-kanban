@@ -4,6 +4,8 @@ use crate::workflow::{Herdr, SendError, Target};
 mod cli;
 #[path = "codex_process.rs"]
 mod codex_process;
+#[path = "herdr_executable.rs"]
+mod executable;
 #[cfg(test)]
 #[path = "session_isolation_tests.rs"]
 mod session_isolation_tests;

@@ -2,10 +2,18 @@
 use super::Cli;
 use crate::workflow::SendError;
 use serde_json::Value;
-use std::{path::PathBuf, process::Command, time::Duration};
+use std::{process::Command, time::Duration};
 
 impl Cli {
     pub(crate) fn client_endpoint(&self) -> Result<std::path::PathBuf, String> {
+        let path = self.api_endpoint()?;
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or("herdr.invalid_response")?;
+        Ok(path.with_file_name(format!("{stem}-client.sock")))
+    }
+    pub(super) fn api_endpoint(&self) -> Result<std::path::PathBuf, String> {
         let bytes = self.output(&["status", "server"]).map_err(|e| e.message)?;
         let status = std::str::from_utf8(&bytes).map_err(|_| "herdr.invalid_response")?;
         let api = status
@@ -13,23 +21,12 @@ impl Cli {
             .find_map(|line| line.strip_prefix("socket: "))
             .filter(|s| !s.trim().is_empty())
             .ok_or("herdr.invalid_response")?;
-        let path = std::path::Path::new(api.trim());
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or("herdr.invalid_response")?;
-        Ok(path.with_file_name(format!("{stem}-client.sock")))
+        Ok(std::path::PathBuf::from(api.trim()))
     }
     pub fn from_env() -> Self {
-        let installed = std::env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .map(|p| p.join("Programs/Herdr/bin/herdr.exe"));
         Self {
             remote: None,
-            executable: std::env::var_os("KANBAN_HERDR_EXECUTABLE")
-                .map(PathBuf::from)
-                .or_else(|| installed.filter(|p| p.is_file()))
-                .unwrap_or_else(|| "herdr".into()),
+            executable: super::executable::from_env(),
             session: std::env::var("KANBAN_HERDR_SESSION").unwrap_or_else(|_| "default".into()),
         }
     }
@@ -67,7 +64,7 @@ impl Cli {
                 None => Ok(response.stdout),
             };
         }
-        let mut command = self.command();
+        let mut command = self.command_for_args(args)?;
         command.args(args);
         let timeout = if args.starts_with(&["agent", "start"]) {
             40
@@ -89,6 +86,63 @@ impl Cli {
                 .replacen("title.", "herdr.", 1);
             SendError { message, uncertain }
         })
+    }
+    fn command_for_args(&self, args: &[&str]) -> Result<Command, SendError> {
+        // Windows refuses CR/LF arguments to .cmd/.bat. Keep the wrapper as the
+        // authority for discovery, then send literal API arguments to the native
+        // CLI it reports, pinned to the very same socket. Do not forward --session:
+        // Herdr would recompute the endpoint using the parent process's config.
+        #[cfg(windows)]
+        if self
+            .executable
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"))
+            && args.iter().any(|arg| arg.contains(['\r', '\n']))
+            && args
+                .first()
+                .is_some_and(|arg| matches!(*arg, "workspace" | "pane" | "agent" | "tab"))
+        {
+            let invalid = || SendError {
+                message: "herdr.invalid_response".into(),
+                uncertain: false,
+            };
+            let bytes = self.output(&["status", "--json"]).map_err(|mut error| {
+                error.uncertain = false; // Only a read has run; no payload was sent.
+                error
+            })?;
+            let status: Value = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+            let binary = std::path::Path::new(
+                status
+                    .pointer("/client/binary")
+                    .and_then(Value::as_str)
+                    .ok_or_else(invalid)?,
+            );
+            let socket = status
+                .pointer("/server/socket")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(invalid)?;
+            if !binary.is_absolute()
+                || !binary.is_file()
+                || !binary
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+            {
+                return Err(invalid());
+            }
+            if status.pointer("/server/running").and_then(Value::as_bool) != Some(true) {
+                return Err(SendError {
+                    message: "herdr.failed".into(),
+                    uncertain: false,
+                });
+            }
+            let mut command = Command::new(binary);
+            command
+                .env("HERDR_SESSION", &self.session)
+                .env("HERDR_SOCKET_PATH", socket);
+            return Ok(command);
+        }
+        Ok(self.command())
     }
     pub fn request(&self, args: &[&str]) -> Result<Value, SendError> {
         let stdout = self.output(args)?;

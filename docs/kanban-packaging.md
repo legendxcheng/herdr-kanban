@@ -19,6 +19,8 @@
 
 程序在 PATH、Program Files/WezTerm 和 LocalAppData/Programs/WezTerm 查找 wezterm-gui.exe；可用 KANBAN_WEZTERM_EXECUTABLE 显式指定。WezTerm 正常读取用户配置，Kanban 仅覆盖无边框和隐藏 tab bar，不写专用鼠标/按键配置。Herdr 使用 connect-only 的 client 入口连接已运行 session。当前任务定位要求支持 endpoint generation 1 的客户端范围 pane.focus；本次验证 Herdr 0.9.5、WezTerm 20240203-110809-5046fc22。进程内专用管道只原样传输官方协议帧并加入首次定位，不额外打包 bridge。详细证据见[独立导航验收](verification/2026-10-25-herdr-client-navigation.md)。
 
+Herdr 入口优先级为 `KANBAN_HERDR_EXECUTABLE`、PATH、`%LOCALAPPDATA%/Programs/Herdr/bin/herdr.exe`。Windows PATH 支持 PATHEXT 中的 `.exe/.com/.cmd/.bat`；保留自定义 launcher 设置的 Herdr 配置及数据目录。同步、socket 查询和终端使用同一入口，Workspace 数据目录通过该入口报告的 session/socket 核验后读取。PATH 必须对 Kanban 进程可见；修改系统/用户 PATH 后应从已更新环境重新启动看板。无需配置远端机器即可使用本地 Workspace。
+
 ## 发布新版本
 
 1. 在仓库根目录执行 `npm version 0.1.1 --no-git-tag-version`（替换为实际版本），同步更新 package.json/package-lock.json。

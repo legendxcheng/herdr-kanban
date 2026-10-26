@@ -1,5 +1,9 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-26。空 Workspace 定时闪烁修复：看板仅首次查询期间显示加载占位；空列表、后台轮询、焦点刷新、删除最后一张任务及失败重试均保留已展示的看板。已重新生成 0.1.0 Windows x64 NSIS 安装包并核对 SHA-256，未执行安装验证。实现与验证边界见 [空看板刷新验收记录](docs/verification/2026-10-26-empty-board-refresh.md)。
+
+更新日期：2026-10-26。本地 Herdr 自定义安装入口修复：优先使用 PATH 中的 Herdr，Windows 按 PATHEXT 解析 `.exe/.com/.cmd/.bat`，默认安装目录仅作回退；保留显式 `KANBAN_HERDR_EXECUTABLE`。Workspace 目录通过同一入口查询会话目录并核对 session/socket，不再假定 `%APPDATA%/herdr`。实现与验证边界见 [本地 Herdr 入口验收记录](docs/verification/2026-10-26-local-herdr-entry.md)。
+
 更新日期：2026-10-26。SSH 提示词引用反馈（GitHub #21）：新建/编辑任务的 @/$ 候选增加搜索中、空结果、错误与重试；远端查询按当前编辑器中的 Project 合并，迟到响应不覆盖新输入。真实桌面远端搜索、保存重开、受控失败恢复与专用任务派发已验证，具体发现与限制见 [引用搜索验收记录](docs/verification/2026-10-26-remote-mentions.md)。
 
 更新日期：2026-10-26。Todo 右侧编辑：点击待办卡片或铅笔按钮，在原 Herdr 区域显示编辑面板，保存后保持打开。切换任务或 Workspace、关闭面板及启动/派发前保护未保存修改；返回进行中任务重建查看连接。实现见 6.2.5，验证边界见 [Todo 编辑验收记录](docs/verification/2026-10-26-todo-editor-panel.md)。
@@ -164,7 +168,8 @@ herdr-kanban/
 │     ├─ workflow.rs               任务绑定、派发操作及恢复事务
 │     ├─ workflow_tests/           独占、派发恢复、任务变更互斥与显式 live 场景
 │     ├─ herdr.rs                  Cli/Herdr 对外适配、目标身份核验及 workspace/pane 操作
-│     ├─ herdr_cli.rs              无 shell 的有界进程执行、输出及响应错误分类
+│     ├─ herdr_cli.rs              参数化的有界进程执行、动态 endpoint、输出及响应错误分类
+│     ├─ herdr_executable.rs       显式覆盖 → PATH/PATHEXT → 默认安装目录的入口发现，保留 Windows 批处理入口
 │     ├─ herdr_socket.rs           有界 JSONL 重排请求、Windows 管道/Unix socket、响应与管道回归
 │     ├─ projects.rs / project_commands.rs  Workspace 同步、创建恢复及拖动重排服务/IPC
 │     ├─ project_selection.rs      ProjectService 完整候选、按稳定身份批量添加与事务回滚
@@ -283,7 +288,7 @@ flowchart TD
 | [DispatchDialog.tsx](src/DispatchDialog.tsx) | Agent 列表、选中 pane、loading、错误、预览文本 | 重新查 Agent、展开引用、派发 |
 | [Toast.tsx](src/Toast.tsx) | 通知数组及自增 ID | 模块级 `_notify` 指向容器回调，3 秒后删除通知 |
 
-没有 Redux、Zustand 或查询缓存层。操作回调通知父组件重新查询，刷新期间保留已有卡片；只有首次空列表加载显示 loading 分支。请求代次阻止迟到列表覆盖新结果。App 用 Project ID 作为 KanbanBoard 的 key，切项目销毁旧任务选择、弹窗和终端连接。
+没有 Redux、Zustand 或查询缓存层。操作回调通知父组件重新查询。`KanbanBoard.initialLoading` 只覆盖首次查询，最新有效请求结束后关闭；成功返回空列表同样结束加载，首次失败保留原错误通知并结束占位。后续轮询、焦点刷新及操作后的查询均不重置此状态，标题、工具栏与三列保留原 DOM，删除最后一张任务后仍可使用新建入口。请求代次阻止迟到列表覆盖新结果。App 用 Project ID 作为 KanbanBoard 的 key，切项目销毁旧任务选择、弹窗和终端连接，并重新进入该项目的首次加载。`board-tests/refresh.test.tsx` 覆盖慢请求、空列表、失败恢复、删除最后一项及切项目迟到响应；本次自动化与桌面验证见[验收记录](docs/verification/2026-10-26-empty-board-refresh.md)。
 
 表单草稿只存在内存里，任务编辑没有自动保存。Todo 右侧编辑在用户切换任务/Workspace、隐藏当前 Workspace、关闭面板及启动/派发前提示处理未保存修改；刷新或退出应用仍不持久化未保存草稿。其他状态编辑弹窗沿用原取消行为。“保存提示词”和“派发提示词”是两个独立动作，派发读取卡片中已保存的 `prompt_json`。
 
@@ -433,7 +438,11 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 
 已有 workspace 按稳定 ID 同步为内部候选，默认不加入左栏；用户通过添加已有选择显示。旧 Project 优先使用一致的历史绑定/未决目标身份，其次唯一的名称与等价目录；冲突保留待关联，不合并任务。Windows 目录比较统一大小写、斜杠及尾分隔符。
 
-默认目录按在线 ID 从 Herdr version 3 会话数据 `identity_cwd` 只读补充，不读取 pane cwd。默认 session 使用 `%APPDATA%/herdr/session.json`；非默认 session 或自定义 Herdr 配置必须用 `KANBAN_HERDR_SESSION_FILE` 指定对应文件，否则降级。读取上限 8 MiB；格式、目录无效时保留缓存或请求本地回退。回退与后来读取的权威目录不同会显示冲突，由用户明确选择；不会写回 Herdr 会话文件。
+默认目录按在线 ID 从 Herdr version 3 会话数据 `identity_cwd` 只读补充，不读取 pane cwd。保留显式 `KANBAN_HERDR_SESSION_FILE`；未覆盖时，通过所选 Herdr 入口调用 `status server` 与 `session list --json`，仅在唯一 session 名和 socket 匹配且 `session_dir` 为绝对路径时读取其中的 `session.json`。自定义启动脚本设置的目录同样生效，不从 Kanban 的 APPDATA 或 socket 父目录推测数据位置。查询失败、身份不匹配或元数据无效时保留既有降级行为。读取上限 8 MiB；格式、目录无效时保留缓存或请求本地回退。回退与后来读取的权威目录不同会显示冲突，由用户明确选择；不会写回 Herdr 会话文件。
+
+本地 CLI 入口优先级为显式 `KANBAN_HERDR_EXECUTABLE`、进程 PATH、`%LOCALAPPDATA%/Programs/Herdr/bin/herdr.exe`，最后保留 `herdr` 以返回既有不可用错误。Windows 在各 PATH 目录中依 PATHEXT 顺序识别 `.exe/.com/.cmd/.bat`，解析成绝对路径并保留 wrapper 本身，不跳过其配置去寻找内部 exe。同步、API socket 查询和原生终端使用同一 Cli 入口；不自动切换 session 或启动其他服务。入口须对 Kanban 进程可见，仅在某个终端临时设置的 PATH 不会自动出现在已运行的桌面进程中。
+
+Windows 批处理无法接收 CR/LF 参数。经批处理入口调用 `workspace/pane/agent/tab` 且包含换行时，先通过该入口读取 `status --json`，核验实际 native exe 和在线 socket，再直接调用该 exe 并以 `HERDR_SOCKET_PATH` 固定到同一服务；不传会重新推导地址的 `--session`。单行调用及原生客户端仍使用所选入口。探测失败明确为尚未发送，不自动重发；多行和命令特殊字符按字面值传递。
 
 `ProjectFormDialog → create_project → 持久化 UUID → workspace create --label kanban-create-<UUID> --cwd <目录> --no-focus → 保存返回 ID → rename → 读回 → 提交 Project`。明确发送前失败可复用原操作重试；响应未知或落库失败只核实已知 ID/标记，不再次创建。歧义由用户显式选择，并保护其他未决操作保留的 ID/标记；已被自动导入的实际结果可就地认领，保留其任务。`WorkspaceRecovery` 在重启后继续核实。
 

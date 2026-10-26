@@ -8,14 +8,35 @@ impl Cli {
         if let Some(path) = std::env::var_os("KANBAN_HERDR_SESSION_FILE") {
             return Some(path.into());
         }
-        // Never mix another session's IDs with default's persisted directory metadata.
-        if self.session != "default" || std::env::var_os("HERDR_CONFIG_PATH").is_some() {
+        // A portable launcher may set its own configuration in the child process.
+        // Ask that same launcher for the session directory, then match both name
+        // and endpoint before reading metadata. Never guess using our APPDATA or
+        // the socket's parent: either may belong to a different installation.
+        if self.remote.is_some() {
             return None;
         }
-        std::env::var_os("APPDATA")
-            .map(PathBuf::from)
-            .map(|p| p.join("herdr/session.json"))
+        let endpoint = self.api_endpoint().ok()?;
+        let sessions = self.json(&["session", "list", "--json"]).ok()?;
+        session_file(&sessions, &self.session, &endpoint)
     }
+}
+
+fn session_file(doc: &Value, session: &str, endpoint: &std::path::Path) -> Option<PathBuf> {
+    let mut matches = doc
+        .get("sessions")?
+        .as_array()?
+        .iter()
+        .filter(|entry| entry.get("name").and_then(Value::as_str) == Some(session));
+    let entry = matches.next()?;
+    if matches.next().is_some()
+        || std::path::Path::new(entry.get("socket_path")?.as_str()?) != endpoint
+    {
+        return None;
+    }
+    let directory = PathBuf::from(entry.get("session_dir")?.as_str()?);
+    directory
+        .is_absolute()
+        .then(|| directory.join("session.json"))
 }
 
 pub(super) fn workspace_directories(
@@ -49,6 +70,25 @@ pub(super) fn workspace_directories(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn directory_discovery_requires_a_unique_session_and_matching_endpoint() {
+        let directory = std::env::temp_dir().join("herdr-configured-state");
+        let endpoint = directory.join("api-elsewhere/herdr.sock");
+        let entry =
+            serde_json::json!({"name":"custom", "session_dir":directory, "socket_path":endpoint});
+        let mut doc = serde_json::json!({"sessions":[entry.clone()]});
+        assert_eq!(
+            super::session_file(&doc, "custom", &endpoint),
+            Some(directory.join("session.json"))
+        );
+        assert!(super::session_file(&doc, "default", &endpoint).is_none());
+        assert!(super::session_file(&doc, "custom", &directory.join("other.sock")).is_none());
+        doc["sessions"][0]["session_dir"] = "relative-state".into();
+        assert!(super::session_file(&doc, "custom", &endpoint).is_none());
+        doc["sessions"] = serde_json::json!([entry.clone(), entry]);
+        assert!(super::session_file(&doc, "custom", &endpoint).is_none());
+        assert!(super::session_file(&serde_json::json!({}), "custom", &endpoint).is_none());
+    }
     #[test]
     fn workspace_directory_metadata_is_versioned_and_never_uses_pane_cwd() {
         let path =

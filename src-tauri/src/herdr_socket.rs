@@ -54,14 +54,8 @@ impl Cli {
     }
 
     pub(super) fn socket_request(&self, method: &str, params: Value) -> Result<Value, String> {
-        let status = self.output(&["status", "server"]).map_err(|e| e.message)?;
-        let status = std::str::from_utf8(&status).map_err(|_| "herdr.invalid_response")?;
-        let endpoint = status
-            .lines()
-            .find_map(|line| line.strip_prefix("socket: "))
-            .filter(|s| !s.trim().is_empty())
-            .ok_or("herdr.invalid_response")?
-            .trim();
+        let endpoint = self.api_endpoint()?;
+        let endpoint = endpoint.to_str().ok_or("herdr.invalid_response")?;
         let deadline = Instant::now() + Duration::from_secs(12);
         let mut stream = connect(endpoint, deadline)?;
         let id = uuid::Uuid::new_v4().to_string();
