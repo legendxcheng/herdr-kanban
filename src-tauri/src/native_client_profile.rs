@@ -98,6 +98,10 @@ fn hidden_config(text: &str, source: &Path) -> Result<String, String> {
 }
 
 impl Profile {
+    pub(super) fn directory(&self) -> &Path {
+        &self.root
+    }
+
     #[cfg(test)]
     pub(super) fn fixture(base: &Path, session: &str) -> Self {
         Self::create(

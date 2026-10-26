@@ -1,5 +1,5 @@
 //! Minimal endpoint-generation-1 envelopes (Herdr 0.9.x wire.rs).
-//! Render and input frames are forwarded unchanged, never decoded here.
+//! Render frames pass unchanged; input routing checks only pane identity.
 use serde_json::{Value, json};
 
 pub const MAX_FRAME: usize = 64 * 1024 * 1024;
@@ -129,6 +129,8 @@ pub fn response<'a>(
 pub struct Position {
     id: String,
     pane: String,
+    pub input_pane: String,
+    snapshot: Option<Value>,
     boot: Option<String>,
     welcome: bool,
     reply: Vec<u8>,
@@ -137,10 +139,54 @@ pub struct Position {
     pub ready: bool,
 }
 impl Position {
+    pub fn retarget(&mut self, pane: String) -> Option<Vec<u8>> {
+        self.pane = pane;
+        // Re-selecting the same pane is an idempotent zoom: Herdr need not send
+        // another snapshot. Its latest snapshot plus the new receipt suffice.
+        self.target_visible = self
+            .snapshot
+            .as_ref()
+            .is_some_and(|doc| self.visible_alone(doc).unwrap_or(false));
+        self.ready = false;
+        self.acknowledged = false;
+        self.reply.clear();
+        self.boot.as_ref()?;
+        Some(self.request())
+    }
+
+    pub fn parked_receive(&mut self, payload: &[u8]) -> Result<bool, String> {
+        if let Some((kind, doc)) = control(payload)? {
+            if kind == "endpoint.welcome.v1" {
+                self.receive(payload)?;
+            }
+            if kind == "shell.snapshot.v1" {
+                let boot = doc["boot_id"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .ok_or(INVALID)?;
+                if !self.welcome || self.boot.as_ref().is_some_and(|old| old != boot) {
+                    return Err(INVALID.into());
+                }
+                self.boot = Some(boot.into());
+                self.input_pane = doc["focused_pane_id"].as_str().unwrap_or_default().into();
+                self.snapshot = Some(doc);
+            }
+        }
+        if payload.first() == Some(&18) {
+            let mut bytes = &payload[1..];
+            take_string(&mut bytes)?;
+            if take_string(&mut bytes)?.starts_with("kanban-zoom-") {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
     pub fn new(pane: String) -> Self {
         Self {
             id: String::new(),
             pane,
+            input_pane: String::new(),
+            snapshot: None,
             boot: None,
             welcome: false,
             reply: Vec::new(),
@@ -178,6 +224,14 @@ impl Position {
 
     // Return a serialized upstream request and whether to forward the server frame.
     pub fn receive(&mut self, payload: &[u8]) -> Result<(Option<Vec<u8>>, bool), String> {
+        if payload.first() == Some(&18) {
+            let mut bytes = &payload[1..];
+            let _boot = take_string(&mut bytes)?;
+            let id = take_string(&mut bytes)?;
+            if id.starts_with("kanban-zoom-") && id != self.id {
+                return Ok((None, false));
+            }
+        }
         if let Some((kind, doc)) = control(payload)? {
             if kind == "endpoint.welcome.v1" {
                 if doc["generation"] != 1
@@ -199,6 +253,8 @@ impl Position {
                     return Err(INVALID.into());
                 }
                 self.target_visible = self.visible_alone(&doc)?;
+                self.input_pane = doc["focused_pane_id"].as_str().ok_or(INVALID)?.into();
+                self.snapshot = Some(doc.clone());
                 if let Some(expected) = &self.boot {
                     if expected != boot {
                         return Err(INVALID.into());
@@ -251,9 +307,91 @@ impl Position {
     }
 }
 
+/// Keep resize/health/graphics flowing while parked or switching, but never
+/// deliver keys for the old pane after selecting a new task.
+pub fn forward_input(payload: &[u8], pane: &str, ready: bool) -> Result<bool, String> {
+    let tag = *payload.first().ok_or(INVALID)?;
+    if matches!(tag, 3 | 4 | 9 | 10 | 11 | 12 | 17 | 18 | 19 | 20) {
+        return Ok(true);
+    }
+    if !ready {
+        return Ok(false);
+    }
+    if tag == 13 {
+        return Ok(take_string(&mut &payload[1..])? == pane);
+    }
+    // Once ready, preserve official menus and intentional Herdr navigation.
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retarget_waits_for_new_receipt_and_snapshot_and_drops_old_pane_input() {
+        let mut position = position();
+        position.receive(&snapshot("w2:p3", true, 2)).unwrap();
+        let old_reply = reply(&position, reply_doc(&position, false));
+        position.receive(&old_reply).unwrap();
+        assert!(position.ready);
+        assert!(position.retarget("w2:p4".into()).is_some());
+        assert!(!position.ready);
+        assert!(!position.receive(&old_reply).unwrap().1);
+        assert!(!position.ready);
+        let new_reply = reply(&position, reply_doc(&position, false));
+        position.receive(&new_reply).unwrap();
+        assert!(!position.ready);
+        position.receive(&snapshot("w2:p4", true, 2)).unwrap();
+        assert!(position.ready);
+        let mut keys = vec![13];
+        string(&mut keys, "w2:p3");
+        assert!(!forward_input(&keys, "w2:p4", true).unwrap());
+        assert!(!forward_input(&keys, "w2:p3", false).unwrap());
+        assert!(forward_input(&keys, "w2:p3", true).unwrap());
+        assert!(forward_input(&[12], "w2:p4", false).unwrap());
+        position.receive(&snapshot("w2:p3", true, 2)).unwrap();
+        assert!(position.ready);
+        assert_eq!(position.input_pane, "w2:p3");
+        assert!(forward_input(&keys, &position.input_pane, position.ready).unwrap());
+    }
+
+    #[test]
+    fn returning_to_same_parked_pane_only_needs_a_new_receipt() {
+        let mut position = position();
+        position.receive(&snapshot("w2:p3", true, 2)).unwrap();
+        position
+            .receive(&reply(&position, reply_doc(&position, false)))
+            .unwrap();
+        assert!(position.ready);
+        position
+            .parked_receive(&snapshot("w2:p3", true, 2))
+            .unwrap();
+        position.retarget("w2:p3".into()).unwrap();
+        assert!(!position.ready);
+        position
+            .receive(&reply(&position, reply_doc(&position, false)))
+            .unwrap();
+        assert!(position.ready);
+        assert_eq!(position.input_pane, "w2:p3");
+    }
+    #[test]
+    fn parked_connection_can_accept_handshake_and_retarget_after_old_pane_disappears() {
+        let mut position = Position::new("w2:p3".into());
+        position
+            .parked_receive(&control_frame(
+                "endpoint.welcome.v1",
+                json!({"generation":1,"methods":["pane.zoom"]}),
+            ))
+            .unwrap();
+        position
+            .parked_receive(&control_frame(
+                "shell.snapshot.v1",
+                json!({"boot_id":"boot","panes":[]}),
+            ))
+            .unwrap();
+        assert!(position.retarget("w2:p4".into()).is_some());
+        assert!(!position.ready);
+    }
     fn control_frame(kind: &str, doc: Value) -> Vec<u8> {
         let mut v = vec![20];
         string(&mut v, kind);

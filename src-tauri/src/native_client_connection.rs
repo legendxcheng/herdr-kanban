@@ -2,7 +2,9 @@
 //! It adds connection-scoped pane.zoom On to show the selected task alone.
 //! A no-focus split is re-zoomed while that task remains selected. Other frames pass
 //! unchanged; no terminal renderer, input translator, or public/global focus API.
+#[cfg(test)]
 use super::View;
+use super::session::Session;
 use crate::herdr::Cli;
 use std::{
     fs::{File, OpenOptions},
@@ -38,7 +40,11 @@ pub struct Connection {
     worker: Option<thread::JoinHandle<()>>,
 }
 impl Connection {
+    #[cfg(test)]
     pub fn start(cli: &Cli, view: Arc<View>, pane: String) -> Result<Self, String> {
+        Self::start_session(cli, Session::new(view, pane))
+    }
+    pub fn start_session(cli: &Cli, session: Arc<Session>) -> Result<Self, String> {
         let upstream = if let Some(machine) = &cli.remote {
             Endpoint::Remote(machine.clone())
         } else {
@@ -49,10 +55,10 @@ impl Connection {
         let stop = Arc::new(AtomicBool::new(false));
         let cancelled = stop.clone();
         let worker = thread::spawn(move || {
-            let result = relay(listener, &upstream, &view, &cancelled, pane);
+            let result = relay(listener, &upstream, &session, &cancelled);
             if let Err(error) = result {
-                if !cancelled.load(Ordering::Acquire) && view.check().is_ok() {
-                    view.stop(&error);
+                if !cancelled.load(Ordering::Acquire) && session.check().is_ok() {
+                    session.stop(&error);
                 }
             }
         });
@@ -71,7 +77,7 @@ impl Drop for Connection {
         }
     }
 }
-fn check(view: &View, stop: &AtomicBool, deadline: Instant) -> Result<(), String> {
+fn check(view: &Session, stop: &AtomicBool, deadline: Instant) -> Result<(), String> {
     view.check()?;
     if stop.load(Ordering::Acquire) {
         return Err("terminal.stale".into());
@@ -84,9 +90,8 @@ fn check(view: &View, stop: &AtomicBool, deadline: Instant) -> Result<(), String
 fn relay(
     mut downstream: Pipe,
     upstream: &Endpoint,
-    view: &View,
+    view: &Session,
     stop: &AtomicBool,
-    pane: String,
 ) -> Result<(), String> {
     let mut deadline = Instant::now() + Duration::from_secs(15);
     while !downstream.accept()? {
@@ -110,6 +115,8 @@ fn relay(
     };
     let mut input = Vec::new();
     let mut output = Vec::new();
+    let (first, pane) = view.selected();
+    let mut selection_id = first.id.clone();
     let mut position = wire::Position::new(pane);
     let mut hello = false;
     loop {
@@ -117,7 +124,17 @@ fn relay(
         if stop.load(Ordering::Acquire) {
             return Ok(());
         }
-        if !position.ready {
+        let (selected, pane) = view.selected();
+        let active = selected.check().is_ok();
+        if selection_id != selected.id {
+            selection_id = selected.id.clone();
+            deadline = Instant::now() + Duration::from_secs(15);
+            selected.focused.store(false, Ordering::Release);
+            if let Some(request) = position.retarget(pane.clone()) {
+                upstream.send(&request, view, stop)?;
+            }
+        }
+        if active && !position.ready {
             check(view, stop, deadline)?;
         }
         let received =
@@ -130,23 +147,38 @@ fn relay(
                 }
                 hello = true;
             }
-            upstream.send(&wire::frame(&payload), view, stop)?;
+            let current = view.selected().0;
+            let input_ready = active
+                && current.id == selection_id
+                && selected.check().is_ok()
+                && position.ready
+                && selected.ready.load(Ordering::Acquire)
+                && selected.presented.load(Ordering::Acquire);
+            if wire::forward_input(&payload, &position.input_pane, input_ready)? {
+                upstream.send(&wire::frame(&payload), view, stop)?;
+            }
         }
         while let Some(payload) = wire::next_frame(&mut output)? {
+            if !active {
+                if position.parked_receive(&payload)? {
+                    downstream.send(&wire::frame(&payload), view, stop)?;
+                }
+                continue;
+            }
             let was_ready = position.ready;
             let (request, forward) = position.receive(&payload)?;
             if let Some(request) = request {
                 if was_ready {
                     deadline = Instant::now() + Duration::from_secs(15);
                 }
-                view.focused.store(false, Ordering::Release);
+                selected.focused.store(false, Ordering::Release);
                 upstream.send(&request, view, stop)?;
             }
             if forward {
                 downstream.send(&wire::frame(&payload), view, stop)?;
             }
             if position.ready {
-                view.focused.store(true, Ordering::Release);
+                selected.focused.store(true, Ordering::Release);
             }
         }
         if !received {
@@ -170,7 +202,7 @@ impl Upstream {
             Self::Remote(stream) => stream.read_available(buffer),
         }
     }
-    fn send(&mut self, bytes: &[u8], view: &View, stop: &AtomicBool) -> Result<(), String> {
+    fn send(&mut self, bytes: &[u8], view: &Session, stop: &AtomicBool) -> Result<(), String> {
         match self {
             Self::Local(pipe) => pipe.send(bytes, view, stop),
             Self::Remote(stream) => {
@@ -295,7 +327,7 @@ impl Pipe {
         }
         Ok(true)
     }
-    fn send(&mut self, bytes: &[u8], view: &View, stop: &AtomicBool) -> Result<(), String> {
+    fn send(&mut self, bytes: &[u8], view: &Session, stop: &AtomicBool) -> Result<(), String> {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut remaining = bytes;
         while !remaining.is_empty() {
@@ -400,7 +432,8 @@ mod tests {
                 crate::native_terminal::windows::Process::new(command.spawn().unwrap()).unwrap();
             let deadline = Instant::now() + Duration::from_secs(25);
             while !view.focused.load(Ordering::Acquire) {
-                check(&view, &AtomicBool::new(false), deadline).unwrap();
+                view.check().unwrap();
+                assert!(Instant::now() < deadline);
                 thread::sleep(Duration::from_millis(20));
             }
             println!("native remote focus+zoom confirmed: {pane}");
@@ -478,7 +511,8 @@ mod tests {
         let wait = |view: &View| {
             let deadline = Instant::now() + Duration::from_secs(18);
             while !view.focused.load(Ordering::Acquire) {
-                check(view, &AtomicBool::new(false), deadline).unwrap();
+                view.check().unwrap();
+                assert!(Instant::now() < deadline);
                 thread::sleep(Duration::from_millis(10));
             }
         };
@@ -503,7 +537,8 @@ mod tests {
                 assert_eq!(current["focused_pane_id"], "w1:p1");
                 break;
             }
-            check(&view, &AtomicBool::new(false), deadline).unwrap();
+            view.check().unwrap();
+            assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(30));
         }
         wait(&view);
@@ -581,7 +616,8 @@ mod tests {
         let _process = crate::native_terminal::windows::Process::new(child).unwrap();
         let deadline = Instant::now() + Duration::from_secs(18);
         while !view.focused.load(Ordering::Acquire) {
-            check(&view, &AtomicBool::new(false), deadline).unwrap();
+            view.check().unwrap();
+            assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(10));
         }
         manager.close_all();

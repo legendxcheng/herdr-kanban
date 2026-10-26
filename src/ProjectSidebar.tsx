@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import type { DragEvent } from "react";
 import type { Machine, Project, ProjectGitStatus, WorkspaceOperation } from "./types";
 import * as api from "./api";
@@ -10,6 +11,7 @@ import { notify } from "./Toast";
 import { LanguageSelect } from "./LanguageSelect";
 import { MachineDialog } from "./MachineDialog";
 import { WorkspaceAddDialog, machineLabel } from "./WorkspaceAddDialog";
+import { WorkspaceActionDialog } from "./WorkspaceActionDialog";
 
 interface ProjectSidebarProps {
   machines?: Machine[];
@@ -41,7 +43,9 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
   const [showNew, setShowNew] = useState(false);
   const [manageMachines, setManageMachines] = useState(false);
   const [editTarget, setEditTarget] = useState<Project | null>(null);
-  const [hiding, setHiding] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ action: "hide" | "delete"; project: Project; opener: HTMLElement } | null>(null);
+  const [acting, setActing] = useState(false);
+  const actionRunning = useRef(false);
   const dragging = useRef<string | null>(null);
   const suppressClick = useRef(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -70,15 +74,19 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
     void onMove!(source, reordered[index + 1] ?? null);
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm(tr("workspace.remove_confirm"))) return;
-    try { await api.deleteProject(id); onChanged(); } catch (e) { notify({ error: String(e) },"error"); }
-  }
-  async function handleHide(id: string) {
-    if (hiding || !onHide) return;
-    setHiding(id);
-    try { await onHide(id); } catch(e) { notify({ error: String(e) }, "error"); }
-    finally { setHiding(null); }
+  async function confirmAction() {
+    if (!pendingAction || actionRunning.current) return;
+    const { action, project } = pendingAction;
+    actionRunning.current = true;
+    // Remove this modal and restore root interactivity before requestLeave can open
+    // the editor's unsaved-changes dialog. Never overlap their inert lifetimes.
+    flushSync(() => { setPendingAction(null); setActing(true); });
+    try {
+      if (!projects.some(current => current.id === project.id)) return;
+      if (action === "hide") await onHide?.(project.id);
+      else { await api.deleteProject(project.id); onChanged(); }
+    } catch (e) { notify({ error: String(e) }, "error"); }
+    finally { actionRunning.current = false; setActing(false); }
   }
 
   return (
@@ -150,9 +158,9 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
               </span>
             </button>
             <div className="project-actions">
-              {onHide && <button onClick={() => void handleHide(p.id)} disabled={hiding !== null} className="btn-icon" title={tr("workspace.hide_help")} aria-label={`${tr("workspace.hide")} ${p.name}`}><Icon name="hide" size={14} /></button>}
+              {onHide && <button onClick={event => setPendingAction({ action: "hide", project: p, opener: event.currentTarget })} disabled={acting} className="btn-icon" title={tr("workspace.hide_help")} aria-label={`${tr("workspace.hide")} ${p.name}`}><Icon name="hide" size={14} /></button>}
               <button onClick={() => setEditTarget(p)} className="btn-icon" title={tr("project.edit")} aria-label={`${tr("project.edit")} ${p.name}`}><Icon name="edit" size={14} /></button>
-              <button onClick={() => handleDelete(p.id)} className="btn-icon" title={tr("project.delete")} aria-label={`${tr("project.delete")} ${p.name}`}><Icon name="trash" size={14} /></button>
+              <button onClick={event => setPendingAction({ action: "delete", project: p, opener: event.currentTarget })} disabled={acting} className="btn-icon" title={tr("project.delete")} aria-label={`${tr("project.delete")} ${p.name}`}><Icon name="trash" size={14} /></button>
             </div>
           </div>
           );
@@ -172,6 +180,9 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
       {manageMachines && <MachineDialog machines={machines} onChanged={onChanged} onClose={() => setManageMachines(false)} />}
       <div className="sidebar-footer"><Icon name="terminal" /><div><strong>{tr("sidebar.local")}</strong><span>{tr("sidebar.footer")}</span></div></div>
 
+      {pendingAction && <WorkspaceActionDialog action={pendingAction.action} name={pendingAction.project.name}
+        machine={machineLabel(machineOf(pendingAction.project), machines.find(machine => machine.id === machineOf(pendingAction.project))?.name)}
+        opener={pendingAction.opener} onCancel={() => setPendingAction(null)} onConfirm={() => { void confirmAction(); }} />}
       {showNew && (
         <WorkspaceAddDialog
           key="new-workspace"

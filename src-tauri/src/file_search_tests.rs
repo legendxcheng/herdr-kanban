@@ -1,6 +1,30 @@
 use super::{FileEntry, search as search_files};
 use std::path::PathBuf;
 
+#[test]
+fn snapshot_keeps_candidates_beyond_display_limit_and_preserves_explicit_scope() {
+    let f = Fixture::new();
+    for i in 0..80 {
+        f.write(&format!("file-{i:03}.ts"), "");
+    }
+    f.write(".gitignore", ".scratch/\n");
+    f.write(".scratch/probe/hidden.ts", "");
+    let root = f.0.to_string_lossy();
+    let snapshot = super::index(&root, "").unwrap();
+    assert!(snapshot.len() > 50);
+    assert_eq!(
+        super::rank(&snapshot, "file-079")[0].rel_path,
+        "file-079.ts"
+    );
+    assert!(super::rank(&snapshot, "hidden").is_empty());
+    let scoped = super::index(&root, ".scratch/probe/h").unwrap();
+    assert_eq!(
+        super::rank(&scoped, ".scratch/probe/hidden")[0].rel_path,
+        ".scratch/probe/hidden.ts"
+    );
+    assert!(super::index(&root, "../").unwrap().is_empty());
+}
+
 struct Fixture(PathBuf);
 
 impl Fixture {

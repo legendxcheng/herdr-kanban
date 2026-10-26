@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 const RESULT_LIMIT: usize = 50;
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct FileEntry {
     pub rel_path: String,
     pub abs_path: String,
@@ -22,6 +22,38 @@ struct Rank {
 }
 
 pub fn search(root_path: String, query: String) -> Result<Vec<FileEntry>, String> {
+    let q = query
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_lowercase();
+    let mut best = BTreeMap::new();
+    visit(&root_path, &query, |file| {
+        ranked_insert(&mut best, &file, &q);
+        Ok(())
+    })?;
+    Ok(best.into_values().collect())
+}
+
+/// A complete scope snapshot, before query matching or the display limit.
+pub fn index(root_path: &str, query: &str) -> Result<Vec<FileEntry>, String> {
+    let mut files = Vec::new();
+    let mut bytes = 0;
+    visit(root_path, query, |file| {
+        bytes += file.rel_path.len() + file.abs_path.len();
+        if bytes > 12 * 1024 * 1024 || files.len() >= 100_000 {
+            return Err("mention.index_limit".into());
+        }
+        files.push(file);
+        Ok(())
+    })?;
+    Ok(files)
+}
+
+fn visit(
+    root_path: &str,
+    query: &str,
+    mut found: impl FnMut(FileEntry) -> Result<(), String>,
+) -> Result<(), String> {
     let root = Path::new(&root_path);
     if !root.is_dir() {
         return Err(format!("Not a directory: {root_path}"));
@@ -34,7 +66,7 @@ pub fn search(root_path: String, query: String) -> Result<Vec<FileEntry>, String
         .components()
         .any(|part| !matches!(part, Component::Normal(_)))
     {
-        return Ok(Vec::new());
+        return Ok(());
     }
     let scope = explicit_directory(root, normalized);
     let explicit = scope != root;
@@ -55,10 +87,6 @@ pub fn search(root_path: String, query: String) -> Result<Vec<FileEntry>, String
                 || !noise_directory(&entry.file_name().to_string_lossy())
         });
 
-    let q = normalized.to_lowercase();
-    // Inspect every eligible file, retaining only the best 50 in memory. Directory
-    // enumeration order can never crowd a better match out of the final results.
-    let mut best = BTreeMap::new();
     for entry in walker.build().filter_map(Result::ok) {
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
@@ -68,31 +96,56 @@ pub fn search(root_path: String, query: String) -> Result<Vec<FileEntry>, String
             continue;
         };
         let relative = relative.to_string_lossy().replace('\\', "/");
-        let folded = relative.to_lowercase();
-        let name = entry.file_name().to_string_lossy().to_lowercase();
-        let Some((quality, gaps)) = match_quality(&name, &folded, &q) else {
-            continue;
-        };
-        let rank = Rank {
-            quality,
-            gaps,
-            depth: relative.matches('/').count(),
-            length: relative.chars().count(),
-            folded_path: folded,
-            path: relative.clone(),
-        };
-        best.insert(
-            rank,
-            FileEntry {
-                rel_path: relative,
-                abs_path: path.to_string_lossy().replace('\\', "/"),
-            },
-        );
-        if best.len() > RESULT_LIMIT {
-            best.pop_last();
-        }
+        let absolute = path.to_string_lossy().replace('\\', "/");
+        found(FileEntry {
+            rel_path: relative,
+            abs_path: absolute,
+        })?;
     }
-    Ok(best.into_values().collect())
+    Ok(())
+}
+
+pub fn rank(files: &[FileEntry], query: &str) -> Vec<FileEntry> {
+    let q = query
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_lowercase();
+    if Path::new(&q)
+        .components()
+        .any(|part| !matches!(part, Component::Normal(_)))
+    {
+        return Vec::new();
+    }
+    let mut best = BTreeMap::new();
+    for file in files {
+        ranked_insert(&mut best, file, &q);
+    }
+    best.into_values().collect()
+}
+
+fn ranked_insert(best: &mut BTreeMap<Rank, FileEntry>, file: &FileEntry, q: &str) {
+    let relative = &file.rel_path;
+    let folded = relative.to_lowercase();
+    let name = relative
+        .rsplit('/')
+        .next()
+        .unwrap_or(relative)
+        .to_lowercase();
+    let Some((quality, gaps)) = match_quality(&name, &folded, &q) else {
+        return;
+    };
+    let rank = Rank {
+        quality,
+        gaps,
+        depth: relative.matches('/').count(),
+        length: relative.chars().count(),
+        folded_path: folded,
+        path: relative.clone(),
+    };
+    best.insert(rank, file.clone());
+    if best.len() > RESULT_LIMIT {
+        best.pop_last();
+    }
 }
 
 fn noise_directory(name: &str) -> bool {

@@ -137,7 +137,9 @@ fn closing_a_task_cancels_its_pending_attachment_before_spawning() {
         .unwrap();
     manager.close_task("a");
     assert_eq!(
-        crate::native_terminal::open(view, Arc::new(app), 0).unwrap_err(),
+        manager
+            .open(view, Arc::new(app), crate::mention_search::Search::new(), 0)
+            .unwrap_err(),
         "terminal.stale"
     );
 }

@@ -142,12 +142,15 @@ pub async fn terminal_open(
     window: tauri::Window,
     app: State<'_, Arc<Workflow>>,
     native: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
+    search: State<'_, Arc<crate::mention_search::Search>>,
     task_id: String,
     connection_id: String,
     bounds: crate::native_terminal::Bounds,
     output: tauri::ipc::Channel<Output>,
 ) -> Result<String, String> {
     let app = app.inner().clone();
+    let native = native.inner().clone();
+    let search = search.inner().clone();
     let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
     let view = native.select(
         connection_id.clone(),
@@ -158,7 +161,7 @@ pub async fn terminal_open(
         }),
     )?;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::native_terminal::open(view, app.for_task(&task_id)?, hwnd)?;
+        native.open(view, app, search, hwnd)?;
         Ok(connection_id)
     })
     .await

@@ -2,7 +2,7 @@
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct SkillEntry {
     pub name: String,
     pub description: String,
@@ -11,6 +11,10 @@ pub struct SkillEntry {
 
 /// Discover project skills before user skills. Missing roots are optional.
 pub fn search_skills(query: String, root_path: Option<String>) -> Result<Vec<SkillEntry>, String> {
+    Ok(filter(&index(root_path.as_deref()), &query))
+}
+
+pub fn index(root_path: Option<&str>) -> Vec<SkillEntry> {
     let home = std::env::var("USERPROFILE")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -19,17 +23,21 @@ pub fn search_skills(query: String, root_path: Option<String>) -> Result<Vec<Ski
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         });
-    Ok(search_skills_in(
+    discover_in(
         root_path
             .as_deref()
             .filter(|value| !value.trim().is_empty())
             .map(Path::new),
         home.as_deref().map(Path::new),
-        &query,
-    ))
+    )
 }
 
+#[cfg(test)]
 fn search_skills_in(project: Option<&Path>, home: Option<&Path>, query: &str) -> Vec<SkillEntry> {
+    filter(&discover_in(project, home), query)
+}
+
+fn discover_in(project: Option<&Path>, home: Option<&Path>) -> Vec<SkillEntry> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Some(project) = project {
         roots.push(project.join(".agents/skills"));
@@ -82,7 +90,6 @@ fn search_skills_in(project: Option<&Path>, home: Option<&Path>, query: &str) ->
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
             .then_with(|| a.skill_md_path.cmp(&b.skill_md_path))
     });
-    let q = query.to_lowercase();
     let mut names = std::collections::HashSet::new();
     let mut paths = std::collections::HashSet::new();
     candidates
@@ -96,12 +103,20 @@ fn search_skills_in(project: Option<&Path>, home: Option<&Path>, query: &str) ->
             };
             paths.insert(path) && names.insert(skill.name.to_lowercase())
         })
+        .collect()
+}
+
+pub fn filter(skills: &[SkillEntry], query: &str) -> Vec<SkillEntry> {
+    let q = query.to_lowercase();
+    skills
+        .iter()
         .filter(|skill| {
             q.is_empty()
                 || skill.name.to_lowercase().contains(&q)
                 || skill.description.to_lowercase().contains(&q)
         })
         .take(30)
+        .cloned()
         .collect()
 }
 

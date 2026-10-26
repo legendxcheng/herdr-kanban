@@ -213,16 +213,22 @@ async fn remove_completed_tasks(
 #[tauri::command]
 pub async fn search_files(
     app: State<'_, Arc<crate::workflow::Workflow>>,
+    search: State<'_, Arc<crate::mention_search::Search>>,
     project_id: Option<String>,
     root_path: String,
     query: String,
+    refresh: Option<bool>,
 ) -> Result<Vec<crate::file_search::FileEntry>, String> {
     let app = app.inner().clone();
+    let search = search.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        app.for_optional_project(project_id.as_deref())?
-            .herdr
-            .resources()
-            .search_files(&root_path, &query)
+        search.files(
+            &app.db,
+            project_id.as_deref(),
+            &root_path,
+            &query,
+            refresh.unwrap_or(false),
+        )
     })
     .await
     .map_err(|error| error.to_string())?
@@ -231,16 +237,45 @@ pub async fn search_files(
 #[tauri::command]
 pub async fn search_skills(
     app: State<'_, Arc<crate::workflow::Workflow>>,
+    search: State<'_, Arc<crate::mention_search::Search>>,
     project_id: Option<String>,
     query: String,
     root_path: Option<String>,
+    refresh: Option<bool>,
 ) -> Result<Vec<crate::skill_discovery::SkillEntry>, String> {
     let app = app.inner().clone();
+    let search = search.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        app.for_optional_project(project_id.as_deref())?
-            .herdr
-            .resources()
-            .search_skills(root_path.as_deref(), &query)
+        search.skills(
+            &app.db,
+            project_id.as_deref(),
+            root_path.as_deref().unwrap_or(""),
+            &query,
+            refresh.unwrap_or(false),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn prepare_mention_search(
+    app: State<'_, Arc<crate::workflow::Workflow>>,
+    search: State<'_, Arc<crate::mention_search::Search>>,
+    project_id: String,
+    root_path: String,
+) -> Result<(), String> {
+    let app = app.inner().clone();
+    let search = search.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if crate::mention_search::target(&app.db, Some(&project_id), &root_path)?.is_none() {
+            return Ok(());
+        }
+        search.skills(&app.db, Some(&project_id), &root_path, "", false)?;
+        if !root_path.trim().is_empty() {
+            search.files(&app.db, Some(&project_id), &root_path, "", false)?;
+        }
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?

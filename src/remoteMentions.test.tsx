@@ -78,23 +78,26 @@ it.each(["@", "$"])("shows empty results for %s and Escape dismisses the popover
   expect(screen.getByRole("dialog")).toBeTruthy();
 });
 
-it("merges remote typing while a request runs and only searches the newest query next", async () => {
+it("prewarms on opening and lets current input finish before a stale query", async () => {
   const first = deferred<unknown[]>();
   const queries: string[] = [];
-  vi.mocked(invoke).mockImplementation(async (_command, args) => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command !== "search_skills") return;
     queries.push((args as { query: string }).query);
     return queries.length === 1 ? first.promise : [skill];
   });
   render(form()); paste("$a");
+  expect(invoke).toHaveBeenCalledWith("prepare_mention_search", { rootPath: project.root_path, projectId: project.id });
   await waitFor(() => expect(queries).toEqual(["a"]));
   paste("b");
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 160)); });
   paste("c");
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 160)); });
-  expect(queries).toEqual(["a"]);
+  expect(queries).toEqual(["a", "ab", "abc"]);
+  await screen.findByText("remote-skill");
   await act(async () => first.resolve([{ ...skill, name: "stale" }]));
   await screen.findByText("remote-skill");
-  expect(queries).toEqual(["a", "abc"]);
+  expect(queries).toEqual(["a", "ab", "abc"]);
   expect(screen.queryByText("stale")).toBeNull();
 });
 
@@ -117,10 +120,26 @@ it("explains a missing file-search directory and ignores results after closing",
   vi.mocked(invoke).mockReturnValue(pending.promise);
   const ui = render(form({ ...project, root_path: "" })); paste("@file");
   expect(await screen.findByText("请先设置项目工作目录")).toBeTruthy();
-  expect(invoke).not.toHaveBeenCalled();
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "search_files")).toBe(false);
   ui.rerender(form());
-  await waitFor(() => expect(invoke).toHaveBeenCalled());
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("search_files", { rootPath: project.root_path, query: "file", projectId: project.id }));
   fireEvent.keyDown(screen.getByRole("textbox", { name: "提示词" }), { key: "Escape" });
   await act(async () => pending.resolve([file]));
   expect(document.querySelector(".mention-popover")).toBeNull();
+});
+
+it("refreshes cached candidates without losing the prompt or reloading on subsequent typing", async () => {
+  vi.mocked(invoke).mockImplementation(async command => command === "search_skills" ? [skill] : undefined);
+  render(form()); paste("draft $remote");
+  await screen.findByText("remote-skill");
+  fireEvent.click(screen.getByRole("button", { name: "刷新候选列表" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("search_skills", {
+    rootPath: project.root_path, query: "remote", projectId: project.id, refresh: true,
+  }));
+  expect(screen.getByRole("textbox", { name: "提示词" }).textContent).toBe("draft $remote");
+  await screen.findByText("remote-skill");
+  paste("x");
+  await waitFor(() => expect(invoke).toHaveBeenLastCalledWith("search_skills", {
+    rootPath: project.root_path, query: "remotex", projectId: project.id,
+  }));
 });

@@ -202,7 +202,12 @@
   "workspace.interrupted": "上次创建中断，请核实结果。",
   "workspace.pending_title": "待核实的工作空间",
   "workspace.choose_created": "选择已创建的工作空间（可选）",
-  "workspace.remove_confirm": "删除本地项目及所有任务？Herdr 工作空间会保留。",
+  "workspace.hide_title": "隐藏 Workspace？",
+  "workspace.hide_message": "仅从侧栏隐藏，任务与 Herdr Workspace 均保留。之后可通过“添加 Workspace”重新显示。",
+  "workspace.hide_confirm": "确认隐藏",
+  "workspace.delete_title": "删除本地项目？",
+  "workspace.delete_message": "将删除此 Workspace 对应的本地项目及所有任务，此操作无法撤销。Herdr Workspace 会保留。",
+  "workspace.delete_confirm": "确认删除",
   "workspace.offline": "同步失败，保留本地项目与任务。",
   "workspace.retry_failed": "重新创建",
   "common.close": "关闭",
@@ -331,5 +336,9 @@
   "mention.no_skills": "没有匹配的技能",
   "mention.failed": "搜索失败",
   "mention.retry": "重试搜索",
-  "mention.directory_required": "请先设置项目工作目录"
+  "mention.directory_required": "请先设置项目工作目录",
+  "mention.refresh": "刷新候选列表",
+  "mention.index_limit": "目录过大，请输入更具体的子目录后搜索",
+  "mention.busy": "搜索准备中，请稍后重试",
+  "mention.project_changed": "项目目录已变化，请重新打开编辑器"
 }

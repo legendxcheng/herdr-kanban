@@ -62,15 +62,19 @@ pub struct View {
     stopped: AtomicBool,
     ready: AtomicBool,
     presented: AtomicBool,
-    window_found: AtomicBool,
     focused: AtomicBool,
     status: Status,
     open_gate: Arc<Mutex<()>>,
+    font: Arc<Mutex<font::Preferences>>,
+    session: Mutex<std::sync::Weak<session::Session>>,
 }
 impl View {
     fn stop(&self, message: &str) {
         if self.stopped.swap(true, Ordering::AcqRel) {
             return;
+        }
+        if let Some(session) = self.session.lock().ok().and_then(|s| s.upgrade()) {
+            session.pause(&self.id);
         }
         (self.status)(Output {
             kind: "closed",
@@ -89,6 +93,8 @@ impl View {
 pub struct NativeTerminalManager {
     slot: Mutex<Option<Arc<View>>>,
     open_gate: Arc<Mutex<()>>,
+    font: Arc<Mutex<font::Preferences>>,
+    sessions: Mutex<std::collections::HashMap<String, Arc<session::Session>>>,
 }
 impl NativeTerminalManager {
     pub fn select(
@@ -109,10 +115,11 @@ impl NativeTerminalManager {
             stopped: AtomicBool::new(false),
             ready: AtomicBool::new(false),
             presented: AtomicBool::new(false),
-            window_found: AtomicBool::new(false),
             focused: AtomicBool::new(false),
             status,
             open_gate: self.open_gate.clone(),
+            font: self.font.clone(),
+            session: Mutex::new(std::sync::Weak::new()),
         });
         if let Some(old) = self.slot.lock().map_err(err)?.replace(view.clone()) {
             old.stop("terminal.switched");
@@ -147,6 +154,16 @@ impl NativeTerminalManager {
                 }
             }
         }
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.retain(|_, session| {
+                if session.selected().0.task == task {
+                    session.stop("terminal.closed");
+                    false
+                } else {
+                    true
+                }
+            });
+        }
     }
     pub fn close_all(&self) {
         if let Ok(mut slot) = self.slot.lock() {
@@ -154,6 +171,104 @@ impl NativeTerminalManager {
                 view.stop("terminal.closed");
             }
         }
+        if let Ok(mut sessions) = self.sessions.lock() {
+            for (_, session) in sessions.drain() {
+                session.stop("terminal.closed");
+            }
+        }
+    }
+
+    pub fn open(
+        &self,
+        view: Arc<View>,
+        app: Arc<Workflow>,
+        search: Arc<crate::mention_search::Search>,
+        main_hwnd: isize,
+    ) -> Result<(), String> {
+        let result = (|| {
+            use crate::workflow::Herdr;
+            view.check()?;
+            let target = session::target(&app, &view.task)?;
+            let mut cli = app.herdr.terminal_client()?;
+            if target.machine_id != crate::machines::LOCAL_ID {
+                let machine =
+                    crate::machines::get(&*app.db.lock().map_err(err)?, &target.machine_id)?;
+                if machine.disabled {
+                    return Err("machine.disabled".into());
+                }
+                search.validate_target(&app.db, &machine, &target)?;
+                // Setup may have published a newer helper under its own hash.
+                cli.remote = Some(crate::machines::get(
+                    &*app.db.lock().map_err(err)?,
+                    &target.machine_id,
+                )?);
+                cli.session = target.session.clone();
+            } else {
+                if cli.session != target.session {
+                    return Err("binding.identity_changed".into());
+                }
+                cli.validate(&target.workspace_id, &target)?;
+            }
+            view.check()?;
+            if !session::target(&app, &view.task)?.same_identity(&target) {
+                return Err("binding.identity_changed".into());
+            }
+            let _gate = view.open_gate.lock().map_err(err)?;
+            view.check()?;
+            let key = session::key(&cli);
+            let (session, fresh) = {
+                let mut sessions = self.sessions.lock().map_err(err)?;
+                sessions.retain(|_, session| !session.stopped.load(Ordering::Acquire));
+                if let Some(session) = sessions.get(&key) {
+                    (session.clone(), false)
+                } else {
+                    if sessions.len() >= 3 {
+                        if let Some(oldest) = sessions
+                            .iter()
+                            .min_by_key(|(_, s)| *s.touched.lock().unwrap())
+                            .map(|(key, _)| key.clone())
+                        {
+                            if let Some(old) = sessions.remove(&oldest) {
+                                old.stop("terminal.closed");
+                            }
+                        }
+                    }
+                    let session = session::Session::new(view.clone(), target.pane_id.clone());
+                    sessions.insert(key, session.clone());
+                    (session, true)
+                }
+            };
+            if fresh {
+                if let Err(error) = launch(session.clone(), &cli, main_hwnd) {
+                    session.stop(&error);
+                    return Err(error);
+                }
+            } else {
+                session.select(view.clone(), target.pane_id.clone())?;
+            }
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while !(session.window_found.load(Ordering::Acquire)
+                && view.focused.load(Ordering::Acquire))
+            {
+                view.check()?;
+                session.check()?;
+                if Instant::now() >= deadline {
+                    session.stop("terminal.client_focus_timeout");
+                    return Err("terminal.client_focus_timeout".into());
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            view.check()?;
+            if !session::target(&app, &view.task)?.same_identity(&target) {
+                return Err("binding.identity_changed".into());
+            }
+            view.ready.store(true, Ordering::Release);
+            Ok(())
+        })();
+        if let Err(ref error) = result {
+            view.stop(error);
+        }
+        result
     }
 }
 impl Drop for NativeTerminalManager {
@@ -163,12 +278,29 @@ impl Drop for NativeTerminalManager {
 }
 
 // Keep native input and the user's settings, with a per-view hidden sidebar.
+#[cfg(test)]
 fn client_command(executable: &Path, cli: &Cli, class: &str, endpoint: &str) -> Command {
+    client_command_with_font(
+        executable,
+        cli,
+        class,
+        endpoint,
+        "window_decorations=\"NONE\"",
+    )
+}
+
+fn client_command_with_font(
+    executable: &Path,
+    cli: &Cli,
+    class: &str,
+    endpoint: &str,
+    font_override: &str,
+) -> Command {
     let mut command = Command::new(executable);
     command
         .args([
             "--config",
-            "window_decorations=\"NONE\"",
+            font_override,
             "--config",
             "enable_tab_bar=false",
             "start",
@@ -215,26 +347,9 @@ fn client_command(executable: &Path, cli: &Cli, class: &str, endpoint: &str) -> 
     }
     command
 }
-pub fn open(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(), String> {
-    let result = open_inner(view.clone(), app, main_hwnd);
-    if let Err(ref e) = result {
-        view.stop(e);
-    }
-    result
-}
-fn open_inner(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(), String> {
-    // Serialize setup and reject obsolete selections before spawning a viewer.
-    let _gate = view.open_gate.lock().map_err(err)?;
-    view.check()?;
-    let target = app.target(&view.task, true)?;
-    let cli = app.herdr.terminal_client()?;
-    if target.session != cli.session
-        || target.machine_id != crate::workflow::Herdr::machine_id(&cli)
-    {
-        return Err("binding.identity_changed".into());
-    }
-    view.check()?;
-    let connection = connection::Connection::start(&cli, view.clone(), target.pane_id)?;
+fn launch(session: Arc<session::Session>, cli: &Cli, main_hwnd: isize) -> Result<(), String> {
+    let view = session.selected().0;
+    let connection = connection::Connection::start_session(cli, session.clone())?;
     let executable = wezterm_executable()?;
     let class = format!("kanban-terminal-{}", uuid::Uuid::new_v4());
     let config_dir = crate::db::db_path()
@@ -242,9 +357,21 @@ fn open_inner(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(
         .ok_or("terminal.window_timeout")?
         .join("terminal");
     std::fs::create_dir_all(&config_dir).map_err(err)?;
-    let profile = profile::Profile::prepare_machine(&config_dir, &cli)?;
+    let profile = profile::Profile::prepare_machine(&config_dir, cli)?;
+    *session.profile.lock().map_err(err)? = Some(profile.directory().to_path_buf());
     let diagnostics = std::fs::File::create(config_dir.join("wezterm.log")).map_err(err)?;
-    let mut command = client_command(&executable, &cli, &class, &connection.endpoint);
+    let font_override = {
+        let mut font = view.font.lock().map_err(err)?;
+        view.check()?;
+        font.activate(&session.id, &config_dir, profile.directory())?
+    };
+    let mut command = client_command_with_font(
+        &executable,
+        cli,
+        &class,
+        &connection.endpoint,
+        &font_override,
+    );
     profile.apply(&mut command);
     let child = command
         .stderr(diagnostics)
@@ -252,13 +379,24 @@ fn open_inner(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(
         .map_err(|e| format!("terminal.wezterm_unavailable: {e}"))?;
     let mut process = windows::Process::new(child)?;
     let pid = process.id();
-    let monitor = view.clone();
+    let monitor = session.clone();
     thread::spawn(move || {
         let _connection = connection;
         let events = windows::WindowEvents::new(main_hwnd);
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut hwnd = 0;
         while !monitor.stopped.load(Ordering::Acquire) {
+            let selected = monitor.selected().0;
+            let active = selected.check().is_ok();
+            if active {
+                *monitor.touched.lock().unwrap() = Instant::now();
+            } else if monitor.touched.lock().unwrap().elapsed() > Duration::from_secs(60) {
+                monitor.stop("terminal.closed");
+                break;
+            }
+            if let Ok(mut font) = selected.font.lock() {
+                font.poll(&monitor.id);
+            }
             if process.exited() {
                 monitor.stop("terminal.disconnected");
                 break;
@@ -267,6 +405,7 @@ fn open_inner(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(
                 hwnd = windows::find(pid, &class);
                 if hwnd != 0 {
                     monitor.window_found.store(true, Ordering::Release);
+                    monitor.hwnd.store(hwnd, Ordering::Release);
                 }
                 if hwnd == 0 && Instant::now() > deadline {
                     monitor.stop("terminal.window_timeout");
@@ -281,10 +420,11 @@ fn open_inner(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(
                 windows::sync(
                     main_hwnd,
                     hwnd,
-                    *monitor.bounds.lock().unwrap(),
-                    monitor.ready.load(Ordering::Acquire)
-                        && monitor.focused.load(Ordering::Acquire)
-                        && monitor.presented.load(Ordering::Acquire),
+                    *selected.bounds.lock().unwrap(),
+                    active
+                        && selected.ready.load(Ordering::Acquire)
+                        && selected.focused.load(Ordering::Acquire)
+                        && selected.presented.load(Ordering::Acquire),
                 );
             }
             events.wait();
@@ -292,26 +432,11 @@ fn open_inner(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(
         if hwnd != 0 {
             windows::hide(hwnd);
         }
+        monitor.hwnd.store(0, Ordering::Release);
         // Drop closes this WezTerm and its Herdr CLIENT only, never the server.
         drop(process);
         drop(profile);
     });
-    let deadline = Instant::now() + Duration::from_secs(15);
-    while !(view.window_found.load(Ordering::Acquire) && view.focused.load(Ordering::Acquire))
-        && Instant::now() < deadline
-    {
-        view.check()?;
-        thread::sleep(Duration::from_millis(10));
-    }
-    view.check()?;
-    if !view.window_found.load(Ordering::Acquire) {
-        return Err("terminal.window_timeout".into());
-    }
-    if !view.focused.load(Ordering::Acquire) {
-        return Err("terminal.client_focus_timeout".into());
-    }
-    // Both native HWND discovery and connection-scoped single-pane display are confirmed.
-    view.ready.store(true, Ordering::Release);
     Ok(())
 }
 
@@ -352,6 +477,12 @@ fn err(e: impl std::fmt::Display) -> String {
 
 #[path = "native_client_profile.rs"]
 mod profile;
+
+#[path = "native_font.rs"]
+mod font;
+
+#[path = "native_view_session.rs"]
+mod session;
 
 #[cfg(windows)]
 #[path = "native_client_connection.rs"]
@@ -394,7 +525,7 @@ mod tests {
         assert!(second.stopped.load(Ordering::Acquire));
     }
     #[test]
-    fn launches_official_connect_only_client_without_proxy_or_input_overrides() {
+    fn launches_official_client_with_font_hooks_and_normal_user_config() {
         let cli = Cli {
             remote: None,
             executable: "C:/Tools/Herdr/herdr.exe".into(),
@@ -402,11 +533,15 @@ mod tests {
         };
         let base = std::env::temp_dir().join(format!("kanban-command-{}", uuid::Uuid::new_v4()));
         let profile = profile::Profile::fixture(&base, &cli.session);
-        let mut command = client_command(
+        let font_override = font::Preferences::default()
+            .activate("test-window", &base, profile.directory())
+            .unwrap();
+        let mut command = client_command_with_font(
             Path::new("wezterm-gui.exe"),
             &cli,
             "test-window",
             "private-test-pipe",
+            &font_override,
         );
         profile.apply(&mut command);
         let args: Vec<_> = command
@@ -418,6 +553,7 @@ mod tests {
             &["C:/Tools/Herdr/herdr.exe", "client"]
         );
         assert!(!args.iter().any(|a| a == "--session" || a == "focus"));
+        assert!(args.contains(&font_override));
         for (key, expected) in [
             ("HERDR_SESSION", "test-session"),
             ("HERDR_CLIENT_SOCKET_PATH", "private-test-pipe"),

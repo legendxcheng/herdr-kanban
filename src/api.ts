@@ -71,10 +71,12 @@ export const deleteCompletedTasks = (projectId: string, taskIds: string[]) =>
   invoke<BatchTaskResult>("delete_completed_tasks", { projectId, taskIds });
 
 // Discovery
-export const searchFiles = (rootPath: string, query: string, projectId?: string) =>
-  invoke<FileEntry[]>("search_files", { rootPath, query, ...(projectId ? { projectId } : {}) });
-export const searchSkills = (rootPath: string, query: string, projectId?: string) =>
-  invoke<SkillEntry[]>("search_skills", { rootPath, query, ...(projectId ? { projectId } : {}) });
+export const searchFiles = (rootPath: string, query: string, projectId?: string, refresh = false) =>
+  invoke<FileEntry[]>("search_files", { rootPath, query, ...(projectId ? { projectId } : {}), ...(refresh ? { refresh: true } : {}) });
+export const searchSkills = (rootPath: string, query: string, projectId?: string, refresh = false) =>
+  invoke<SkillEntry[]>("search_skills", { rootPath, query, ...(projectId ? { projectId } : {}), ...(refresh ? { refresh: true } : {}) });
+export const prepareMentionSearch = (rootPath: string, projectId: string) =>
+  invoke<void>("prepare_mention_search", { rootPath, projectId });
 export const readFileContent = (absPath: string, projectId?: string) =>
   invoke<string>("read_file_content", { absPath, ...(projectId ? { projectId } : {}) });
 export const readSkillContent = (skillMdPath: string, projectId?: string) =>

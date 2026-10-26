@@ -10,7 +10,15 @@ pub(crate) struct CliOutput {
 }
 
 pub fn run() -> i32 {
-    let result = serve();
+    let result = if std::env::args().any(|arg| arg == "--search-stream-v1") {
+        crate::search_wire::serve(
+            &mut std::io::stdin().lock(),
+            &mut std::io::stdout().lock(),
+            search_response,
+        )
+    } else {
+        serve()
+    };
     match result {
         Ok(()) => 0,
         Err(error) => {
@@ -18,6 +26,71 @@ pub fn run() -> i32 {
             1
         }
     }
+}
+
+/// Only discovery and fixed read-only target validation; no arbitrary commands or writes.
+fn search_response(envelope: &Value) -> Value {
+    let identity = std::env::var_os("USERPROFILE")
+        .and_then(|home| {
+            std::fs::read_to_string(std::path::PathBuf::from(home).join(".herdr-kanban/identity"))
+                .ok()
+        })
+        .unwrap_or_default();
+    let identity = identity.trim();
+    let result = (|| -> Result<Value, String> {
+        if identity.is_empty()
+            || envelope["version"] != 2
+            || envelope["host_identity"].as_str() != Some(identity)
+        {
+            return Err("machine.identity_changed".into());
+        }
+        let request = &envelope["request"];
+        let root = request["root"].as_str().unwrap_or("");
+        match request["method"].as_str() {
+            Some("file_index") => serde_json::to_value(crate::file_search::index(
+                root,
+                request["scope"].as_str().unwrap_or(""),
+            )?)
+            .map_err(|e| e.to_string()),
+            Some("skill_index") => serde_json::to_value(crate::skill_discovery::index(Some(root)))
+                .map_err(|e| e.to_string()),
+            Some("validate_target") => {
+                use crate::workflow::Herdr;
+                let target: crate::workflow::Target =
+                    serde_json::from_value(request["target"].clone())
+                        .map_err(|_| "machine.invalid_request")?;
+                let session = envelope["session"]
+                    .as_str()
+                    .ok_or("machine.invalid_request")?;
+                if target.session != session {
+                    return Err("binding.identity_changed".into());
+                }
+                let mut cli = crate::herdr::Cli::from_env();
+                cli.session = session.into();
+                // The local CLI observes local identity; compare all other fields,
+                // then restore the caller's already checked execution-machine ID.
+                let mut expected = target.clone();
+                expected.machine_id = crate::machines::LOCAL_ID.into();
+                let mut live = cli.validate(&expected.workspace_id, &expected)?;
+                live.machine_id = target.machine_id;
+                serde_json::to_value(live).map_err(|e| e.to_string())
+            }
+            _ => Err("machine.invalid_request".into()),
+        }
+    })();
+    let mut response = match result {
+        Ok(value) => {
+            json!({"version":2,"id":envelope["id"],"host_identity":identity,"result":value,"error":null})
+        }
+        Err(error) => {
+            json!({"version":2,"id":envelope["id"],"host_identity":identity,"result":null,"error":error})
+        }
+    };
+    if serde_json::to_vec(&response).map_or(true, |bytes| bytes.len() > crate::search_wire::LIMIT) {
+        response["result"] = Value::Null;
+        response["error"] = json!("mention.index_limit");
+    }
+    response
 }
 
 /// Preserve the official binary stream; verify identity in the very process

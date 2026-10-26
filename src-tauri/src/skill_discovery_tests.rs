@@ -1,6 +1,21 @@
 use super::search_skills_in;
 use std::path::{Path, PathBuf};
 
+#[test]
+fn complete_index_can_match_skills_beyond_first_thirty() {
+    let f = Fixture::new();
+    for i in 0..50 {
+        f.write(
+            &format!("project/.agents/skills/skill-{i:02}"),
+            &format!("skill-{i:02}"),
+            "test",
+        );
+    }
+    let all = super::discover_in(Some(&f.0.join("project")), None);
+    assert_eq!(all.len(), 50);
+    assert_eq!(super::filter(&all, "skill-49")[0].name, "skill-49");
+}
+
 struct Fixture(PathBuf);
 
 impl Fixture {

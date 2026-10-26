@@ -33,9 +33,11 @@ export function MentionPopover({ rootPath, projectId }: { rootPath: string; proj
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState("");
   const [attempt, setAttempt] = useState(0);
-  // Serialize remote searches per project in this editor. Superseded queued
-  // queries are skipped; a stalled computer cannot hold up another project.
-  const remoteSearches = useRef(new Map<string, Promise<void>>());
+  const refreshNext = useRef(false);
+
+  useEffect(() => {
+    if (projectId) void Promise.resolve(api.prepareMentionSearch(rootPath, projectId)).catch(() => {});
+  }, [projectId, rootPath]);
 
   useLayoutEffect(() => {
     if (boxRef.current) boxRef.current.scrollTop = 0;
@@ -124,18 +126,20 @@ export function MentionPopover({ rootPath, projectId }: { rootPath: string; proj
     let cancelled = false;
     const search = async () => {
       if (cancelled) return;
+      const refresh = refreshNext.current;
+      refreshNext.current = false;
       try {
         let suggestions: Suggestion[] = [];
         if (kind === "file") {
           if (!rootPath.trim()) throw new Error("mention.directory_required");
-          const files = await api.searchFiles(rootPath, query, projectId);
+          const files = await api.searchFiles(rootPath, query, projectId, refresh);
           suggestions = files.map((f: FileEntry) => ({
             kind: "file" as const,
             label: f.rel_path,
             ref: f.abs_path,
           }));
         } else {
-          const skills = await api.searchSkills(rootPath, query, projectId);
+          const skills = await api.searchSkills(rootPath, query, projectId, refresh);
           suggestions = skills.map((s: SkillEntry) => ({
             kind: "skill" as const,
             label: s.name,
@@ -156,15 +160,8 @@ export function MentionPopover({ rootPath, projectId }: { rootPath: string; proj
         }
       }
     };
-    const schedule = () => {
-      if (!projectId) { void search(); return; }
-      const previous = remoteSearches.current.get(projectId) ?? Promise.resolve();
-      const next = previous.then(search);
-      remoteSearches.current.set(projectId, next);
-      void next.finally(() => {
-        if (remoteSearches.current.get(projectId) === next) remoteSearches.current.delete(projectId);
-      });
-    };
+    // The backend shares index loads; current input never queues behind an old keyword.
+    const schedule = () => { void search(); };
     // Local skill lookup stays immediate. Remote @ and $ both combine typing.
     const timer = kind === "file" || projectId ? window.setTimeout(schedule, 120) : undefined;
     if (kind === "skill" && !projectId) schedule();
@@ -234,7 +231,7 @@ export function MentionPopover({ rootPath, projectId }: { rootPath: string; proj
       {status === "ready" && items.length === 0 && <div className="mention-feedback" role="status">{tr(kind === "file" ? "mention.no_files" : "mention.no_skills")}</div>}
       {status === "error" && <div className="mention-feedback">
         <div role="alert"><strong>{tr("mention.failed")}</strong><div className="mention-error">{errorText(error)}</div></div>
-        <button type="button" className="btn-secondary" onMouseDown={e => e.preventDefault()} onClick={() => { setAttempt(value => value + 1); editor?.view.focus(); }}>{tr("mention.retry")}</button>
+        <button type="button" className="btn-secondary" onMouseDown={e => e.preventDefault()} onClick={() => { refreshNext.current = true; setAttempt(value => value + 1); editor?.view.focus(); }}>{tr("mention.retry")}</button>
       </div>}
       {items.map((s, i) => (
         <div
@@ -252,6 +249,11 @@ export function MentionPopover({ rootPath, projectId }: { rootPath: string; proj
           </span>
         </div>
       ))}
+      {projectId && status === "ready" && <div className="mention-refresh">
+        <button type="button" className="btn-secondary" onMouseDown={e => e.preventDefault()} onClick={() => {
+          refreshNext.current = true; setAttempt(value => value + 1); editor?.view.focus();
+        }}>{tr("mention.refresh")}</button>
+      </div>}
     </div>, document.body,
   );
 }

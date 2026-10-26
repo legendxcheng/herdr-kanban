@@ -140,6 +140,8 @@ it("hides the current workspace immediately and does not let a stale sync restor
   render(<App />); await screen.findByText("Herdr 已打开");
   slow=true; fireEvent(window,new Event("focus"));
   fireEvent.click(screen.getByRole("button",{name:"从侧栏隐藏 测试项目"}));
+  expect(hidden).toBe(false);
+  fireEvent.click(screen.getByRole("button",{name:"确认隐藏"}));
   await screen.findByText("当前没有显示的 Workspace，可随时重新添加。");
   await act(async()=>finish({projects:[project],workspaces:[],operations:[],session:"default"}));
   expect(screen.queryByRole("button",{name:/^测试项目/})).toBeNull();

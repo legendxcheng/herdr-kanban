@@ -11,6 +11,7 @@ mod machine_commands;
 mod machine_enrollment;
 mod machine_routing;
 mod machines;
+mod mention_search;
 #[cfg(test)]
 mod remote_acceptance;
 mod remote_helper;
@@ -18,6 +19,8 @@ mod remote_images;
 mod remote_install;
 mod remote_resources;
 mod remote_transport;
+mod search_connection;
+mod search_wire;
 
 pub fn remote_helper_main() -> i32 {
     remote_helper::run()
@@ -31,8 +34,8 @@ mod models;
 mod native_ssh;
 mod native_terminal;
 mod project_commands;
-mod project_visibility;
 mod project_git;
+mod project_visibility;
 mod projects;
 mod skill_discovery;
 mod start;
@@ -94,6 +97,7 @@ pub fn run() {
         })
         .manage(workflow)
         .manage(projects)
+        .manage(mention_search::Search::new())
         .manage(Arc::new(native_terminal::NativeTerminalManager::default()))
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
@@ -102,6 +106,7 @@ pub fn run() {
                     .state::<Arc<native_terminal::NativeTerminalManager>>()
                     .close_all();
                 window.state::<task_titles::TaskTitles>().shutdown();
+                window.state::<Arc<mention_search::Search>>().shutdown();
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -143,6 +148,7 @@ pub fn run() {
             commands::delete_completed_tasks,
             commands::search_files,
             commands::search_skills,
+            commands::prepare_mention_search,
             commands::read_file_content,
             commands::read_skill_content,
             work_commands::herdr_list_agents,

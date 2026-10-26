@@ -202,7 +202,12 @@
   "workspace.interrupted": "Previous creation was interrupted; check the result.",
   "workspace.pending_title": "Unconfirmed workspaces",
   "workspace.choose_created": "Select the created workspace (optional)",
-  "workspace.remove_confirm": "Delete local project and tasks? The Herdr workspace will remain.",
+  "workspace.hide_title": "Hide Workspace?",
+  "workspace.hide_message": "Hide from the sidebar only. Tasks and the Herdr Workspace are retained. Use Add Workspace to show it again later.",
+  "workspace.hide_confirm": "Confirm hide",
+  "workspace.delete_title": "Delete local project?",
+  "workspace.delete_message": "This deletes the local project and all its tasks. This cannot be undone. The Herdr Workspace will remain.",
+  "workspace.delete_confirm": "Confirm delete",
   "workspace.offline": "Sync failed; local projects and tasks are retained.",
   "workspace.retry_failed": "Retry creation",
   "common.close": "Close",
@@ -331,5 +336,9 @@
   "mention.no_skills": "No matching skills",
   "mention.failed": "Search failed",
   "mention.retry": "Retry search",
-  "mention.directory_required": "Set the project's working directory first"
+  "mention.directory_required": "Set the project's working directory first",
+  "mention.refresh": "Refresh candidates",
+  "mention.index_limit": "Directory is too large. Search a more specific subdirectory.",
+  "mention.busy": "Search is preparing. Please retry shortly.",
+  "mention.project_changed": "The project directory changed. Reopen the editor."
 }
