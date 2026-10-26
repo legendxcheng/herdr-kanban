@@ -223,6 +223,16 @@ impl Herdr for Cli {
         self.json(&["workspace", "rename", id, name]).map(|_| ())
     }
     fn available(&self, workspace: &str, cwd: &str) -> Result<Vec<Target>, String> {
+        if let Some(machine) = &self.remote {
+            let mut targets: Vec<Target> = crate::remote_transport::request(
+                machine,
+                serde_json::json!({"method":"available_targets","workspace":workspace,"cwd":cwd}),
+            )?;
+            for target in &mut targets {
+                target.machine_id = machine.id.clone();
+            }
+            return Ok(targets);
+        }
         let workspace_id = self.resolve_workspace_id(workspace)?;
         let Some(tab) = self.kanban_tab(&workspace_id)? else {
             return Ok(Vec::new());
@@ -425,6 +435,16 @@ impl Herdr for Cli {
         }
     }
     fn targets(&self, workspace: &str) -> Result<Vec<Target>, String> {
+        if let Some(machine) = &self.remote {
+            let mut targets: Vec<Target> = crate::remote_transport::request(
+                machine,
+                serde_json::json!({"method":"targets","workspace":workspace}),
+            )?;
+            for target in &mut targets {
+                target.machine_id = machine.id.clone();
+            }
+            return Ok(targets);
+        }
         let id = self.resolve_workspace_id(workspace)?;
         let doc = self.json(&["agent", "list"])?;
         let agents = doc
@@ -447,6 +467,19 @@ impl Herdr for Cli {
         check_current: &dyn Fn() -> Result<(), String>,
     ) -> Result<(), SendError> {
         self.send_prompt_checked(target, prompt, check_current)
+    }
+    fn send_checking_receipt(
+        &self,
+        target: &Target,
+        prompt: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
+        received: &dyn Fn() -> Result<bool, String>,
+    ) -> Result<(), SendError> {
+        if self.remote.is_some() {
+            self.send_prompt_with_receipt(target, prompt, check_current, received)
+        } else {
+            self.send_prompt_checked(target, prompt, check_current)
+        }
     }
 }
 

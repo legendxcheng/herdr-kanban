@@ -1,11 +1,19 @@
 use super::Bounds;
-use std::{os::windows::io::AsRawHandle, process::Child};
+use std::{
+    os::windows::io::AsRawHandle,
+    process::Child,
+    time::{Duration, Instant},
+};
 use windows_sys::Win32::{
     Foundation::*,
     Graphics::{Dwm::*, Gdi::ClientToScreen},
     System::JobObjects::*,
     UI::{Accessibility::*, WindowsAndMessaging::*},
 };
+
+#[cfg(test)]
+#[path = "native_terminal_windows_tests.rs"]
+mod tests;
 
 /// Run on the dedicated monitor thread, including its own message pump. Main
 /// window location events wake it during Windows' modal drag/resize loop; it
@@ -171,85 +179,203 @@ pub fn hide(hwnd: isize) {
         ShowWindowAsync(hwnd as _, SW_HIDE);
     }
 }
-pub fn sync(main: isize, terminal: isize, bounds: Bounds, ready: bool) {
+struct Anchor {
+    main: HWND,
+    terminal: HWND,
+    preceding: HWND,
+    found: bool,
+    ignore_main_owned: bool,
+}
+unsafe extern "system" fn stacking_window(hwnd: HWND, data: LPARAM) -> i32 {
     unsafe {
-        let main = main as HWND;
-        let terminal = terminal as HWND;
-        let foreground = GetForegroundWindow();
-        let mut cloaked = 0u32;
-        DwmGetWindowAttribute(main, DWMWA_CLOAKED as _, &mut cloaked as *mut _ as _, 4);
-        let visible = ready
-            && bounds.visible
-            && bounds.width >= 2.0
-            && bounds.height >= 2.0
-            && IsWindowVisible(main) != 0
-            && IsIconic(main) == 0
-            && cloaked == 0;
-        if !visible {
-            if IsWindowVisible(terminal) != 0 {
-                ShowWindowAsync(terminal, SW_HIDE);
-            }
+        let anchor = &mut *(data as *mut Anchor);
+        if hwnd == anchor.main {
+            anchor.found = true;
+            return 0;
         }
-        // Keep following behind other applications and while a React overlay
-        // is open. Minimized windows have meaningless offscreen coordinates.
-        if !ready || IsIconic(main) != 0 || bounds.width < 2.0 || bounds.height < 2.0 {
-            return;
-        }
-        let mut client = RECT::default();
-        let mut origin = POINT::default();
-        if GetClientRect(main, &mut client) == 0 || ClientToScreen(main, &mut origin) == 0 {
-            return;
-        }
-        let sx = f64::from(client.right) / bounds.viewport_width;
-        let sy = f64::from(client.bottom) / bounds.viewport_height;
-        let x = origin.x + (bounds.x * sx).round() as i32;
-        let y = origin.y + (bounds.y * sy).round() as i32;
-        let width = (bounds.width * sx).round() as i32;
-        let height = (bounds.height * sy).round() as i32;
-        let mut actual = RECT::default();
-        if GetWindowRect(terminal, &mut actual) == 0 {
-            return;
-        }
-        let moving = actual.left != x || actual.top != y;
-        let sizing = actual.right - actual.left != width || actual.bottom - actual.top != height;
-        let showing = visible && IsWindowVisible(terminal) == 0;
-        // Keep the pair adjacent in the normal Z order. An unrelated foreground
-        // window covers both naturally; losing focus must never hide the viewer.
-        let mut preceding = GetWindow(main, GW_HWNDPREV);
-        let reorder = preceding != terminal;
-        if visible && foreground == terminal && reorder {
-            SetWindowPos(
-                main,
-                terminal,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
-            );
-        }
-        let reorder = visible && reorder && foreground != terminal;
-        // Inserting inside the topmost band could accidentally promote WezTerm.
-        if preceding.is_null()
-            || GetWindowLongPtrW(preceding, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0
+        // IME/TSF and parked viewers participate in the raw Z order even when
+        // hidden. Never insert a viewer after its own owned popup: Windows may
+        // move the owner's group as well. Visible host dialogs remain anchors
+        // so the viewer stays below them.
+        let owner = GetAncestor(hwnd, GA_ROOTOWNER);
+        if hwnd == anchor.terminal
+            || (IsWindowVisible(hwnd) != 0
+                && owner != anchor.terminal
+                && (!anchor.ignore_main_owned || owner != anchor.main))
         {
-            preceding = HWND_TOP;
+            anchor.preceding = hwnd;
         }
-        if moving || sizing || showing || reorder {
-            SetWindowPos(
-                terminal,
-                preceding,
-                x,
-                y,
-                width,
-                height,
-                SWP_NOACTIVATE
-                    | SWP_ASYNCWINDOWPOS
-                    | if showing { SWP_SHOWWINDOW } else { 0 }
-                    | if moving { 0 } else { SWP_NOMOVE }
-                    | if sizing { 0 } else { SWP_NOSIZE }
-                    | if reorder { 0 } else { SWP_NOZORDER },
-            );
+        1
+    }
+}
+fn preceding_window(main: HWND, terminal: HWND, ignore_main_owned: bool) -> Option<HWND> {
+    let mut anchor = Anchor {
+        main,
+        terminal,
+        preceding: HWND_TOP,
+        found: false,
+        ignore_main_owned,
+    };
+    unsafe {
+        EnumWindows(Some(stacking_window), &mut anchor as *mut _ as isize);
+    }
+    anchor.found.then_some(anchor.preceding)
+}
+
+/// Async SetWindowPos only queues a request. Re-read the actual order each
+/// monitor tick; allow three attempts 50ms apart, then cool down for one second.
+/// Position/size following is independent of Z-order retries.
+#[derive(Default)]
+pub struct WindowSync {
+    attempts: u8,
+    retry_at: Option<Instant>,
+    foreground: isize,
+    last_report: Option<Instant>,
+}
+impl WindowSync {
+    fn reorder_due(&mut self, needed: bool, foreground: HWND) -> bool {
+        let now = Instant::now();
+        if !needed || self.foreground != foreground as isize {
+            self.attempts = 0;
+            self.retry_at = None;
+        }
+        self.foreground = foreground as isize;
+        if !needed || self.retry_at.is_some_and(|at| now < at) {
+            return false;
+        }
+        self.attempts += 1;
+        let delay = if self.attempts >= 3 {
+            self.attempts = 0;
+            self.report("stacking has not converged; retrying after cooldown");
+            Duration::from_secs(1)
+        } else {
+            Duration::from_millis(50)
+        };
+        self.retry_at = Some(now + delay);
+        true
+    }
+    fn report(&mut self, message: &str) {
+        let now = Instant::now();
+        if self
+            .last_report
+            .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(5))
+        {
+            eprintln!("Kanban native window: {message}");
+            self.last_report = Some(now);
+        }
+    }
+    fn check_position(&mut self, result: i32) {
+        if result == 0 {
+            self.report(&format!(
+                "SetWindowPos failed: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
+    pub fn sync(&mut self, main: isize, terminal: isize, bounds: Bounds, ready: bool) {
+        unsafe {
+            let main = main as HWND;
+            let terminal = terminal as HWND;
+            let foreground = GetForegroundWindow();
+            let mut cloaked = 0u32;
+            DwmGetWindowAttribute(main, DWMWA_CLOAKED as _, &mut cloaked as *mut _ as _, 4);
+            let visible = ready
+                && bounds.visible
+                && bounds.width >= 2.0
+                && bounds.height >= 2.0
+                && IsWindowVisible(main) != 0
+                && IsIconic(main) == 0
+                && cloaked == 0;
+            if !visible {
+                self.reorder_due(false, foreground);
+                if IsWindowVisible(terminal) != 0 {
+                    ShowWindowAsync(terminal, SW_HIDE);
+                }
+            }
+            // Keep following behind other applications and while a React overlay
+            // is open. Minimized windows have meaningless offscreen coordinates.
+            if !ready || IsIconic(main) != 0 || bounds.width < 2.0 || bounds.height < 2.0 {
+                return;
+            }
+            let mut client = RECT::default();
+            let mut origin = POINT::default();
+            if GetClientRect(main, &mut client) == 0 || ClientToScreen(main, &mut origin) == 0 {
+                return;
+            }
+            let sx = f64::from(client.right) / bounds.viewport_width;
+            let sy = f64::from(client.bottom) / bounds.viewport_height;
+            let x = origin.x + (bounds.x * sx).round() as i32;
+            let y = origin.y + (bounds.y * sy).round() as i32;
+            let width = (bounds.width * sx).round() as i32;
+            let height = (bounds.height * sy).round() as i32;
+            let mut actual = RECT::default();
+            if GetWindowRect(terminal, &mut actual) == 0 {
+                return;
+            }
+            let moving = actual.left != x || actual.top != y;
+            let sizing =
+                actual.right - actual.left != width || actual.bottom - actual.top != height;
+            let showing = visible && IsWindowVisible(terminal) == 0;
+            // Keep the pair adjacent in the normal Z order. An unrelated foreground
+            // window covers both naturally; losing focus must never hide the viewer.
+            let Some(mut preceding) = preceding_window(main, terminal, false) else {
+                return;
+            };
+            let reorder = self.reorder_due(visible && preceding != terminal, foreground);
+            let terminal_active = foreground == terminal
+                || (!foreground.is_null() && GetAncestor(foreground, GA_ROOTOWNER) == terminal);
+            // Windows can accept a background viewer's HWND_TOP request without
+            // putting it above the foreground host. First bring the viewer just
+            // below the host, then on a later observed tick lower the host below
+            // it. Do not lower the host until adjacency is confirmed: otherwise
+            // an intervening application would cover the whole Kanban window.
+            // Ignore both windows' owned helpers when checking this adjacency.
+            let main_active = foreground == main;
+            let lower_main = reorder
+                && (terminal_active
+                    || (main_active && preceding_window(terminal, main, true) == Some(main)));
+            if lower_main {
+                self.check_position(SetWindowPos(
+                    main,
+                    terminal,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE
+                        | SWP_NOSIZE
+                        | SWP_NOACTIVATE
+                        | SWP_ASYNCWINDOWPOS
+                        | SWP_NOOWNERZORDER,
+                ));
+            }
+            let reorder = reorder && !lower_main;
+            if main_active && reorder {
+                preceding = main;
+            }
+            // Inserting inside the topmost band could accidentally promote WezTerm.
+            if preceding.is_null()
+                || GetWindowLongPtrW(preceding, GWL_EXSTYLE) & WS_EX_TOPMOST as isize != 0
+            {
+                preceding = HWND_TOP;
+            }
+            if moving || sizing || showing || reorder {
+                self.check_position(SetWindowPos(
+                    terminal,
+                    preceding,
+                    x,
+                    y,
+                    width,
+                    height,
+                    SWP_NOACTIVATE
+                        | SWP_ASYNCWINDOWPOS
+                        | SWP_NOOWNERZORDER
+                        | if showing { SWP_SHOWWINDOW } else { 0 }
+                        | if moving { 0 } else { SWP_NOMOVE }
+                        | if sizing { 0 } else { SWP_NOSIZE }
+                        | if reorder { 0 } else { SWP_NOZORDER },
+                ));
+            }
         }
     }
 }

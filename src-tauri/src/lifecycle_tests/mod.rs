@@ -20,6 +20,8 @@ struct State {
     mismatch: bool,
     send_error: bool,
     receipt_available: bool,
+    early_receipt: bool,
+    receipt_checks: usize,
     create_error: bool,
     lost_create_response: bool,
     prepare_gate: Option<Arc<(Mutex<bool>, std::sync::Condvar)>>,
@@ -213,6 +215,29 @@ impl Herdr for Fake {
         if send_error {
             return Err(SendError {
                 message: "timeout".into(),
+                uncertain: true,
+            });
+        }
+        Ok(())
+    }
+    fn send_checking_receipt(
+        &self,
+        target: &Target,
+        prompt: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
+        received: &dyn Fn() -> Result<bool, String>,
+    ) -> Result<(), SendError> {
+        self.send_checked(target, prompt, check_current)?;
+        if self.0.lock().unwrap().early_receipt {
+            self.0.lock().unwrap().receipt_checks += 1;
+            let found = received().map_err(|message| SendError {
+                message,
+                uncertain: true,
+            })?;
+            self.observe("early_receipt");
+            assert!(found, "test fixture expected an exact receipt");
+            return Err(SendError {
+                message: "dispatch.submit_verify_required".into(),
                 uncertain: true,
             });
         }

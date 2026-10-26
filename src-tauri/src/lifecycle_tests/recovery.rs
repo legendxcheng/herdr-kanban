@@ -123,6 +123,58 @@ fn received_prompt_with_missing_ack_finishes_start_without_replay() {
 }
 
 #[test]
+fn early_receipt_is_rechecked_and_committed_with_session_and_never_replayed() {
+    for replace_after_probe in [false, true] {
+        let (app, fake) = fixture();
+        {
+            let mut state = fake.0.lock().unwrap();
+            state.early_receipt = true;
+            state.receipt_available = true;
+            if replace_after_probe {
+                let weak = Arc::downgrade(&fake);
+                state.observe = Some(Arc::new(move |phase| {
+                    if phase == "early_receipt" {
+                        weak.upgrade()
+                            .unwrap()
+                            .0
+                            .lock()
+                            .unwrap()
+                            .panes
+                            .values_mut()
+                            .next()
+                            .unwrap()
+                            .0
+                            .process_id = "replaced".into();
+                    }
+                }));
+            }
+        }
+        let id = op();
+        let result = app.start_task("a", "测试", &id);
+        assert_eq!(result.is_ok(), !replace_after_probe);
+        assert_eq!(fake.0.lock().unwrap().sent, vec!["测试"]);
+        assert_eq!(fake.0.lock().unwrap().receipt_checks, 1);
+        if replace_after_probe {
+            assert_eq!(app.binding("a").unwrap().state, "unknown");
+        } else {
+            assert_eq!(status(&app, "a"), "in_progress");
+            assert!(saved(&app, "a").is_some());
+            let evidence: String = app
+                .db
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT evidence FROM dispatch_operations WHERE id=?1",
+                    [format!("{id}:dispatch")],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(evidence.contains("Exact user message"));
+        }
+    }
+}
+
+#[test]
 fn delayed_receipt_after_restart_recovers_dispatch_session_and_start_together() {
     let (app, fake) = fixture();
     {

@@ -1,8 +1,18 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-27。修正点击 Kanban 后原生终端被主窗口遮挡：主窗口持有系统前台时，先将终端排到其紧下方，待实际相邻后再将主窗口排到终端下方；保持焦点，不把整个应用降到其他窗口后面。新增真实前台切换回归在上一轮实现上失败、本轮通过；12 轮终端/宿主/外部窗口前台循环及 Rust 常规 213 项通过。00:25 构建的新 NSIS 包已更新到固定交付目录并核对校验和；实际 release 鼠标点击脚本尚未完整通过，未覆盖安装。上一轮仅有后台遮挡注入的验收不足，证据和当前边界见[前台切换验收记录](docs/verification/2026-10-27-native-window-activation.md)。
+
+更新日期：2026-10-27。原生 Herdr 窗口层级修复：排序识别可见窗口及 owner 关系，避开隐藏 IME/TSF 和终端自身附属窗口；异步调整后持续核验，限频重试并记录失败，保持焦点和普通窗口层级。前端 229 项、Rust 213 项及单独执行的两项原生窗口回归通过；实际 release Kanban/Herdr 的任务切换、12 次遮挡恢复、弹窗和最小化恢复通过。release/NSIS 已构建；诊断证据、安装包和未覆盖边界见[窗口层级验收记录](docs/verification/2026-10-26-native-window-stacking.md)。当前安装实例未替换。
+
 更新日期：2026-10-26。All Tasks 页内交互（GitHub #26，子任务 #27–#34）：与普通看板共用 TaskBoard，支持编辑、终端、拖拽流转、派发恢复、新建及单项／批量整理；跨项目操作从任务归属解析上下文。查询、草稿与迟到意图保护见 6.2.6，实际验收与限制见[交互验收记录](docs/verification/2026-10-26-all-tasks-interactions.md)。
 
 更新日期：2026-10-26。文件引用对齐 Codex CLI 0.164.0：预览、手动派发、后台启动及图文混合派发直接输出 Workspace 相对路径，不展开正文、不加 `[文件:]` 或额外换行；含 Unicode 空白且不含双引号时加双引号。技能仍发送 `$技能名`，由 Codex 加载。相关前端 40 项、Rust 213 项测试通过（20 项跳过），限定本次模块及其依赖的 TypeScript 检查和 Vite 构建通过。实际序列化结果交给本机 Codex `debug prompt-input` 的三个案例也逐字一致。共享工作区全量前端当次为 215 通过、1 项汇总交互测试失败，常规构建另受汇总测试类型错误阻断；不将其他进行中改动计为本次通过。未重新打包安装或完成真实 TUI/Herdr 派发验收。提交前另将仅含本次 14 个文件/改动块的暂存树导出为隔离副本，完整前端 215 项、Rust 201 项测试通过（19 项环境依赖测试跳过），`npm run build` 通过；这些结果验证本提交不依赖共享工作区其他未提交改动。规则来源见[原生引用研究](docs/research/2026-10-26-codex-native-references.md)，实现见 6.4、6.6.1。
+
+更新日期：2026-10-26。修复复用 Codex 的两处启动时序问题：`agent.start` 成功后等待同一 terminal、shell 与新进程真正交互就绪；旧 Agent 在相邻查询间清除注册时，通过身份与前台进程检查确认 shell，避免误报无效回复。两条确定性失败回归均已通过，并保留替换身份拒绝、不重复启动或发送的保护。真实验收边界见[启动就绪修正](docs/verification/2026-10-26-start-readiness.md)。
+
+更新日期：2026-10-26。远端新任务启动使用独立操作级 SSH 控制连接，pane 候选和 Agent 列表在远端批量检查，避免逐条 CLI 重建 SSH。启动、搜索和查看统一在使用新协议前更新 helper；保留每次写入前的任务/进程核验，断线不重放。实现见 6.6.3，验证见[远端启动性能记录](docs/verification/2026-10-26-remote-start-performance.md)。
+
+更新日期：2026-10-26。修复安装版远端 helper 空响应：PowerShell 非管道调用 release GUI helper 不等待输出，导致更新 helper 后的 preflight 报 `machine.invalid_response`。单次请求与持久查询统一经 `remote_transport::helper_command` 使用 cmd 直接标准流启动；主机身份、协议和不重发边界保持。真实 release 回归与验收见[安装版远端响应修复](docs/verification/2026-10-26-release-remote-helper.md)。
 
 更新日期：2026-10-26。远端 @/$ 使用预热索引和持久 SSH 查询通道；任务切换按电脑/session 复用 Herdr/WezTerm 客户端，切换期间关闭输入通路，确认新定位后恢复。实现、生命周期与实际测量见 6.3、6.5 及[长连接验收记录](docs/verification/2026-10-26-persistent-connections.md)。
 
@@ -206,7 +216,9 @@ herdr-kanban/
 │     ├─ shared_tab.rs             查找唯一 kanban Tab、选择分屏位置及真实拓扑回归
 │     ├─ pane_allocation.rs        同 workspace 分配互斥、创建前快照与未知结果隔离
 │     ├─ mention_search.rs / mention_search_tests.rs  完整远端索引、预热、刷新、限量缓存和身份隔离
-│     ├─ search_connection.rs / search_wire.rs  持久 SSH 查询子进程、有界帧协议及超时清理
+│     ├─ search_connection.rs / search_wire.rs  查询/控制共用的持久 SSH 子进程、有界帧协议及超时清理
+│     ├─ remote_control.rs / remote_control_tests.rs  单次启动私有控制连接、身份固定及断线不重放回归
+│     ├─ start_timing.rs           有界启动阶段计时日志，不记录提示词内容
 │     ├─ native_terminal.rs        任务定位、独立 WezTerm/官方 Herdr 客户端复用及关闭
 │     ├─ native_view_session.rs    电脑/session 客户端池、短期任务选择与隐藏/空闲回收
 │     ├─ native_client_connection.rs  私有管道连接、原样转发及单 pane 显示/恢复超时
@@ -215,6 +227,7 @@ herdr-kanban/
 │     ├─ native_font.rs / native_font.lua  原生字号快捷键、每窗口变更日志及本机字号偏好
 │     ├─ native_font_tests.rs       切换/迟到写入隔离、残缺记录、重试及路径回归
 │     ├─ native_terminal_windows.rs  独立窗口位置/尺寸/前台同步与 Job 清理
+│     ├─ native_terminal_windows_tests.rs  真实 Win32 附属窗口层级及 WezTerm 遮挡恢复回归
 │     └─ terminal.rs               历史协议回归实现，仅 cfg(test)，不参与产品运行
 ├─ public/、src/assets/、src-tauri/icons/  静态资源和图标
 └─ dist/、node_modules/、src-tauri/target/ 构建产物与依赖目录
@@ -734,6 +747,10 @@ Enter 前重新采集该目标的 `state_change_seq`，随后每约 200ms 查询
 
 终端紧邻主窗口上方；激活终端时主窗口排到其后，不抢焦点。失焦/WebView occlusion 不触发隐藏；主窗口最小化、隐藏、DWM cloaked、前端弹窗/inert 或无有效区域时隐藏。初始窗口在屏幕外，窗口发现及前端最新区域确认后显示。独立跨进程窗口仍可能有瞬时帧差。
 
+主窗口真正持有 Windows foreground 时，不再依赖背景 WezTerm 的 HWND_TOP 请求：先确认终端紧随主窗口；若中间有其他可见窗口，先异步将终端移到主窗口下方。后续循环读到实际相邻后，再异步将主窗口置于终端下方，键盘焦点仍是 Kanban；相邻判断忽略两者附属辅助窗口，避免把整个应用降到其他窗口后方。见[前台切换修复与验收](docs/verification/2026-10-27-native-window-activation.md)。
+
+2026-10-27 层级同步使用每个查看窗口独立的 `WindowSync`：EnumWindows 按可见顺序选择参照，跳过隐藏辅助窗口、其他隐藏查看窗口及终端自身 owner 链下的附属窗口；保留主窗口可见对话框的遮挡。使用 `SWP_NOOWNERZORDER`，终端附属窗口获得前台时也按终端激活处理。异步调整后继续读取真实顺序；每轮最多 3 次、至少间隔 50ms，未收敛后冷却 1 秒，前台改变/隐藏/顺序恢复会重置，移动与尺寸同步独立。检查 SetWindowPos 返回值，失败与未收敛日志最多每 5 秒一条。无需 IPC 或数据库变化。原生回归、实际 release Kanban/Herdr 遮挡恢复、完整构建和现场诊断限制见[窗口层级验收记录](docs/verification/2026-10-26-native-window-stacking.md)。
+
 **原生输入与配置。** WezTerm 正常读取用户配置，通过命令行覆盖 window_decorations 和 enable_tab_bar，并在 window_decorations 表达式中加载本窗口的字号扩展。不使用 `--config-file` 替换用户配置，保留原配置路径、相对资源和热加载。鼠标、复制粘贴、滚轮及终端尺寸协商均交给 WezTerm/Herdr；没有仿制菜单或私有滚轮标记。旧桥接时代的专用 Lua/字号文件不再读取，也不删除用户已有文件。
 
 **字号记忆（2026-10-26）。** `native_font.lua` 将默认及用户配置中的 IncreaseFontSize、DecreaseFontSize、ResetFontSize 绑定接入本窗口字号回调，保留用户其他快捷键及其优先级，并处理 key_tables 和 Multiple 内的字号动作。默认键绑定启用时补充 Ctrl+小键盘加减。字号按 1.1 倍增减，保存值范围为 6–72 pt；重置恢复用户配置的默认字号并保存 null。禁用默认键绑定时不擅自添加快捷键。普通输入仍直达原生客户端，字号操作不重建连接。
@@ -797,6 +814,28 @@ Windows 进程查询可能先观察到 shell，而 Herdr 的 Agent 注册状态�
 旧版本将同一明确拒绝记成 unknown 的卡片，点击“核实启动结果”也执行上述事务，可以在原窗格仍存在时恢复为可重试失败。这是 6.6 中“必须确认 pane 不存在才释放”的明确拒绝例外；错误不完整、身份预占不一致或派发已经开始时保持原有保守路径。正常未知派发依然只核实回执，不自动重发。
 
 验证：完整 Rust 常规回归 181 passed / 19 ignored；相关前端模拟 IPC 回归 29 passed。另显式执行真实 Herdr/Codex 测试：同一个测试 pane 完成首次启动和三次退出重启，三次均观察到原始 `agent_pane_busy` 并经重试成功，未发送业务提示词。测试 pane 与 workspace 已清理。未替换正在运行的桌面程序、未打包安装，也未修改用户实际卡片；详情见 [启动时序验收记录](docs/verification/2026-10-26-agent-start-busy.md)。
+
+### 6.6.3 远端启动连接复用（2026-10-26）
+
+`start.rs` 在应用持有的同步启动线程内建立 `remote_control::Scope`。作用域覆盖提示词序列化、pane 分配、Codex 准备、派发和会话确认；`remote_transport::request` 在此作用域内惰性连接 `--control-stream-v1` helper，后续请求共用同一 SSH 子进程。作用域固定机器配置及 helper 版本，每帧验证主机身份、session 和递增请求 ID。成功、失败和 unwind 都回收连接；连接只在一次操作内复用，不跨任务保留，也不与查询、原生查看或后台轮询共用队列。
+
+控制协议与只读 `--search-stream-v1` 分开入口，但共用有界帧读写。控制入口执行既有 JSON 方法并保留 CLI 的 uncertain 标记；完整业务拒绝与传输错误分离，原有明确 `agent_pane_busy` 重试继续有效。传输失败立即丢弃连接并锁定该操作后续请求为失败，不重连、不退回单次 SSH、不重放；任务保留既有待核实语义。创建、启动及每个输入步骤之间的本地任务检查、实时进程身份检查、输入稳定间隔与提交回执确认均保留。
+
+`Cli::available` 和 `Cli::targets` 分别通过 `available_targets` / `targets` 一次请求在远端调用原有检查算法，避免每个 pane 的进程、目录和状态检查各占一次网络往返；返回后恢复已核验的执行机器 ID。本地占用/创建隔离/预占事务仍由 Kanban 执行，发送前重新核验，扫描结果不当作发送授权。不新增数据库迁移或前端 IPC。
+
+远端 Codex 输入仍仅发送一次文本和 Enter；若 Herdr 状态序号未推进，在原 10 秒确认窗口内每 5 轮增加一次既有精确回执检查。`send_checking_receipt` 的回调由 Workflow 提供，要求同一目标、同一保存会话和派发时间之后唯一匹配的用户消息；发现证据只提前退出状态等待，随后仍走原有回执重读、目标复核和事务落库。首次证据与最终确认之间换进程/会话、日志缺失或提交失败都会保留 unknown，不把提前查询本身当作发送成功，也不重发。
+
+`remote_install::ensure_current` 供路由适配器与候选查询共用，按当前可执行文件内容哈希更新 helper，发布前重新检查数据库中的主机/session/连接身份，上传期间不持数据库锁。已更新的正常路径直接返回；首次升级的上传耗时应与日常启动耗时分开报告。
+
+`start-timing.jsonl` 位于数据库同目录，记录操作 ID、机器 ID、各阶段相对启动线程的毫秒数、总耗时与成功标记，不记录正文或文件内容；超过 2 MiB 后在下一条记录时重新开始，日志失败不改变任务结果。它不包含受理前的适配器/首次 helper 更新，也不表示模型完成时间。
+
+### 6.6.4 启动回执与交互就绪分离（2026-10-26）
+
+`agent.start` 成功后，`herdr_codex::wait_started_codex` 在 10 秒名义窗口内有界只读轮询（单次 CLI 仍有自己的超时），不再仅凭第一份非就绪快照判失败。检查任务有效性、terminal 与原 shell PID；观察到新 Codex 后固定其进程身份，替换进程/终端/其他 Agent 都拒绝继续。只有同一进程达到 idle/done、interactive_ready 且非 launch_pending 才返回，之后才进入原有会话核验和派发流程。未知进程身份仅在此只读窗口内继续等待；不重发 agent.start 或提示词，超时仍保留待核实保护。该修正不会自动解除此前失败卡片的状态。
+
+旧 Codex 退出时，`pane get` 与随后 `agent get` 可能跨越注册清理：前者仍有 agent=codex，后者已无 agent 字段。`inspect_pane` 先要求两份回复的 workspace/pane/terminal 一致，再按新回复确认是否仍有 Agent；字段缺失/null/空串可进入 shell 候选，但只有进程查询证明非零 foreground group 等于 shell PID 才视为就绪。字段类型错误、目标身份变化和无效回复仍拒绝，不泛化为忽略解析错误或重试写入。
+
+验证：211 项 Rust 常规测试通过、20 项默认忽略；正式构建在隔离数据库、真实远端项目目录与专用 Workspace 连续 8 次启动成功（首次新建、7 次复用同 pane/terminal），每次一条 sent 派发并连接原生视图，11.608–16.965 秒。测试资源已清理，未处理用户原失败卡片；安装包与完整边界见[启动就绪修正](docs/verification/2026-10-26-start-readiness.md)。
 
 ## 7. 当前实现的关键边界与维护风险
 

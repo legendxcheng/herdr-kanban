@@ -1,4 +1,4 @@
-//! One SSH child, multiple discovery requests. No terminal pane or prompt dispatch.
+//! One SSH child, multiple framed requests. Callers choose discovery or control mode.
 use crate::{machines::Machine, search_wire};
 use serde_json::{Value, json};
 use std::{
@@ -23,24 +23,7 @@ pub struct Connection {
 impl Connection {
     pub fn connect(machine: &Machine) -> Result<Self, String> {
         crate::remote_transport::verify_profile(machine)?;
-        let helper = machine
-            .helper_name
-            .as_deref()
-            .ok_or("machine.setup_required")?;
-        if helper.len() != 32 || !helper.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err("machine.invalid_response".into());
-        }
-        let mut command = crate::remote_transport::ssh(
-            machine
-                .ssh_target
-                .as_deref()
-                .ok_or("machine.invalid_target")?,
-        )?;
-        // Binary handles pass directly through cmd, avoiding PowerShell transcoding.
-        command.args(["cmd", "/d", "/s", "/c", &format!(
-            "\"\"%USERPROFILE%\\.herdr-kanban\\helpers\\{helper}.exe\" --remote-helper --search-stream-v1\""
-        )]);
-        Self::spawn(command)
+        Self::spawn(crate::remote_transport::helper_command(machine, true)?)
     }
 
     pub(crate) fn spawn(mut command: Command) -> Result<Self, String> {
@@ -119,6 +102,7 @@ impl Connection {
         if response["version"] != 2
             || response["id"] != id
             || response["host_identity"].as_str() != machine.host_identity.as_deref()
+            || response["session"].as_str() != Some(machine.session.as_str())
         {
             return Err("machine.identity_changed".into());
         }
@@ -155,7 +139,7 @@ mod tests {
                 $request = [Text.Encoding]::UTF8.GetString($reader.ReadBytes($size)) | ConvertFrom-Json
                 $hostId = $request.host_identity
                 if ($env:KANBAN_SEARCH_TEST_MODE -eq 'wrong') { $hostId = 'other-host' }
-                $reply = @{version=2;id=$request.id;host_identity=$hostId;result=$request.request} | ConvertTo-Json -Compress
+                $reply = @{version=2;id=$request.id;host_identity=$hostId;session=$request.session;result=$request.request} | ConvertTo-Json -Compress
                 $bytes = [Text.Encoding]::UTF8.GetBytes($reply)
                 $writer.Write([uint32]$bytes.Length); $writer.Write($bytes); $writer.Flush()
             }

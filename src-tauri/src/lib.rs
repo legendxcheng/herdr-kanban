@@ -14,6 +14,7 @@ mod machines;
 mod mention_search;
 #[cfg(test)]
 mod remote_acceptance;
+mod remote_control;
 mod remote_helper;
 mod remote_images;
 mod remote_install;
@@ -21,6 +22,7 @@ mod remote_resources;
 mod remote_transport;
 mod search_connection;
 mod search_wire;
+mod start_timing;
 
 pub fn remote_helper_main() -> i32 {
     remote_helper::run()

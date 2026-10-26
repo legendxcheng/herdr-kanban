@@ -97,10 +97,21 @@ struct Envelope {
     error: Option<String>,
 }
 
-pub fn request<T: DeserializeOwned>(
+/// Direct inherited handles work for both console/debug and GUI/release helpers.
+/// PowerShell does not wait for a GUI executable invoked without a pipeline,
+/// so it can exit successfully before that helper writes its JSON response.
+pub fn helper_command(
     machine: &crate::machines::Machine,
-    request: impl Serialize,
-) -> Result<T, String> {
+    streaming: bool,
+) -> Result<Command, String> {
+    helper_command_mode(machine, if streaming { " --search-stream-v1" } else { "" })
+}
+
+pub(crate) fn control_command(machine: &crate::machines::Machine) -> Result<Command, String> {
+    helper_command_mode(machine, " --control-stream-v1")
+}
+
+fn helper_command_mode(machine: &crate::machines::Machine, mode: &str) -> Result<Command, String> {
     let helper = machine
         .helper_name
         .as_deref()
@@ -108,21 +119,32 @@ pub fn request<T: DeserializeOwned>(
     if helper.len() != 32 || !helper.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("machine.invalid_response".into());
     }
-    let script = format!(
-        "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false); $OutputEncoding=[Console]::OutputEncoding; & (Join-Path $env:USERPROFILE '.herdr-kanban/helpers/{helper}.exe') --remote-helper; exit $LASTEXITCODE"
-    );
+    let mut command = ssh(machine
+        .ssh_target
+        .as_deref()
+        .ok_or("machine.invalid_target")?)?;
+    command.args([
+        "cmd",
+        "/d",
+        "/s",
+        "/c",
+        &format!(
+            "\"\"%USERPROFILE%\\.herdr-kanban\\helpers\\{helper}.exe\" --remote-helper{mode}\""
+        ),
+    ]);
+    Ok(command)
+}
+
+pub fn request<T: DeserializeOwned>(
+    machine: &crate::machines::Machine,
+    request: impl Serialize,
+) -> Result<T, String> {
+    let request = serde_json::to_value(request).map_err(|e| e.to_string())?;
+    if let Some(result) = crate::remote_control::request(machine, request.clone()) {
+        return serde_json::from_value(result?).map_err(|_| "machine.invalid_response".into());
+    }
     let input = serde_json::to_vec(&serde_json::json!({"version":1,"host_identity":machine.host_identity,"session":machine.session,"request":request})).map_err(|e|e.to_string())?;
-    let bytes = run(
-        powershell(
-            machine
-                .ssh_target
-                .as_deref()
-                .ok_or("machine.invalid_target")?,
-            &script,
-        )?,
-        input,
-        55,
-    )?;
+    let bytes = run(helper_command(machine, false)?, input, 55)?;
     let response: Envelope =
         serde_json::from_slice(&bytes).map_err(|_| "machine.invalid_response")?;
     if response.version != 1 || Some(&response.host_identity) != machine.host_identity.as_ref() {
@@ -132,4 +154,30 @@ pub fn request<T: DeserializeOwned>(
         return Err(error);
     }
     serde_json::from_value(response.result).map_err(|_| "machine.invalid_response".into())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    #[test]
+    #[ignore = "requires an explicitly selected SSH machine and its deployed release GUI helper"]
+    fn release_gui_helper_returns_preflight_envelope() {
+        use sha2::{Digest, Sha256};
+        let machine_file =
+            std::env::var("KANBAN_ACCEPTANCE_MACHINE_FILE").expect("explicit machine fixture");
+        let executable =
+            std::env::var("KANBAN_ACCEPTANCE_HELPER").expect("deployed release executable");
+        let bytes = std::fs::read(executable).unwrap();
+        // A debug console executable hides this failure. Require a PE GUI image.
+        let pe = u32::from_le_bytes(bytes[0x3c..0x40].try_into().unwrap()) as usize;
+        assert_eq!(&bytes[pe..pe + 4], b"PE\0\0");
+        let subsystem = u16::from_le_bytes(bytes[pe + 24 + 68..pe + 24 + 70].try_into().unwrap());
+        assert_eq!(subsystem, 2, "regression requires Windows GUI subsystem");
+        let mut machine: crate::machines::Machine =
+            serde_json::from_slice(&std::fs::read(machine_file).unwrap()).unwrap();
+        machine.helper_name = Some(format!("{:x}", Sha256::digest(&bytes))[..32].into());
+        let response: serde_json::Value =
+            super::request(&machine, serde_json::json!({"method":"preflight"})).unwrap();
+        assert_eq!(response["platform"], "windows");
+        assert_eq!(response["architecture"], "x86_64");
+    }
 }

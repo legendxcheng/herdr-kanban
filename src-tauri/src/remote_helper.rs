@@ -10,7 +10,13 @@ pub(crate) struct CliOutput {
 }
 
 pub fn run() -> i32 {
-    let result = if std::env::args().any(|arg| arg == "--search-stream-v1") {
+    let result = if std::env::args().any(|arg| arg == "--control-stream-v1") {
+        crate::search_wire::serve(
+            &mut std::io::stdin().lock(),
+            &mut std::io::stdout().lock(),
+            |envelope| control_response(envelope, &host_identity()),
+        )
+    } else if std::env::args().any(|arg| arg == "--search-stream-v1") {
         crate::search_wire::serve(
             &mut std::io::stdin().lock(),
             &mut std::io::stdout().lock(),
@@ -26,6 +32,39 @@ pub fn run() -> i32 {
             1
         }
     }
+}
+
+fn host_identity() -> String {
+    std::env::var_os("USERPROFILE")
+        .and_then(|home| {
+            std::fs::read_to_string(std::path::PathBuf::from(home).join(".herdr-kanban/identity"))
+                .ok()
+        })
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+fn control_response(envelope: &Value, identity: &str) -> Value {
+    let session = envelope["session"].as_str().filter(|s| !s.is_empty());
+    let mut response = json!({"version":2,"id":envelope["id"],"host_identity":identity,"session":envelope["session"]});
+    if identity.is_empty()
+        || envelope["version"] != 2
+        || envelope["host_identity"].as_str() != Some(identity)
+        || session.is_none()
+    {
+        response["error"] = json!("machine.identity_changed");
+        return response;
+    }
+    let mut cli = crate::herdr::Cli::from_env();
+    cli.session = session.unwrap().into();
+    // Separate transport failures from acknowledged application errors. Neither
+    // side retries a frame, including writes that fail after execution.
+    response["result"] = match execute(&cli, &envelope["request"]) {
+        Ok(value) => json!({"value":value,"error":null}),
+        Err(error) => json!({"value":null,"error":error}),
+    };
+    response
 }
 
 /// Only discovery and fixed read-only target validation; no arbitrary commands or writes.
@@ -86,6 +125,7 @@ fn search_response(envelope: &Value) -> Value {
             json!({"version":2,"id":envelope["id"],"host_identity":identity,"result":null,"error":error})
         }
     };
+    response["session"] = envelope["session"].clone();
     if serde_json::to_vec(&response).map_or(true, |bytes| bytes.len() > crate::search_wire::LIMIT) {
         response["result"] = Value::Null;
         response["error"] = json!("mention.index_limit");
@@ -220,6 +260,13 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
             _ => false,
         })),
         "workspaces" => serde_json::to_value(cli.workspaces()?).map_err(|e| e.to_string()),
+        "available_targets" => {
+            serde_json::to_value(cli.available(text("workspace")?, text("cwd")?)?)
+                .map_err(|e| e.to_string())
+        }
+        "targets" => {
+            serde_json::to_value(cli.targets(text("workspace")?)?).map_err(|e| e.to_string())
+        }
         "image" => {
             use base64::Engine;
             let bytes = request["data"]
@@ -284,6 +331,26 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn control_requires_identity_and_session_before_execution_and_discovery_rejects_writes() {
+        let base = json!({"version":2,"id":3,"host_identity":"host","session":"session",
+            "request":{"method":"hello"}});
+        let good = control_response(&base, "host");
+        assert_eq!(good["id"], 3);
+        assert_eq!(good["session"], "session");
+        assert_eq!(good["result"]["value"]["version"], 1);
+        assert!(control_response(&base, "wrong")["error"].is_string());
+        let mut missing = base.clone();
+        missing["session"] = Value::Null;
+        assert!(control_response(&missing, "host")["error"].is_string());
+        let mut write = base;
+        write["request"] =
+            json!({"method":"cli_output","args":["pane","send-text","test","must not execute"]});
+        // With no matching host or with an unsupported search method, the read-only
+        // entry point never reaches execute/cli_output.
+        let response = search_response(&write);
+        assert!(response["error"].is_string());
+    }
     #[test]
     fn remote_resource_requests_keep_paths_as_data_and_return_real_file_contents() {
         let root = std::env::temp_dir().join(format!("kanban-remote-{}", uuid::Uuid::new_v4()));

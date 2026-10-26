@@ -94,9 +94,14 @@ impl Workflow {
         let reporter = notify.clone();
         // A thread is owned by the application, not by an invoke future or WebView.
         if let Err(error) = std::thread::Builder::new().name("kanban-start".into()).spawn(move || {
+            let path = worker.db.lock().ok().and_then(|db| db.path()
+                .filter(|p| !p.is_empty()).map(std::path::PathBuf::from));
+            let timing = crate::start_timing::Timing::new(&changed.operation_id, worker.herdr.machine_id(), path);
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _connection = crate::remote_control::Scope::enter();
                 let progress = |stage: &str| -> Result<(), String> {
                     worker.start_stage(&changed.operation_id, stage)?;
+                    timing.stage(stage);
                     reporter(changed.clone());
                     Ok(())
                 };
@@ -120,6 +125,7 @@ impl Workflow {
                 Ok(Err(error)) => Some(error),
                 Err(_) => Some("flow.worker_failed".into()),
             };
+            timing.finish(error.is_none());
             if let Some(error) = error {
                 if let Ok(db) = worker.db.lock() {
                     let _ = db.execute("UPDATE lifecycle_operations SET state='unknown',error=?2 WHERE id=?1 AND state='pending' AND EXISTS(SELECT 1 FROM tasks WHERE id=lifecycle_operations.task_id)",

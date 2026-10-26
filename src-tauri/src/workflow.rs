@@ -160,6 +160,17 @@ pub trait Herdr: Send + Sync {
         })?;
         self.send(target, prompt)
     }
+    /// A transport may ask for exact receipt evidence while waiting for its status
+    /// acknowledgement. The workflow still owns the final atomic confirmation.
+    fn send_checking_receipt(
+        &self,
+        target: &Target,
+        prompt: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
+        _received: &dyn Fn() -> Result<bool, String>,
+    ) -> Result<(), SendError> {
+        self.send_checked(target, prompt, check_current)
+    }
 }
 
 pub struct Workflow {
@@ -432,12 +443,17 @@ impl Workflow {
             tx.commit().map_err(err)?;
         }
         crate::tasks::ensure_active(&*self.db.lock().map_err(err)?, task)?;
-        match self.herdr.send_checked(&target, prompt, &|| {
-            let db = self.db.lock().map_err(err)?;
-            crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
-            crate::tasks::ensure_active(&db, task)?;
-            crate::images::verify_operation(&db, operation)
-        }) {
+        match self.herdr.send_checking_receipt(
+            &target,
+            prompt,
+            &|| {
+                let db = self.db.lock().map_err(err)?;
+                crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
+                crate::tasks::ensure_active(&db, task)?;
+                crate::images::verify_operation(&db, operation)
+            },
+            &|| self.dispatch_receipt(&op).map(|receipt| receipt.is_some()),
+        ) {
             Ok(()) => match self.finish(&op, true, "") {
                 Ok(()) => Ok(record(&op)),
                 Err(_) => {

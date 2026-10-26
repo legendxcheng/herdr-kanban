@@ -2,6 +2,74 @@
 use crate::{machines::Machine, remote_transport as transport};
 use sha2::{Digest, Sha256};
 
+/// Start, search and viewing must all upgrade before using new helper methods.
+/// No database lock is held during upload; recheck identity before publishing.
+pub(crate) fn ensure_current(
+    db: &std::sync::Arc<std::sync::Mutex<rusqlite::Connection>>,
+    expected: &Machine,
+) -> Result<Machine, String> {
+    static SETUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let read = || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        let current = crate::machines::get(&conn, &expected.id)?;
+        if current.disabled {
+            return Err("machine.disabled".to_string());
+        }
+        if identity(&current) != identity(expected) {
+            return Err("machine.identity_changed".into());
+        }
+        Ok(current)
+    };
+    let hash = helper_hash()?;
+    let current = read()?;
+    if current.helper_name.as_deref() == Some(hash) {
+        return Ok(current);
+    }
+    let _setup = SETUP.lock().map_err(|e| e.to_string())?;
+    let current = read()?;
+    if current.helper_name.as_deref() == Some(hash) {
+        return Ok(current);
+    }
+    let installed = install(
+        &current,
+        &std::env::current_exe().map_err(|e| e.to_string())?,
+    )?;
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let latest = crate::machines::get(&conn, &current.id)?;
+    if latest.disabled || identity(&latest) != identity(&current) {
+        return Err("machine.identity_changed".into());
+    }
+    conn.execute(
+        "UPDATE machines SET helper_name=?2 WHERE id=?1",
+        rusqlite::params![current.id, installed.helper_name],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(installed)
+}
+
+fn identity(machine: &Machine) -> serde_json::Value {
+    serde_json::json!([
+        machine.id,
+        machine.profile_id,
+        machine.ssh_target,
+        machine.session,
+        machine.host_identity
+    ])
+}
+
+fn helper_hash() -> Result<&'static str, String> {
+    static HASH: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    HASH.get_or_init(|| {
+        let mut file = std::fs::File::open(std::env::current_exe().map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        let mut hash = Sha256::new();
+        std::io::copy(&mut file, &mut hash).map_err(|e| e.to_string())?;
+        Ok(format!("{:x}", hash.finalize())[..32].into())
+    })
+    .as_deref()
+    .map_err(Clone::clone)
+}
+
 const BOOTSTRAP: &str = r#"
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)

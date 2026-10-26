@@ -22,6 +22,7 @@ pub fn adapter(
     }
     let mut cli = crate::herdr::Cli::from_env();
     if machine.kind == "ssh" {
+        let machine = crate::remote_install::ensure_current(db, &machine)?;
         crate::remote_transport::verify_profile(&machine)?;
         let _: serde_json::Value =
             crate::remote_transport::request(&machine, serde_json::json!({"method":"hello"}))?;

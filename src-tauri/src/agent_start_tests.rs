@@ -17,7 +17,24 @@ $started = Test-Path "$PSScriptRoot/started"
 $term = if ($mode -eq 'replaced' -and $n -gt 0) { 'replacement' } else { 'term' }
 $shell = if ($mode -eq 'shell_replaced' -and $n -gt 0) { 3 } else { 1 }
 $pane = @{workspace_id='w1';pane_id='w1:p1';terminal_id=$term;agent_status='unknown'}
-if ($started) { $pane.agent='codex'; $pane.agent_status='idle'; $pane.interactive_ready=$true }
+if (-not $started -and $mode -in @('registry_cleared','registry_replaced')) {
+    if ($command -eq 'pane get') { $pane.agent='codex' }
+    if ($command -eq 'agent get') {
+        $pane.agent_status='idle'; $pane.interactive_ready=$true
+        if ($mode -eq 'registry_replaced') { $pane.terminal_id='replacement' }
+    }
+}
+if ($started) {
+    $pane.agent='codex'; $pane.agent_status='idle'; $pane.interactive_ready=$true
+    if ($mode -in @('delayed_ready','ready_replaced')) {
+        $reads=0
+        if (Test-Path "$PSScriptRoot/ready_reads") { $reads=[int](Get-Content "$PSScriptRoot/ready_reads") }
+        if ($command -eq 'agent get') { $reads++; Set-Content "$PSScriptRoot/ready_reads" $reads }
+        $pane.interactive_ready=($reads -ge 3)
+        $pane.launch_pending=($reads -lt 3)
+        if ($mode -eq 'ready_replaced' -and $reads -ge 2) { $pane.terminal_id='replacement' }
+    }
+}
 $result = switch ($command) {
     'pane get' { @{pane=$pane} }
     'agent get' { @{agent=$pane} }
@@ -117,6 +134,45 @@ fn pane_busy_requires_exact_complete_rejection_envelope() {
     ] {
         assert!(!agent_start_rejected_busy(error), "{error}");
     }
+}
+
+#[test]
+fn successful_launch_waits_for_the_same_codex_to_be_interactive_without_relaunching() {
+    let f = Fixture::new("delayed_ready");
+    let result = f.run();
+    assert!(
+        result.is_ok(),
+        "launch acknowledged before readiness: {result:?}"
+    );
+    assert_eq!(f.starts(), 2); // one explicit busy rejection, then one successful launch
+    assert_eq!(
+        std::fs::read_to_string(f.0.join("ready_reads"))
+            .unwrap()
+            .trim(),
+        "3"
+    );
+}
+
+#[test]
+fn waiting_for_launch_readiness_does_not_adopt_a_replaced_terminal() {
+    let f = Fixture::new("ready_replaced");
+    assert_eq!(f.run().unwrap_err(), "binding.identity_changed");
+    assert_eq!(f.starts(), 2);
+}
+
+#[test]
+fn pane_agent_cleared_between_reads_is_a_shell_only_after_process_confirmation() {
+    let f = Fixture::new("registry_cleared");
+    let result = f.run();
+    assert!(result.is_ok(), "pane/agent registry transition: {result:?}");
+    assert_eq!(f.starts(), 2);
+}
+
+#[test]
+fn pane_agent_transition_does_not_adopt_a_different_terminal() {
+    let f = Fixture::new("registry_replaced");
+    assert_eq!(f.run().unwrap_err(), "binding.identity_changed");
+    assert!(!f.0.join("starts").exists());
 }
 
 #[test]

@@ -129,13 +129,12 @@ impl Cli {
             }
             thread::sleep(Duration::from_millis(150));
         }
-        let (mut live, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
-        if live.terminal_id != target.terminal_id
-            || live.agent != "codex"
-            || !self.ready(&live, &info)
-        {
-            return Err("flow.not_idle".into());
-        }
+        // agent.start acknowledges the launch, not necessarily interactive readiness.
+        // In particular, a reused pane may still be detecting the new Codex process.
+        let (mut live, info) = self.wait_started_codex(
+            ready_shell.as_ref().ok_or("binding.identity_unknown")?,
+            check_current,
+        )?;
         if let Some(expected) = resume {
             let deadline = Instant::now() + Duration::from_secs(5);
             #[cfg(windows)]
@@ -173,6 +172,43 @@ impl Cli {
         }
         Ok(live)
     }
+    fn wait_started_codex(
+        &self,
+        shell: &Target,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(Target, Value), String> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut observed: Option<Target> = None;
+        loop {
+            check_current()?;
+            match self.inspect_pane(&shell.workspace_id, &shell.pane_id) {
+                Ok((live, info)) => {
+                    if live.terminal_id != shell.terminal_id
+                        || live.process_id.split(':').next() != shell.process_id.split(':').next()
+                        || observed
+                            .as_ref()
+                            .is_some_and(|old| !old.same_identity(&live))
+                        || (!live.agent.is_empty() && live.agent != "codex")
+                    {
+                        return Err("binding.identity_changed".into());
+                    }
+                    if live.agent == "codex" && live.process_id != shell.process_id {
+                        observed.get_or_insert_with(|| live.clone());
+                        if self.ready(&live, &info) {
+                            check_current()?;
+                            return Ok((live, info));
+                        }
+                    }
+                }
+                Err(error) if error == "binding.identity_unknown" => {}
+                Err(error) => return Err(error),
+            }
+            if Instant::now() >= deadline {
+                return Err("flow.not_idle".into());
+            }
+            thread::sleep(Duration::from_millis(150));
+        }
+    }
     pub(super) fn read_codex_session(&self, target: &Target) -> Result<Option<String>, String> {
         self.check_target(target).map_err(|e| e.message)?;
         let doc = self.json(&["agent", "get", &target.pane_id])?;
@@ -204,6 +240,15 @@ impl Cli {
         prompt: &str,
         check_current: &dyn Fn() -> Result<(), String>,
     ) -> Result<(), SendError> {
+        self.send_prompt_with_receipt(target, prompt, check_current, &|| Ok(false))
+    }
+    pub(super) fn send_prompt_with_receipt(
+        &self,
+        target: &Target,
+        prompt: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
+        received: &dyn Fn() -> Result<bool, String>,
+    ) -> Result<(), SendError> {
         let check = || {
             check_current().map_err(|message| SendError {
                 message,
@@ -215,7 +260,7 @@ impl Cli {
         self.check_target(target)?;
         #[cfg(windows)]
         if target.agent == "codex" {
-            return self.submit_windows_codex(target, prompt, check_current);
+            return self.submit_windows_codex(target, prompt, check_current, received);
         }
         check()?;
         self.request(&["agent", "prompt", &target.pane_id, prompt])
@@ -231,13 +276,33 @@ impl Cli {
             .pointer("/result/pane")
             .ok_or("herdr.invalid_response")?
             .clone();
-        if info.get("agent").and_then(Value::as_str).is_some() {
+        if info
+            .get("agent")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())
+        {
             let doc = self.json(&["agent", "get", pane])?;
-            info = doc
+            let current = doc
                 .pointer("/result/agent")
-                .ok_or("herdr.invalid_response")?
-                .clone();
-            return Ok((self.live_target(workspace, &info)?, info));
+                .filter(|v| v.is_object())
+                .ok_or("herdr.invalid_response")?;
+            for key in ["workspace_id", "pane_id", "terminal_id"] {
+                if field(current, key)? != field(&info, key)? {
+                    return Err("binding.identity_changed".into());
+                }
+            }
+            info = current.clone();
+            match info.get("agent") {
+                Some(Value::String(agent)) if !agent.is_empty() => {
+                    return Ok((self.live_target(workspace, &info)?, info));
+                }
+                None | Some(Value::Null) | Some(Value::String(_)) => {
+                    // The old Agent can disappear between pane.get and agent.get.
+                    // Treat absence as a candidate shell, then require the process
+                    // check below to prove its foreground group equals its shell PID.
+                }
+                _ => return Err("herdr.invalid_response".into()),
+            }
         }
         if field(&info, "workspace_id")? != workspace {
             return Err("binding.identity_changed".into());

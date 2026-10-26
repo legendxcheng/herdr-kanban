@@ -383,6 +383,7 @@ fn launch(session: Arc<session::Session>, cli: &Cli, main_hwnd: isize) -> Result
     thread::spawn(move || {
         let _connection = connection;
         let events = windows::WindowEvents::new(main_hwnd);
+        let mut window_sync = windows::WindowSync::default();
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut hwnd = 0;
         while !monitor.stopped.load(Ordering::Acquire) {
@@ -417,7 +418,7 @@ fn launch(session: Arc<session::Session>, cli: &Cli, main_hwnd: isize) -> Result
                     monitor.stop("terminal.disconnected");
                     break;
                 }
-                windows::sync(
+                window_sync.sync(
                     main_hwnd,
                     hwnd,
                     *selected.bounds.lock().unwrap(),

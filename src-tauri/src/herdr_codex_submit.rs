@@ -65,8 +65,9 @@ impl Cli {
         target: &Target,
         prompt: &str,
         check_current: &dyn Fn() -> Result<(), String>,
+        received: &dyn Fn() -> Result<bool, String>,
     ) -> Result<(), SendError> {
-        submit(
+        submit_observed(
             &target.pane_id,
             prompt,
             |args| {
@@ -91,16 +92,34 @@ impl Cli {
                 SubmissionState::parse(agent)
             },
             std::thread::sleep,
+            || {
+                check_current().map_err(|message| error(&message))?;
+                let found = received().map_err(|message| error(&message))?;
+                check_current().map_err(|message| error(&message))?;
+                Ok(found)
+            },
         )
     }
 }
 
+#[cfg(test)]
 fn submit(
+    pane: &str,
+    prompt: &str,
+    request: impl FnMut(&[&str]) -> Result<(), SendError>,
+    observe: impl FnMut() -> Result<SubmissionState, SendError>,
+    pause: impl FnMut(Duration),
+) -> Result<(), SendError> {
+    submit_observed(pane, prompt, request, observe, pause, || Ok(false))
+}
+
+fn submit_observed(
     pane: &str,
     prompt: &str,
     mut request: impl FnMut(&[&str]) -> Result<(), SendError>,
     mut observe: impl FnMut() -> Result<SubmissionState, SendError>,
     mut pause: impl FnMut(Duration),
+    mut received: impl FnMut() -> Result<bool, SendError>,
 ) -> Result<(), SendError> {
     // A busy turn cannot acknowledge this particular prompt; reject before writing.
     observe()?.ensure_idle()?;
@@ -128,6 +147,12 @@ fn submit(
             if observe()?.advanced_from(&before_enter) {
                 return Ok(());
             }
+            // A missing status event need not consume the whole 10-second window.
+            // This is only a hint to the workflow's existing exact-receipt path:
+            // it must revalidate and commit evidence/session/state atomically.
+            if poll % 5 == 0 && received()? {
+                return Err(error("dispatch.submit_verify_required"));
+            }
             if poll == ACK_POLLS || Instant::now() >= deadline {
                 break;
             }
@@ -150,6 +175,54 @@ mod tests {
             status: status.into(),
             ready: true,
         }
+    }
+
+    #[test]
+    fn exact_receipt_hint_ends_stale_ack_wait_after_one_enter_without_resending() {
+        let writes = Cell::new(0);
+        let polls = Cell::new(0);
+        let error = submit_observed(
+            "pane",
+            "测试",
+            |_| {
+                writes.set(writes.get() + 1);
+                Ok(())
+            },
+            || Ok(state(9, "idle")),
+            |duration| {
+                if duration == ACK_INTERVAL {
+                    polls.set(polls.get() + 1);
+                }
+            },
+            || {
+                assert_eq!(writes.get(), 4);
+                Ok(true)
+            },
+        )
+        .unwrap_err();
+        assert!(error.uncertain);
+        assert_eq!(error.message, "dispatch.submit_verify_required");
+        assert_eq!(writes.get(), 4);
+        assert_eq!(polls.get(), 0);
+    }
+
+    #[test]
+    fn receipt_read_failure_keeps_submission_uncertain_and_does_not_write_again() {
+        let writes = Cell::new(0);
+        let error = submit_observed(
+            "pane",
+            "测试",
+            |_| {
+                writes.set(writes.get() + 1);
+                Ok(())
+            },
+            || Ok(state(9, "idle")),
+            |_| {},
+            || Err(super::error("binding.identity_changed")),
+        )
+        .unwrap_err();
+        assert!(error.uncertain);
+        assert_eq!(writes.get(), 4);
     }
 
     #[test]

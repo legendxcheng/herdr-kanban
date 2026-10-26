@@ -1,4 +1,4 @@
-//! Bounded, length-prefixed JSON. Only read-only discovery uses this protocol.
+//! Bounded, length-prefixed JSON shared by separate discovery and control streams.
 use serde_json::Value;
 use std::io::{Read, Write};
 

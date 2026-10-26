@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -95,7 +95,6 @@ pub struct Search {
     files: Cache<Vec<FileEntry>>,
     skills: Cache<Vec<SkillEntry>>,
     remotes: Mutex<HashMap<String, Arc<Mutex<Remote>>>>,
-    setups: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     stop: AtomicBool,
 }
 
@@ -217,49 +216,7 @@ impl Search {
             remotes.entry(key).or_default().clone()
         };
         let mut remote = remote.lock().map_err(|e| e.to_string())?;
-        let mut current =
-            crate::machines::get(&*db.lock().map_err(|e| e.to_string())?, &machine.id)?;
-        if current.disabled {
-            return Err("machine.disabled".into());
-        }
-        if identity(&current) != identity(machine) {
-            return Err("machine.identity_changed".into());
-        }
-        // Older helpers cannot speak the stream protocol. Publish this executable
-        // under its content hash using the established verified installer once.
-        let expected = helper_hash()?;
-        if current.helper_name.as_deref() != Some(expected) {
-            let setup = self
-                .setups
-                .lock()
-                .map_err(|e| e.to_string())?
-                .entry(current.id.clone())
-                .or_default()
-                .clone();
-            let _setup = setup.lock().map_err(|e| e.to_string())?;
-            current = crate::machines::get(&*db.lock().map_err(|e| e.to_string())?, &machine.id)?;
-            if current.disabled || identity(&current) != identity(machine) {
-                return Err("machine.identity_changed".into());
-            }
-            if current.helper_name.as_deref() != Some(expected) {
-                remote.connection.take();
-                let installed = crate::remote_install::install(
-                    &current,
-                    &std::env::current_exe().map_err(|e| e.to_string())?,
-                )?;
-                let conn = db.lock().map_err(|e| e.to_string())?;
-                let latest = crate::machines::get(&conn, &current.id)?;
-                if latest.disabled || identity(&latest) != identity(&current) {
-                    return Err("machine.identity_changed".into());
-                }
-                conn.execute(
-                    "UPDATE machines SET helper_name=?2 WHERE id=?1",
-                    rusqlite::params![current.id, installed.helper_name],
-                )
-                .map_err(|e| e.to_string())?;
-                current = installed;
-            }
-        }
+        let current = crate::remote_install::ensure_current(db, machine)?;
         if self.stop.load(Ordering::Acquire) {
             return Err("machine.cancelled".into());
         }
@@ -332,20 +289,6 @@ impl Search {
         })?;
         Ok(skill_discovery::filter(&skills, query))
     }
-}
-
-fn helper_hash() -> Result<&'static str, String> {
-    static HASH: OnceLock<Result<String, String>> = OnceLock::new();
-    HASH.get_or_init(|| {
-        use sha2::{Digest, Sha256};
-        let mut file = std::fs::File::open(std::env::current_exe().map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
-        let mut hash = Sha256::new();
-        std::io::copy(&mut file, &mut hash).map_err(|e| e.to_string())?;
-        Ok(format!("{:x}", hash.finalize())[..32].into())
-    })
-    .as_deref()
-    .map_err(Clone::clone)
 }
 
 #[cfg(test)]
