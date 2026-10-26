@@ -46,6 +46,7 @@ export function useRemoteMachines() {
     running.current.set(id, request);
   }, [apply]);
   const refresh = useCallback(async (reload = false) => {
+    if (reload) for (const m of known.current) revisions.current[m.id] = (revisions.current[m.id] ?? 0) + 1;
     const request = ++sequence.current;
     try {
       const list = await api.listMachines();
@@ -85,9 +86,15 @@ export function useRemoteMachines() {
     if (!machine || moving.current.has(machine)) return;
     moving.current.add(machine);
     revisions.current[machine] = (revisions.current[machine] ?? 0) + 1;
-    try { const snapshot = await api.moveProject(projectId, before); if (alive.current) apply(machine, snapshot); }
+    const revision = revisions.current[machine];
+    try { const snapshot = await api.moveProject(projectId, before); if (alive.current && revision === revisions.current[machine]) apply(machine, snapshot); }
     finally { moving.current.delete(machine); revisions.current[machine]++; syncOne(machine); }
   }, [projects, apply, syncOne]);
+  const forget = (id: string) => {
+    const machine = projects.find(p => p.id === id)?.machine_id;
+    if (machine) revisions.current[machine] = (revisions.current[machine] ?? 0) + 1;
+    setProjects(previous => previous.filter(p => p.id !== id));
+  };
   useEffect(() => {
     alive.current = true;
     void refresh();
@@ -97,5 +104,5 @@ export function useRemoteMachines() {
     return () => { alive.current = false; sequence.current++; window.clearInterval(timer); window.removeEventListener("focus", focus); };
   }, [refresh]);
   const sorted = machines.flatMap(m => projects.filter(p => p.machine_id === m.id));
-  return { machines, projects: sorted, operations: Object.values(operations).flat(), errors, busy, refresh, move };
+  return { machines, projects: sorted, operations: Object.values(operations).flat(), errors, busy, refresh, move, forget };
 }

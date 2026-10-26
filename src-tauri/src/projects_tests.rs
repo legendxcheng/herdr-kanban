@@ -4,6 +4,23 @@ use std::sync::{Arc, Mutex};
 
 #[path = "project_reorder_tests.rs"]
 mod reorder;
+#[path = "project_visibility_tests.rs"]
+mod visibility;
+
+// Existing synchronization/reordering tests start with an explicit user selection.
+fn select_discovered(service: &ProjectService) -> Snapshot {
+    let choices = service.choices().unwrap();
+    let ids: Vec<_> = choices
+        .workspaces
+        .iter()
+        .filter(|w| w.project_id.is_some() && !w.blocked)
+        .map(|w| w.workspace.id.clone())
+        .collect();
+    if !ids.is_empty() {
+        service.add_existing(&choices.session, &ids).unwrap();
+    }
+    service.sync().unwrap()
+}
 
 #[derive(Default)]
 struct FakeHerdr {
@@ -30,8 +47,8 @@ fn machines_with_the_same_workspace_identity_keep_separate_projects_and_presence
     *remote.spaces.lock().unwrap() = vec![navigation_workspace("w1")];
     let local_service = ProjectService::new(db.clone(), local.clone());
     let remote_service = ProjectService::new(db.clone(), remote.clone());
-    let local_id = local_service.sync().unwrap().projects[0].id.clone();
-    remote_service.sync().unwrap();
+    let local_id = select_discovered(&local_service).projects[0].id.clone();
+    select_discovered(&remote_service);
     let projects = visible_list(&db.lock().unwrap()).unwrap();
     assert_eq!(projects.len(), 2);
     assert!(
@@ -77,11 +94,9 @@ fn navigation_cache_survives_upgrade_reopen_and_offline_without_resurrecting_clo
         navigation_workspace("c"),
     ];
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
-    service.sync().unwrap();
+    select_discovered(&service);
     *herdr.spaces.lock().unwrap() = vec![navigation_workspace("c"), navigation_workspace("a")];
-    let expected = service
-        .sync()
-        .unwrap()
+    let expected = select_discovered(&service)
         .projects
         .iter()
         .map(|p| p.id.clone())
@@ -94,7 +109,7 @@ fn navigation_cache_survives_upgrade_reopen_and_offline_without_resurrecting_clo
             .iter()
             .map(|p| p.name.clone())
             .collect::<Vec<_>>(),
-        vec!["c", "a", "Legacy"]
+        vec!["c", "a"]
     );
     drop(service);
     let db = Connection::open(&path).unwrap();
@@ -121,8 +136,12 @@ fn navigation_cache_survives_upgrade_reopen_and_offline_without_resurrecting_clo
     assert_eq!(list(&service.db.lock().unwrap()).unwrap().len(), 4);
     *herdr.offline.lock().unwrap() = false;
     herdr.spaces.lock().unwrap().clear();
-    assert_eq!(service.sync().unwrap().projects[0].id, "legacy");
-    assert_eq!(visible_list(&service.db.lock().unwrap()).unwrap().len(), 1);
+    assert!(service.sync().unwrap().projects.is_empty());
+    assert!(
+        visible_list(&service.db.lock().unwrap())
+            .unwrap()
+            .is_empty()
+    );
     drop(service);
     std::fs::remove_file(path).unwrap();
 }
@@ -134,9 +153,7 @@ fn navigation_failed_sync_transaction_keeps_last_order_and_visibility() {
     let herdr = Arc::new(FakeHerdr::default());
     *herdr.spaces.lock().unwrap() = vec![navigation_workspace("a"), navigation_workspace("b")];
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
-    let expected = service
-        .sync()
-        .unwrap()
+    let expected = select_discovered(&service)
         .projects
         .iter()
         .map(|p| p.id.clone())
@@ -159,7 +176,7 @@ fn navigation_online_project_with_unresolved_creation_is_not_mistaken_for_closed
     let herdr = Arc::new(FakeHerdr::default());
     *herdr.spaces.lock().unwrap() = vec![navigation_workspace("a")];
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
-    let project = service.sync().unwrap().projects.remove(0);
+    let project = select_discovered(&service).projects.remove(0);
     service.db.lock().unwrap().execute("INSERT INTO workspace_operations(id,session,name,cwd,project_id,workspace_id,state,created_at) VALUES ('pending','default','a','.',?1,'a','unknown','now')",[&project.id]).unwrap();
     let snapshot = service.sync().unwrap();
     assert_eq!(snapshot.projects[0].id, project.id);
@@ -177,12 +194,14 @@ fn navigation_follows_herdr_reordering_and_insertion_without_changing_project_id
     let herdr = Arc::new(FakeHerdr::default());
     *herdr.spaces.lock().unwrap() = vec![navigation_workspace("a"), navigation_workspace("b")];
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
-    let first = service.sync().unwrap();
+    let first = select_discovered(&service);
     *herdr.spaces.lock().unwrap() = vec![
         navigation_workspace("b"),
         navigation_workspace("c"),
         navigation_workspace("a"),
     ];
+    assert_eq!(service.sync().unwrap().projects.len(), 2); // New discoveries stay hidden.
+    service.add_existing("default", &["c".into()]).unwrap();
     let next = service.sync().unwrap();
     assert_eq!(
         next.projects
@@ -215,7 +234,7 @@ fn navigation_hides_closed_workspace_and_restores_only_the_same_identity_with_hi
     let herdr = Arc::new(FakeHerdr::default());
     *herdr.spaces.lock().unwrap() = vec![navigation_workspace("a"), navigation_workspace("b")];
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
-    let first = service.sync().unwrap();
+    let first = select_discovered(&service);
     let project = &first.projects[0];
     let task = crate::tasks::create(
         &service.db.lock().unwrap(),
@@ -243,12 +262,18 @@ fn navigation_hides_closed_workspace_and_restores_only_the_same_identity_with_hi
         name: "a".into(),
         directory: Some(".".into()),
     });
-    let new = service
-        .sync()
+    assert!(
+        !service
+            .sync()
+            .unwrap()
+            .projects
+            .iter()
+            .any(|p| p.workspace_id.as_deref() == Some("new-a"))
+    );
+    let new = list(&service.db.lock().unwrap())
         .unwrap()
-        .projects
         .into_iter()
-        .find(|p| p.name == "a")
+        .find(|p| p.workspace_id.as_deref() == Some("new-a"))
         .unwrap();
     assert_ne!(new.id, project.id);
     assert!(
@@ -374,7 +399,7 @@ fn imports_workspace_once_and_follows_rename_by_identity() {
         directory: Some("E:/Alpha".into()),
     });
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
-    let first = service.sync().unwrap();
+    let first = select_discovered(&service);
     assert_eq!(first.projects.len(), 1);
     assert_eq!(first.projects[0].root_path, "E:/Alpha");
     herdr.spaces.lock().unwrap()[0].name = "Renamed".into();
@@ -404,7 +429,7 @@ fn upgrades_unique_legacy_project_without_losing_tasks() {
         directory: Some("E:/Alpha".into()),
     });
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr);
-    let snapshot = service.sync().unwrap();
+    let snapshot = select_discovered(&service);
     assert_eq!(snapshot.projects.len(), 1);
     assert_eq!(snapshot.projects[0].id, "old");
     assert_eq!(snapshot.projects[0].directory_source, "herdr");
@@ -506,7 +531,7 @@ fn legacy_binding_identity_wins_over_a_stale_name_even_during_recovery() {
         directory: Some("E:/Alpha".into()),
     });
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr);
-    let snapshot = service.sync().unwrap();
+    let snapshot = select_discovered(&service);
     assert_eq!(snapshot.projects.len(), 1);
     assert_eq!(snapshot.projects[0].id, "old");
     assert_eq!(snapshot.projects[0].directory_source, "herdr");
@@ -523,7 +548,7 @@ fn directory_fallback_is_explicit_and_offline_does_not_erase_cached_projects() {
         directory: None,
     });
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
-    let p = service.sync().unwrap().projects.remove(0);
+    let p = select_discovered(&service).projects.remove(0);
     assert_eq!(p.directory_source, "missing");
     service.update(&p.id, "Alpha", Some(".")).unwrap();
     herdr.spaces.lock().unwrap()[0].directory = Some("E:/Authoritative".into());
@@ -553,9 +578,11 @@ fn duplicate_legacy_projects_are_never_merged_and_explicit_link_is_unique() {
         directory: Some(".".into()),
     });
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr);
-    let snapshot = service.sync().unwrap();
-    assert_eq!(snapshot.projects.len(), 2);
-    assert!(snapshot.projects.iter().all(|p| p.workspace_id.is_none()));
+    let snapshot = select_discovered(&service);
+    assert!(snapshot.projects.is_empty());
+    let legacy = list(&service.db.lock().unwrap()).unwrap();
+    assert_eq!(legacy.len(), 2);
+    assert!(legacy.iter().all(|p| p.workspace_id.is_none()));
     service.link(Some("a"), "w1", None).unwrap();
     assert_eq!(
         service.link(Some("b"), "w1", None).unwrap_err(),
@@ -626,9 +653,9 @@ fn equal_ids_in_other_sessions_do_not_change_an_existing_projects_identity() {
         directory: None,
     });
     let service = ProjectService::new(db.clone(), first);
-    let old = service.sync().unwrap().projects.remove(0);
+    let old = select_discovered(&service).projects.remove(0);
     let other = ProjectService::new(db, second);
-    let snapshot = other.sync().unwrap();
+    let snapshot = select_discovered(&other);
     assert_eq!(snapshot.projects.len(), 2);
     assert_eq!(
         other.update(&old.id, "Wrong", None).unwrap_err(),
@@ -699,7 +726,7 @@ fn renamed_unconfirmed_workspace_can_be_explicitly_adopted_after_sync() {
     *herdr.lose_response.lock().unwrap() = true;
     assert!(service.create(&op, "Alpha", ".").is_err());
     herdr.rename_workspace("w1", "Externally renamed").unwrap();
-    let imported = service.sync().unwrap().projects.remove(0);
+    let imported = select_discovered(&service).projects.remove(0);
     let task = crate::tasks::create(
         &service.db.lock().unwrap(),
         &imported.id,

@@ -37,7 +37,7 @@ it("groups existing projects under the Local execution computer", async () => {
     return original(command, args);
   });
   render(<App />);
-  expect(await screen.findByRole("heading", { name: "本机" })).toBeTruthy();
+  expect(await screen.findByRole("heading", { name: "Local · 本机" })).toBeTruthy();
   expect(await screen.findByRole("button", { name: new RegExp(`^${project.name}`) })).toBeTruthy();
 });
 

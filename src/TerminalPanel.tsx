@@ -85,7 +85,7 @@ export function TerminalPanel({ task, machineName, onRepair, maximized = false, 
   return <aside className={`terminal-panel${maximized ? " terminal-panel-maximized" : ""}`} aria-label={tr("terminal.label")}>
     <header className="terminal-header">
       <strong title={task ? `${machineName ?? tr("machine.local")} · ${task.name}` : undefined}>{task?.name ?? tr("terminal.label")}</strong>
-      {task && <span className="terminal-machine">{machineName ?? tr("machine.local")}</span>}
+      {(machineName || task) && <span className="terminal-machine" title={machineName ?? tr("machine.local")}>{machineName ?? tr("machine.local")}</span>}
       <span role="status">{tr(state)}</span>
       {onToggleMaximized && <button type="button" className="btn-icon terminal-size-toggle"
         aria-label={tr(maximized ? "terminal.restore" : "terminal.maximize")}

@@ -8,6 +8,7 @@ mod image_commands;
 mod images;
 mod lifecycle;
 mod machine_commands;
+mod machine_enrollment;
 mod machine_routing;
 mod machines;
 #[cfg(test)]
@@ -30,6 +31,7 @@ mod models;
 mod native_ssh;
 mod native_terminal;
 mod project_commands;
+mod project_visibility;
 mod project_git;
 mod projects;
 mod skill_discovery;
@@ -104,6 +106,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             machine_commands::list_machines,
             machine_commands::enroll_machine,
+            machine_commands::enrollment_status,
             machine_commands::saved_machines,
             machine_commands::connect_machine,
             machine_commands::rename_machine,
@@ -115,6 +118,10 @@ pub fn run() {
             image_commands::close_image_draft,
             commands::list_projects,
             project_commands::create_project,
+            project_commands::workspace_choices,
+            project_commands::add_existing_workspaces,
+            project_commands::hide_project,
+            project_commands::navigation_state,
             project_commands::update_project,
             project_commands::delete_project,
             project_commands::sync_projects,

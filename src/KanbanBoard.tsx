@@ -241,6 +241,7 @@ export function KanbanBoard({ project, machineName, terminalMaximized = false, o
         {loading && tasks.length === 0 ? <div className="board-loading"><span className="spinner" /><span>{tr("common.loading")}</span></div> : <>
         <div className="workspace-bar">
           <h1 className="workspace-project" title={project.name}>{project.name}</h1>
+          {machineName && <span className="machine-source" title={machineName}>{machineName}</span>}
           <span className="breadcrumb-sep">/</span>
           <span className="workspace-current" title={project.herdr_workspace}>{project.herdr_workspace}</span>
           <span className="board-meta">

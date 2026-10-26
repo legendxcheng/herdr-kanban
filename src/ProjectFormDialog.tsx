@@ -6,11 +6,13 @@ import { tr, useLocalizedMessage } from "./i18n";
 interface ProjectFormDialogProps {
   machines?: Machine[];
   existing?: Project | null;
+  initialMachineId?: string;
+  onAddExisting?: () => void;
   onClose: () => void;
   onSaved: () => void;
 }
-export function ProjectFormDialog({ machines = [], existing, onClose, onSaved }: ProjectFormDialogProps) {
-  const [machineId, setMachineId] = useState(existing?.machine_id ?? "local");
+export function ProjectFormDialog({ machines = [], existing, initialMachineId = "local", onAddExisting, onClose, onSaved }: ProjectFormDialogProps) {
+  const [machineId, setMachineId] = useState(existing?.machine_id ?? initialMachineId);
   const [name, setName] = useState(existing?.name ?? "");
   const [root, setRoot] = useState(existing?.root_path ?? "");
   const [mode, setMode] = useState(existing ? (existing.workspace_id && existing.sync_status !== "missing" ? "edit" : "link") : "create");
@@ -24,6 +26,12 @@ export function ProjectFormDialog({ machines = [], existing, onClose, onSaved }:
   const busy = useRef(false);
   const operation = useRef(crypto.randomUUID());
   const [refresh, setRefresh] = useState(0);
+  const dialog = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
+    dialog.current?.focus();
+    return () => previous?.focus();
+  }, []);
   useEffect(() => {
     if (mode !== "link") return;
     let active = true;
@@ -59,17 +67,24 @@ export function ProjectFormDialog({ machines = [], existing, onClose, onSaved }:
   const directoryReadonly = mode === "edit" && existing?.directory_source === "herdr";
   const close = () => { if (!busy.current) onClose(); };
   return <div className="dialog-overlay" onMouseDown={close}>
-    <section className="dialog workspace-dialog" role="dialog" aria-label={tr(existing ? "workspace.edit" : "workspace.new")} onMouseDown={(e) => e.stopPropagation()}>
+    <section ref={dialog} tabIndex={-1} className="dialog workspace-dialog" role="dialog" aria-modal="true" aria-label={tr(existing ? "workspace.edit" : "workspace.new")} onMouseDown={(e) => e.stopPropagation()} onKeyDown={e => {
+      if (e.key === "Escape") close();
+      if (e.key === "Tab") {
+        const items = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)') ?? []);
+        if (e.shiftKey && (document.activeElement === items[0] || document.activeElement === dialog.current)) { e.preventDefault(); items[items.length-1]?.focus(); }
+        else if (!e.shiftKey && document.activeElement === items[items.length-1]) { e.preventDefault(); items[0]?.focus(); }
+      }
+    }}>
       <h3>{tr(existing ? "workspace.edit" : "workspace.new")}</h3>
       <p className="hint">{tr("workspace.source_help")}</p>
       {!existing && <div className="dialog-section"><label htmlFor="workspace-machine">{tr("machine.computer")}</label>
         <select id="workspace-machine" value={machineId} disabled={saving || uncertain} onChange={e => { setMachineId(e.target.value); setRoot(""); setSelected(""); setSnapshot(null); operation.current = crypto.randomUUID(); }}>
-          <option value="local">{tr("machine.local")}</option>
-          {machines.filter(m => !m.disabled).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          <option value="local">Local · {tr("machine.local")}</option>
+          {machines.filter(m => !m.disabled && m.helper_name).map(m => <option key={m.id} value={m.id}>Remote · {m.name}</option>)}
         </select></div>}
       {!existing && <div className="workspace-mode">
         <button disabled={saving || uncertain} className={mode === "create" ? "btn-primary" : "btn-secondary"} onClick={() => setMode("create")}>{tr("workspace.new")}</button>
-        <button disabled={saving || uncertain} className={mode === "link" ? "btn-primary" : "btn-secondary"} onClick={() => setMode("link")}>{tr("workspace.add_existing")}</button>
+        <button disabled={saving || uncertain} className={mode === "link" ? "btn-primary" : "btn-secondary"} onClick={() => onAddExisting ? onAddExisting() : setMode("link")}>{tr("workspace.add_existing")}</button>
       </div>}
       {mode === "link" ? <div className="dialog-section">
         <label htmlFor="workspace-choice">{tr("workspace.choose")}</label>

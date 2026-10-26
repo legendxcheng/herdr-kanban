@@ -13,13 +13,13 @@ export function WorkspaceRecovery({ operation, onChanged }: { operation: Workspa
     if (locked.current) return;
     locked.current = true; setBusy(true); setError("");
     try {
-      if (operation.state === "failed") await api.createProject(operation.name, operation.cwd, operation.id);
+      if (operation.state === "failed") await api.createProject(operation.name, operation.cwd, operation.id, operation.machine_id);
       else await api.recoverWorkspace(operation.id, selected || null);
       onChanged();
     } catch (e) {
       setError(String(e));
       try {
-        const snapshot = await api.syncProjects();
+        const snapshot = await api.syncProjects(operation.machine_id);
         setChoices(snapshot.workspaces.filter((w) => !snapshot.operations.some((o) => o.id !== operation.id && (o.workspace_id === w.id || w.name === `kanban-create-${o.id}`) && o.state !== "failed")));
       } catch { /* Show original error; cached tasks remain available. */ }
     } finally { locked.current = false; setBusy(false); }

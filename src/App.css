@@ -1,4 +1,14 @@
 /* ── Token system ──────────────────────────────────────────────────────────── */
+.workspace-choices { max-height: min(38vh, 320px); overflow-y: auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.dialog-section .workspace-choice { display: flex; min-width: 0; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--border, #333); border-radius: 6px; }
+.dialog-section .workspace-choice input { width: auto; flex: 0 0 auto; }
+.workspace-choice > span { flex: 1; min-width: 0; }
+.workspace-choice strong, .workspace-choice span small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-choice small { color: var(--text-muted, #aaa); font-size: 12px; }
+.machine-source { display: inline-block; flex: 0 0 auto; font-size: 12px; color: var(--text-muted, #aaa); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-machine { flex: 0 0 auto; min-width: 60px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.machine-heading { overflow-wrap: anywhere; }
+.workspace-dialog { max-height: calc(100dvh - 48px); overflow-y: auto; }
 :root {
   color-scheme: dark;
   /* Supabase-inspired charcoal surfaces; no remote style or font dependencies. */

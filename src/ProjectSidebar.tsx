@@ -9,6 +9,7 @@ import { tr, useLocale, errorText } from "./i18n";
 import { notify } from "./Toast";
 import { LanguageSelect } from "./LanguageSelect";
 import { MachineDialog } from "./MachineDialog";
+import { WorkspaceAddDialog, machineLabel } from "./WorkspaceAddDialog";
 
 interface ProjectSidebarProps {
   machines?: Machine[];
@@ -19,6 +20,9 @@ interface ProjectSidebarProps {
   gitStatuses?: Record<string, ProjectGitStatus>;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onHide?: (id: string) => Promise<void>;
+  recoveryProjects?: Project[];
+  onRecovery?: (id: string) => void;
   onChanged: () => void;
   onOverview?: () => void;
   operations?: WorkspaceOperation[];
@@ -29,11 +33,12 @@ interface ProjectSidebarProps {
   onMove?: (projectId: string, beforeProjectId: string | null) => Promise<void>;
 }
 
-export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy = {}, inert = false, projects, gitStatuses = {}, selectedId, onSelect, onChanged, onOverview, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
+export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy = {}, inert = false, projects, gitStatuses = {}, selectedId, onSelect, onHide, recoveryProjects = [], onRecovery, onChanged, onOverview, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
   useLocale();
   const [showNew, setShowNew] = useState(false);
   const [manageMachines, setManageMachines] = useState(false);
   const [editTarget, setEditTarget] = useState<Project | null>(null);
+  const [hiding, setHiding] = useState<string | null>(null);
   const dragging = useRef<string | null>(null);
   const suppressClick = useRef(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
@@ -66,6 +71,12 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
     if (!confirm(tr("workspace.remove_confirm"))) return;
     try { await api.deleteProject(id); onChanged(); } catch (e) { notify({ error: String(e) },"error"); }
   }
+  async function handleHide(id: string) {
+    if (hiding || !onHide) return;
+    setHiding(id);
+    try { await onHide(id); } catch(e) { notify({ error: String(e) }, "error"); }
+    finally { setHiding(null); }
+  }
 
   return (
     <aside className="sidebar" aria-label={tr("sidebar.navigation")} inert={inert}>
@@ -77,11 +88,11 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
       <div className="sidebar-header">
         <h2>{tr("sidebar.projects")} <span className="sidebar-count">{projects.length}</span></h2>
         {onOverview && <button onClick={onOverview} className="btn-icon" aria-label={tr("overview.title")} title={tr("overview.title")}><Icon name="board" /></button>}
-        <button onClick={() => setShowNew(true)} className="btn-icon" aria-label={tr("project.new")} title={tr("project.new")}><Icon name="plus" /></button>
+        <button onClick={() => setShowNew(true)} className="btn-icon" aria-label={tr("workspace.add")} title={tr("workspace.add")}><Icon name="plus" /></button>
       </div>
       <div className="project-list" aria-busy={reordering} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setInsertion(null); }}>
         {groups.map(group => <section key={group.id} className="machine-group">
-        <h3 className="machine-heading">{group.name}</h3>
+        <h3 className="machine-heading" title={machineLabel(group.id,group.name)}>{machineLabel(group.id,group.name)}</h3>
         {group.disabled && <p className="hint">{tr("machine.disabled")}</p>}
         {machineBusy[group.id] && <p role="status">{tr("workspace.syncing")}</p>}
         {group.id !== "local" && !group.disabled && !machineBusy[group.id] && machineErrors[group.id] === "" && <p className="hint">{tr("machine.online")}</p>}
@@ -117,6 +128,7 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
               </span>
             </button>
             <div className="project-actions">
+              {onHide && <button onClick={() => void handleHide(p.id)} disabled={hiding !== null} className="btn-icon" title={tr("workspace.hide_help")} aria-label={`${tr("workspace.hide")} ${p.name}`}><Icon name="hide" size={14} /></button>}
               <button onClick={() => setEditTarget(p)} className="btn-icon" title={tr("project.edit")} aria-label={`${tr("project.edit")} ${p.name}`}><Icon name="edit" size={14} /></button>
               <button onClick={() => handleDelete(p.id)} className="btn-icon" title={tr("project.delete")} aria-label={`${tr("project.delete")} ${p.name}`}><Icon name="trash" size={14} /></button>
             </div>
@@ -130,18 +142,19 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
         {syncError && <p className="error" role="alert">{syncError}</p>}
       </div>
       {operations.length > 0 && <div className="workspace-pending"><strong>{tr("workspace.pending_title")}</strong>{operations.map((op) => <WorkspaceRecovery key={op.id} operation={op} onChanged={onChanged} />)}</div>}
-      <button className="sidebar-create btn-secondary" onClick={() => setShowNew(true)}><Icon name="plus" />{tr("project.new")}</button>
+      {recoveryProjects.length > 0 && <div className="workspace-pending"><strong>{tr("workspace.hidden_recovery")}</strong>{recoveryProjects.map(p => <button key={p.id} className="btn-ghost" onClick={() => onRecovery?.(p.id)}>{machineLabel(p.machine_id ?? "local", machines.find(m => m.id === p.machine_id)?.name)} · {p.name}</button>)}</div>}
+      <button className="sidebar-create btn-secondary" onClick={() => setShowNew(true)}><Icon name="plus" />{tr("workspace.add")}</button>
       <LanguageSelect />
       <button className="btn-secondary" onClick={() => setManageMachines(true)}>{tr("machine.manage")}</button>
       {manageMachines && <MachineDialog machines={machines} onChanged={onChanged} onClose={() => setManageMachines(false)} />}
       <div className="sidebar-footer"><Icon name="terminal" /><div><strong>{tr("sidebar.local")}</strong><span>{tr("sidebar.footer")}</span></div></div>
 
       {showNew && (
-        <ProjectFormDialog
+        <WorkspaceAddDialog
           key="new-workspace"
           machines={machines}
           onClose={() => setShowNew(false)}
-          onSaved={() => { setShowNew(false); onChanged(); }}
+          onSaved={onChanged}
         />
       )}
       {editTarget && (

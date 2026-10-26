@@ -107,6 +107,32 @@ pub fn list(db: &Connection) -> Result<Vec<Machine>, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Early schema-12 databases predate connection metadata. Never infer those
+/// columns from the old version marker, or overwrite already verified metadata.
+pub fn migrate_connection_metadata(db: &Connection) -> rusqlite::Result<()> {
+    if db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=14)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )? {
+        return Ok(());
+    }
+    let tx = db.unchecked_transaction()?;
+    let columns = {
+        let mut query = tx.prepare("PRAGMA table_info(machines)")?;
+        query
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for column in ["helper_name", "host_identity"] {
+        if !columns.iter().any(|name| name == column) {
+            tx.execute_batch(&format!("ALTER TABLE machines ADD COLUMN {column} TEXT;"))?;
+        }
+    }
+    tx.execute("INSERT INTO schema_migrations(version) VALUES(14)", [])?;
+    tx.commit()
+}
+
 pub fn get(db: &Connection, id: &str) -> Result<Machine, String> {
     list(db)?
         .into_iter()
@@ -210,6 +236,74 @@ pub fn ensure_enabled(db: &Connection, id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn early_machine_schema_upgrades_missing_connection_columns_without_losing_identity() {
+        for missing in [
+            vec!["helper_name", "host_identity"],
+            vec!["helper_name"],
+            vec!["host_identity"],
+            vec![],
+        ] {
+            let db = Connection::open_in_memory().unwrap();
+            crate::db::init(&db).unwrap();
+            let profile = SavedMachine {
+                id: "existing-profile".into(),
+                label: "devpc".into(),
+                target: "devpc".into(),
+                session: "default".into(),
+                enabled: true,
+            };
+            let machine = import_profile(&db, &profile, "windows").unwrap();
+            db.execute("UPDATE machines SET helper_name='installed-helper',host_identity='verified-host',disabled=1 WHERE id=?1", [&machine.id]).unwrap();
+            db.execute("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at,machine_id) VALUES('retained','kept','C:/kept','kept','then',?1)", [&machine.id]).unwrap();
+            db.execute_batch("INSERT INTO tasks(id,project_id,name,status,prompt_json,created_at,updated_at) VALUES('kept-task','retained','kept task','todo','{}','then','then');
+                INSERT INTO project_visibility(project_id,visible) VALUES('retained',0);
+                DELETE FROM schema_migrations WHERE version=14;").unwrap();
+            for column in &missing {
+                db.execute_batch(&format!("ALTER TABLE machines DROP COLUMN {column}"))
+                    .unwrap();
+            }
+            crate::db::init(&db).unwrap();
+            crate::db::init(&db).unwrap();
+            let restored = get(&db, &machine.id)
+                .expect("upgraded machine list must support the Connect query");
+            assert!(restored.disabled);
+            assert_eq!(restored.profile_id, Some(profile.id.clone()));
+            assert_eq!(
+                restored.helper_name.as_deref(),
+                (!missing.contains(&"helper_name")).then_some("installed-helper")
+            );
+            assert_eq!(
+                restored.host_identity.as_deref(),
+                (!missing.contains(&"host_identity")).then_some("verified-host")
+            );
+            assert_eq!(project_machine(&db, "retained").unwrap(), machine.id);
+            assert_eq!(
+                db.query_row("SELECT name FROM tasks WHERE id='kept-task'", [], |r| {
+                    r.get::<_, String>(0)
+                })
+                .unwrap(),
+                "kept task"
+            );
+            assert!(
+                !crate::project_visibility::selected(&db)
+                    .unwrap()
+                    .contains("retained")
+            );
+            assert_eq!(
+                import_profile(&db, &profile, "windows").unwrap().id,
+                machine.id
+            );
+            assert!(
+                db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=14)",
+                    [],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap()
+            );
+        }
+    }
     #[test]
     fn legacy_database_keeps_history_and_targets_when_upgraded_and_reopened() {
         let file = std::env::temp_dir().join(format!(

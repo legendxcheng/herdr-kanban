@@ -7,6 +7,40 @@ use std::sync::Arc;
 use tauri::State;
 
 #[tauri::command]
+pub async fn workspace_choices(
+    service: State<'_, Arc<ProjectService>>,
+    machine_id: String,
+) -> Result<crate::projects::WorkspaceChoices, String> {
+    let service = service.inner().clone();
+    run(move || service.for_machine(&machine_id)?.choices()).await
+}
+#[tauri::command]
+pub async fn add_existing_workspaces(
+    service: State<'_, Arc<ProjectService>>,
+    machine_id: String,
+    session: String,
+    workspace_ids: Vec<String>,
+) -> Result<(), String> {
+    let service = service.inner().clone();
+    run(move || {
+        service
+            .for_machine(&machine_id)?
+            .add_existing(&session, &workspace_ids)
+    })
+    .await
+}
+#[tauri::command]
+pub fn hide_project(db: State<'_, crate::commands::DbState>, id: String) -> Result<(), String> {
+    crate::project_visibility::hide(&*db.0.lock().map_err(|e| e.to_string())?, &id)
+}
+#[tauri::command]
+pub fn navigation_state(
+    db: State<'_, crate::commands::DbState>,
+) -> Result<crate::project_visibility::NavigationState, String> {
+    crate::project_visibility::state(&*db.0.lock().map_err(|e| e.to_string())?)
+}
+
+#[tauri::command]
 pub async fn project_git_statuses(
     app: State<'_, Arc<crate::workflow::Workflow>>,
     state: State<'_, crate::commands::DbState>,

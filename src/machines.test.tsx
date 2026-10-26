@@ -15,10 +15,11 @@ it("keeps a failed connection actionable and never asks for a password in the we
   await waitFor(() => expect((screen.getByLabelText("Herdr 已保存的电脑") as HTMLSelectElement).value).toBe("profile"));
   fireEvent.click(screen.getByRole("button",{name:"连接"}));
   expect(await screen.findByRole("alert")).toBeTruthy();
-  expect(changed).not.toHaveBeenCalled();
+  expect(changed).toHaveBeenCalledOnce(); // Refresh the staged, unavailable machine after failure.
   expect((screen.getByRole("button",{name:"连接"}) as HTMLButtonElement).disabled).toBe(false);
   expect(document.querySelector('input[type="password"]')).toBeNull();
   fireEvent.change(screen.getByLabelText("远端 Herdr 会话"),{target:{value:"development"}});
+  fireEvent.change(screen.getByLabelText("SSH 别名"),{target:{value:"devpc"}});
   fireEvent.click(screen.getByRole("button",{name:"打开 Windows 密码接入终端"}));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("enroll_machine",{target:"devpc",session:"development"}));
 });

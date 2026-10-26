@@ -1,10 +1,13 @@
 param([Parameter(Mandatory=$true)][string]$Settings)
 $ErrorActionPreference='Stop'
+$resultState='failed'
+$resultError='machine.enrollment_failed'
 try {
  $config=Get-Content -LiteralPath $Settings -Raw | ConvertFrom-Json
  if ($config.target -notmatch '^[A-Za-z0-9][A-Za-z0-9_.@:-]*$') { throw 'Invalid SSH alias' }
  if ($config.session -notmatch '^[A-Za-z0-9_.-]+$') { throw 'Invalid Herdr session' }
  $sshDir=Join-Path $env:USERPROFILE '.ssh'
+ $resultError='machine.key_setup_failed'
  $keyFile=Join-Path $sshDir ('herdr_kanban_'+$config.key_id)
  New-Item -ItemType Directory -Force $sshDir | Out-Null
  if (-not (Test-Path -LiteralPath $keyFile)) {
@@ -31,10 +34,13 @@ if(-not $exists -and $isAdmin){
 '@
  $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remote.Replace('__PUBLIC_KEY__',$publicKey)))
  Write-Host 'Enter your SSH password in this terminal. Kanban does not receive or store it.' -ForegroundColor Cyan
+ $resultError='machine.authorization_failed'
  & ssh -o ConnectTimeout=30 -- $config.target powershell -NoLogo -NoProfile -EncodedCommand $encoded
  if($LASTEXITCODE -ne 0){throw 'SSH authorization failed or timed out. Retry onboarding.'}
+ $resultError='machine.key_verification_failed'
  & ssh -o BatchMode=yes -o ConnectTimeout=15 -i $keyFile -- $config.target hostname
  if($LASTEXITCODE -ne 0){throw 'Dedicated key verification failed'}
+ $resultError='machine.ssh_config_failed'
  $configFile=Join-Path $sshDir 'config'
  $previous=if(Test-Path -LiteralPath $configFile){[IO.File]::ReadAllText($configFile)}else{''}
  $marker='# Herdr Kanban '+$config.key_id
@@ -42,7 +48,16 @@ if(-not $exists -and $isAdmin){
   $keyPath=$keyFile.Replace('\','/')
   [IO.File]::AppendAllText($configFile,"`r`n$marker`r`nHost $($config.target)`r`n    IdentityFile `"$keyPath`"`r`n",[Text.UTF8Encoding]::new($false))
  }
+ $resultError='machine.profile_setup_failed'
  & $config.herdr machine add $config.target --remote-session $config.session --label $config.target
  if($LASTEXITCODE -ne 0){throw 'Herdr machine setup did not complete'}
- Write-Host 'Ready. Return to Kanban, refresh saved computers, and connect.' -ForegroundColor Green
+ $resultState='succeeded'
+ $resultError=''
+ Write-Host 'Authorization complete. Return to Kanban for connection verification.' -ForegroundColor Green
 }catch{Write-Host $_.Exception.Message -ForegroundColor Red}
+finally {
+ if($config -and $config.result -and $config.operation_id) {
+  $result=@{id=$config.operation_id;state=$resultState;error=$resultError} | ConvertTo-Json -Compress
+  [IO.File]::WriteAllText($config.result,$result,[Text.UTF8Encoding]::new($false))
+ }
+}

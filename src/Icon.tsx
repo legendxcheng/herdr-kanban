@@ -16,6 +16,7 @@ const paths = {
   trash: "M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7",
   archive: "M3 3h18v5H3z M5 8v13h14V8 M9 12h6",
   close: "m6 6 12 12 M6 18 18 6",
+  hide: "m3 3 18 18 M10 5a12 12 0 0 1 11 7 17 17 0 0 1-3 4 M6 6a17 17 0 0 0-3 6c4 8 12 9 17 5 M9 9a4 4 0 0 0 6 6",
 } as const;
 
 export type IconName = keyof typeof paths;

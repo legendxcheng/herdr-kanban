@@ -7,6 +7,9 @@ export interface Machine {
   platform?: string | null; helper_name?: string | null;
 }
 export interface SavedMachine { id: string; label: string; target: string; session: string; enabled: boolean }
+export interface EnrollmentStatus { id: string; state: "waiting" | "succeeded" | "failed" | "cancelled"; error: string }
+export interface WorkspaceChoices { machine_id: string; session: string; workspaces: (HerdrWorkspace & { project_id: string | null; shown: boolean; blocked: boolean })[] }
+export interface NavigationState { configured: boolean; recovery_projects: Project[] }
 
 export interface Project {
   machine_id?: string;
@@ -30,7 +33,7 @@ export interface ProjectGitStatus {
   state: "branch" | "detached" | "not_repository" | "unavailable";
   head: string | null;
 }
-export interface WorkspaceOperation { id: string; session: string; name: string; cwd: string; workspace_id: string | null; project_id: string; state: string; error: string }
+export interface WorkspaceOperation { machine_id?: string; id: string; session: string; name: string; cwd: string; workspace_id: string | null; project_id: string; state: string; error: string }
 export interface ProjectSnapshot { session: string; projects: Project[]; workspaces: HerdrWorkspace[]; operations: WorkspaceOperation[] }
 
 export interface Task {

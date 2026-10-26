@@ -2,6 +2,9 @@
 use crate::{models::Project, workflow::Herdr};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::sync::{Arc, Mutex};
+#[path = "project_selection.rs"]
+mod selection;
+pub use selection::WorkspaceChoices;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Workspace {
@@ -62,9 +65,10 @@ pub fn list(conn: &Connection) -> Result<Vec<Project>, String> {
 }
 /// Navigation hides confirmed missing identities; recovery still uses the full list.
 pub fn visible_list(conn: &Connection) -> Result<Vec<Project>, String> {
+    let selected = crate::project_visibility::selected(conn)?;
     Ok(list(conn)?
         .into_iter()
-        .filter(|p| p.workspace_id.is_none() || p.sync_status != "missing")
+        .filter(|p| selected.contains(&p.id) && (p.workspace_id.is_none() || p.sync_status != "missing"))
         .collect())
 }
 impl ProjectService {
@@ -379,6 +383,7 @@ impl ProjectService {
             params![self.herdr.session(), workspace, self.herdr.machine_id()],
         )
         .map_err(err)?;
+        crate::project_visibility::show(&tx, &id, true)?;
         tx.commit().map_err(err)?;
         drop(db);
         self.get(&id)
@@ -547,6 +552,7 @@ impl ProjectService {
             [&op.id],
         )
         .map_err(err)?;
+        crate::project_visibility::show(&tx, &op.project_id, false)?;
         tx.commit().map_err(err)?;
         list(&db)?
             .into_iter()

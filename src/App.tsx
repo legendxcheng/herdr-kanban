@@ -8,17 +8,21 @@ import { useProjectSync } from "./useProjectSync";
 import { TaskOverviewDialog } from "./TaskOverviewDialog";
 import "./App.css";
 import { tr, useLocale } from "./i18n";
+import { WorkspaceAddDialog, machineLabel } from "./WorkspaceAddDialog";
 
 export default function App() {
   useLocale();
-  const { projects, machines, machineErrors, machineBusy, gitStatuses, operations, syncing, error, refresh, session, reordering, move } = useProjectSync();
+  const { projects, navigation, hide, machines, machineErrors, machineBusy, gitStatuses, operations, syncing, error, refresh, session, reordering, move } = useProjectSync();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [terminalMaximized, setTerminalMaximized] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [recoveryId, setRecoveryId] = useState<string | null>(null);
 
   useEffect(() => { setSelectedId((id) => projects.some((p) => p.id === id) ? id : projects[0]?.id ?? null); }, [projects]);
 
-  const selectedProject = projects.find((p) => p.id === selectedId) ?? null;
+  const recoveryProject = navigation.recovery_projects.find(p => p.id === recoveryId);
+  const selectedProject = recoveryProject ?? projects.find((p) => p.id === selectedId) ?? null;
   useEffect(() => { setTerminalMaximized(false); }, [selectedProject?.id]);
   const toggleTerminalMaximized = () => setTerminalMaximized(value => !value);
 
@@ -33,7 +37,10 @@ export default function App() {
         projects={projects}
         gitStatuses={gitStatuses}
         selectedId={selectedId}
-        onSelect={setSelectedId}
+        onSelect={id => { setRecoveryId(null); setSelectedId(id); }}
+        onHide={hide}
+        recoveryProjects={navigation.recovery_projects}
+        onRecovery={setRecoveryId}
         onChanged={refresh}
         operations={operations}
         syncing={syncing}
@@ -46,7 +53,7 @@ export default function App() {
       <main className="board-area">
         {selectedProject ? (
           <KanbanBoard key={selectedProject.id} project={selectedProject}
-            machineName={machines.find(m => m.id === selectedProject.machine_id)?.name ?? tr("machine.local")}
+            machineName={machineLabel(selectedProject.machine_id ?? "local", machines.find(m => m.id === selectedProject.machine_id)?.name)}
             terminalMaximized={terminalMaximized} onToggleTerminalMaximized={toggleTerminalMaximized} />
         ) : (
           <div className="board-workspace">
@@ -55,6 +62,8 @@ export default function App() {
               <span className="eyebrow">{tr("app.eyebrow")}</span>
               <h1 className="empty-state-title">{tr("app.empty_title")}</h1>
               <p className="empty-state-desc">{tr("app.empty_description")}</p>
+              <p>{tr(navigation.configured ? "workspace.empty_selection" : "workspace.first_selection")}</p>
+              <button className="btn-primary" onClick={() => setAddOpen(true)}>{tr("workspace.add")}</button>
             </div>
             <TerminalPanel task={null} maximized={terminalMaximized} onToggleMaximized={toggleTerminalMaximized} />
           </div>
@@ -62,7 +71,8 @@ export default function App() {
       </main>
       {overviewOpen && <TaskOverviewDialog projects={projects}
         onClose={() => setOverviewOpen(false)}
-        onSelect={id => { setSelectedId(id); setOverviewOpen(false); }} />}
+        onSelect={id => { setRecoveryId(null); setSelectedId(id); setOverviewOpen(false); }} />}
+      {addOpen && <WorkspaceAddDialog machines={machines} onClose={() => setAddOpen(false)} onSaved={refresh} />}
     </div>
   );
 }

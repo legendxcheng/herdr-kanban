@@ -26,7 +26,9 @@ pub fn db_path() -> PathBuf {
 
 pub fn init(conn: &Connection) -> Result<()> {
     init_before_machines(conn)?;
-    crate::machines::init(conn)
+    crate::machines::init(conn)?;
+    crate::project_visibility::init(conn)?;
+    crate::machines::migrate_connection_metadata(conn)
 }
 
 pub(crate) fn init_before_machines(conn: &Connection) -> Result<()> {

@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-26。Workspace 选择性显示与 SSH 接入界面（GitHub #14、#15–#20）：本地和远端均支持隐藏、搜索/多选添加已有、新建后同步 Herdr 并显示；schema 13 独立保存显示偏好，外部发现不再自动加入左栏。Local/Remote 来源与连接状态分开显示；授权操作有明确结果，连接检查通过后进入目标电脑的 Workspace 选择。实现见 6.1.3 和第 12 节，验证及首次密码交互未覆盖项见 [本次验证记录](docs/verification/2026-10-26-workspace-selection.md)。
+
 2026-10-25 SSH 多机支持正在实施：一个本地数据库按稳定机器身份管理本机及 Windows SSH 电脑。机器注册、隔离迁移、远端资源/任务路由和官方原生终端桥接已接入；真实远端文件/技能/图片、完成与原会话精确恢复已分阶段通过；真实 Tauri 跨机输入、最大化和专用 SSH 断线重连也已通过；具体边界见验证记录。实现与验证边界见第 12 节及 [SSH 验证记录](docs/verification/2026-10-25-ssh-multi-machine.md)。
 
 2026-10-25 Herdr 默认隐藏侧栏：每次打开查看窗口生成独立客户端配置和状态，明确收起并完全隐藏侧栏；拖动分隔线跨越 Herdr 窄屏阈值时不再恢复展开。真实桌面拖动、最大化/恢复、主动展开后重连及任务切换验证见[侧栏验收](docs/verification/2026-10-25-herdr-hidden-sidebar.md)。
@@ -92,6 +94,7 @@ herdr-kanban/
 │  ├─ taskFlow.ts                  启动投影列、未决守卫及准备文案
 │  ├─ useTaskFlowUpdates.ts         启动事件、前台 2 秒及焦点对账
 │  ├─ ProjectSidebar.tsx           项目列表、Workspace 拖动排序和管理入口
+│  ├─ WorkspaceAddDialog.tsx       执行电脑选择、完整候选搜索/多选、远端接入与新建衔接
 │  ├─ TaskOverviewDialog.tsx       按需统计弹窗、本地日界线、查询合并及关闭清理
 │  ├─ ProjectFormDialog.tsx        新建/关联 Herdr workspace、改名及回退目录
 │  ├─ useProjectSync.ts            启动/焦点/前台 15 秒同步、重排与旧响应隔离
@@ -156,6 +159,10 @@ herdr-kanban/
 │     ├─ herdr_cli.rs              无 shell 的有界进程执行、输出及响应错误分类
 │     ├─ herdr_socket.rs           有界 JSONL 重排请求、Windows 管道/Unix socket、响应与管道回归
 │     ├─ projects.rs / project_commands.rs  Workspace 同步、创建恢复及拖动重排服务/IPC
+│     ├─ project_selection.rs      ProjectService 完整候选、按稳定身份批量添加与事务回滚
+│     ├─ project_visibility.rs     schema 13、显示偏好、首次配置状态和隐藏项目待核实入口
+│     ├─ project_visibility_tests.rs  隐藏/重加、迁移重开、批量原子性与跨机隔离
+│     ├─ machine_enrollment.rs     原生授权子进程、精确操作结果、关闭判定及临时文件清理
 │     ├─ project_git.rs / project_git_tests.rs  有界只读 Git 分支查询及真实临时仓库回归
 │     ├─ project_reorder_tests.rs  SQLite 排序、未知结果读回、重开与失败恢复回归
 │     ├─ herdr_workspace.rs        session 文件定位与只读 workspace 目录元数据
@@ -255,7 +262,8 @@ flowchart TD
 | [App.tsx](src/App.tsx) | `selectedId`、`terminalMaximized`；从同步列表派生当前项目 | 将同步、排序状态与操作下传侧栏；按 Project ID 保持看板；协调终端最大化和背景禁用，项目变化后恢复分栏 |
 | [useProjectSync.ts](src/useProjectSync.ts) | 项目、session、未决记录、刷新及排序状态 | 请求合并；重排前后增加代次，隔离旧刷新；失败只读回实际顺序 |
 | [useProjectGitStatus.ts](src/useProjectGitStatus.ts) | 独立于 Herdr 的项目 Git 状态 | 启动、目录变化及已有刷新触发查询；串行合并在途请求，拒绝迟到结果 |
-| [ProjectSidebar.tsx](src/ProjectSidebar.tsx) | 新建弹窗、编辑目标、拖动来源与插入位置 | 当前 session 的 ready 项可拖；松手提交稳定 ID 和下一项锚点；完成 CRUD 后刷新 |
+| [ProjectSidebar.tsx](src/ProjectSidebar.tsx) | 添加弹窗、编辑目标、隐藏操作、拖动来源与插入位置 | 当前 session 的 ready 项可拖；同电脑移动；隐藏只修改本地偏好，未决记录保留入口 |
+| [WorkspaceAddDialog.tsx](src/WorkspaceAddDialog.tsx) | 电脑、候选、搜索、多选及接入/新建子流程 | 完整候选不依赖可见导航；迟到查询隔离；连接成功刷新不关闭添加流程 |
 | [ProjectFormDialog.tsx](src/ProjectFormDialog.tsx) | 名称、目录、workspace ID、操作 ID、保存状态和错误 | 创建/关联/改名、回退目录、未知结果核实 |
 | [KanbanBoard.tsx](src/KanbanBoard.tsx) | 卡片列表、加载、创建弹窗、拖拽状态、Agent 列表、编辑 ID、待派发对象 | 加载/创建/变更状态；协调编辑与派发弹层 |
 | [TaskCard.tsx](src/TaskCard.tsx) | 展示名称、实时状态圆点、优先级、异常与紧凑图标操作 | 编辑/派发回调；完成交给看板流转；删除/归档调用 API |
@@ -343,6 +351,8 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 
 ### 4.3 数据路径、迁移与约束
 
+2026-10-26 升级兼容修复：`db::init` 在 schema 13 后执行 `machines::migrate_connection_metadata`（schema 14）。早期 schema 12 的 machines 表可能没有 `helper_name` / `host_identity`；迁移通过 `PRAGMA table_info` 识别缺列，在同一事务中仅补缺列并写入版本 14，保留已有连接身份和已验证元数据。缺失的元数据保持 NULL，由正式连接检查填充；不清库、不重建项目及任务。覆盖两列缺失、单列缺失、两列已存在、重复初始化与保留历史的回归；故障真实数据库副本已完成 Tauri → Devpc 连接 → Workspace 列表验证，见本次 Workspace 验证记录。
+
 默认数据库为 `%APPDATA%\herdr-kanban\kanban.db`；隔离验收可设置 `KANBAN_DATA_DIR`。它与 Python 主应用的 tasks.json 独立。启动持有同目录数据库锁，避免第二实例把活跃派发误判为中断；进程退出自动释放锁。
 
 显式启用 `foreign_keys=ON` 和 3 秒 busy timeout。增量建表保留原项目、任务、prompt、快照及目标文本；原有 cs_task_id 迁移仍兼容。status 仍无 SQL CHECK，但状态命令只接受 todo/done，拒绝直接改为 in_progress；进入开发中必须经手动派发或自动启动/恢复工作流。pending/unknown 操作阻止相关任务的冲突操作，并阻止项目删除和身份重新关联；任务删除不受未决状态阻挡；已知身份一致的自动迁移与名称同步可继续，以保留核实证据。关闭中断允许在重新核验原目标后重试。
@@ -355,7 +365,11 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 
 | 命令 | 主要输入 | 返回/副作用 |
 | --- | --- | --- |
-| `list_projects` | 无 | 缓存导航 `Project[]`；按持久化 workspace 顺序排序，隐藏已确认 missing 的关联项目 |
+| `list_projects` | 无 | 缓存导航 `Project[]`；只返回已选择显示且未确认 missing 的项目，按持久化 workspace 顺序排序 |
+| `navigation_state` | 无 | 返回是否已配置显示选择、未显示项目中含 pending/unknown 任务操作的恢复入口；只读本地数据库 |
+| `workspace_choices` | machineId | 查询指定电脑/session 的完整在线候选，包含 Project 关联、shown 与未决创建 blocked 标记 |
+| `add_existing_workspaces` | machineId、session、workspaceIds | 在线验证全部身份后，在本地事务复用/关联 Project、解除显式选中的旧排除并设置显示；不创建 Herdr Workspace |
+| `hide_project` | id | 仅写本地显示偏好，离线/停用机器可用；不删除数据或关闭 Herdr 资源 |
 | `sync_projects` | machineId? | 同步指定电脑的 session 后返回与缓存相同规则的可见 Project、在线 workspace、未决操作快照；完整记录仍在数据库保留 |
 | `project_git_statuses` | projectIds | 后端解析可见项目当前目录，在释放数据库锁后只读查询 Git，返回 ProjectGitStatus[]；不依赖 Herdr 在线 |
 | `move_project` | projectId、可空 beforeProjectId | 验证 session/在线身份，调用 Herdr 原子移动单个 Workspace；按权威结果更新原顺序缓存并返回 Snapshot |
@@ -402,11 +416,11 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 
 `App → useProjectSync → sync_projects → ProjectService → Herdr CLI + SQLite`。启动先展示本地缓存，焦点及前台 15 秒刷新保持现有列表直至在线成功；显式刷新/本地 CRUD 后允许重新加载持久化导航，使离线本地移除仍能生效。请求合并，迟到结果不覆盖后续刷新。在线失败保留最近有效项目列表及任务，不等同于空列表。
 
-成功同步在同一事务内更新名称、目录、存在状态与 `workspace_order`，顺序直接来自 Herdr workspace 列表，不按名称或 ID 推算。`projects::visible_list` 为缓存 IPC 与在线快照共用导航投影：隐藏 `workspace_id` 非空且 `sync_status=missing` 的项目，未关联旧项目继续保留。内部 `projects::list`/`get` 仍可读取完整记录，供身份匹配、关联与未决操作恢复使用。在线存在但被未决创建保护的已关联项目仍更新存在状态与位置，不误判为关闭。读取或落库失败不提交部分排序/隐藏结果。
+成功同步在同一事务内更新名称、目录、存在状态与 `workspace_order`，顺序直接来自 Herdr workspace 列表，不按名称或 ID 推算。`projects::visible_list` 为缓存 IPC 与在线快照共用导航投影：只返回用户已选择显示、且未被确认 missing 的项目。内部 `projects::list`/`get` 仍可读取完整记录，供身份匹配、关联与未决操作恢复使用；隐藏及未关联旧项目不被删除。在线存在但被未决创建保护的已关联项目仍更新存在状态与位置，不误判为关闭。读取或落库失败不提交部分排序/存在状态；同步不会修改显示偏好。
 
 关闭只隐藏导航，不删除 Project、卡片、提示词、会话、绑定及操作历史，也不写入本地移除排除记录；同一 session + workspace ID 再次出现复用原 Project ID，同名新 ID 不接管任务。排序保持当前 Project ID、看板和终端；选中项目消失时 App 回退到首个可见项目，没有可见项目则显示空态，原看板卸载释放本应用终端查看连接。同步不关闭 Herdr 资源，也不改变任务业务状态。表单草稿仍独立。
 
-已有 workspace 按稳定 ID 自动导入。旧 Project 优先使用一致的历史绑定/未决目标身份，其次唯一的名称与等价目录；冲突保留待关联，不合并任务。Windows 目录比较统一大小写、斜杠及尾分隔符。
+已有 workspace 按稳定 ID 同步为内部候选，默认不加入左栏；用户通过添加已有选择显示。旧 Project 优先使用一致的历史绑定/未决目标身份，其次唯一的名称与等价目录；冲突保留待关联，不合并任务。Windows 目录比较统一大小写、斜杠及尾分隔符。
 
 默认目录按在线 ID 从 Herdr version 3 会话数据 `identity_cwd` 只读补充，不读取 pane cwd。默认 session 使用 `%APPDATA%/herdr/session.json`；非默认 session 或自定义 Herdr 配置必须用 `KANBAN_HERDR_SESSION_FILE` 指定对应文件，否则降级。读取上限 8 MiB；格式、目录无效时保留缓存或请求本地回退。回退与后来读取的权威目录不同会显示冲突，由用户明确选择；不会写回 Herdr 会话文件。
 
@@ -436,6 +450,16 @@ Kanban 改名调用 Herdr 并读回确认；外部改名按 ID 同步。外部�
 后端仅接收项目 ID，在数据库短锁内读取当前可见项目与目录，再交给后台线程查询。按目录去重，每批最多四个并发查询；每个目录共用两秒 Git 进程截止时间，超时终止并回收子进程，输出限 16 KiB。使用无 shell 的 `git -C <目录> symbolic-ref --quiet --short HEAD`，游离时读取 `rev-parse --short HEAD`；支持未产生提交的分支、仓库子目录与 worktree。不读取 pane cwd、不改变分支或写入 Git 配置，清除宿主 GIT_DIR/GIT_WORK_TREE 等仓库定位环境，Git 权限/安全目录拒绝按不可用处理。
 
 验证：共享工作区 110 项前端测试、111 项 Rust 常规测试及生产构建通过，7 项已有 Herdr/Agent live 用例忽略。独立 Windows Tauri/WebView2 + SQLite + 真实 Git 验证七类目录、完整悬浮文案、长文本省略、中英文及 Herdr 离线下的手动/焦点事件/15 秒刷新；未执行本次真实 Herdr/Codex 生命周期或安装包替换。详见 [Workspace 分支验收记录](docs/verification/2026-10-24-kanban-workspace-branch.md)。
+
+### 6.1.3 Workspace 显示选择（2026-10-26）
+
+`WorkspaceAddDialog → workspace_choices / add_existing_workspaces → ProjectService` 用完整在线候选完成单项及批量添加，独立于侧栏可见列表。请求包含读取候选时的 session，后端校验当前路由；同一电脑/session/Workspace 复用原 Project ID。候选缺失、未决创建保护或数据库失败使整次添加回滚，重复选入幂等，旧删除排除仅在显式添加时清除。网络查询在数据库锁外执行。添加已有不发 Herdr 创建命令。
+
+schema 13 的 `project_visibility(project_id, visible)` 保存明确显示/隐藏决定；缺行表示未选入，`navigation_preferences.configured` 区分首次引导和显式空选择。升级保留全部项目及任务而不默认全选。创建及第一次核实成功使用 `INSERT OR IGNORE` 完成显示意图，重复核实直接返回原结果，因此不会覆盖后来的显式隐藏。
+
+`hide_project` 只修改本地偏好，不通过远端路由，离线或停用后仍可使用。前端成功后立即移除行、作废对应同步/排序代次并刷新缓存；隐藏当前项回退，卸载仅释放本 App 查看连接。统计和 Git 查询沿用可见项目范围；拖动继续使用同机器锚点移动，不覆盖未显示 Workspace。含 pending/unknown 任务操作的隐藏项目由 `navigation_state` 提供独立入口，用户可临时进入原看板核实；未决 Workspace 创建仍从本地操作记录展示。
+
+新建复用 `ProjectFormDialog` 与正式创建服务；本地目录选择、远端手填目录均保留。`WorkspaceRecovery` 的失败重试及候选查询明确传递原 machine_id，修正原先漏传导致回落 Local 的问题。来源标签在侧栏、看板、空终端及最大化终端中保留。
 
 ### 6.2 创建、编辑和移动卡片
 
@@ -800,12 +824,13 @@ Herdr 对外仍使用 `Cli` 与 `Herdr`。内部 `herdr_cli` 承担进程执行�
 | `remote_helper.rs` / `remote_images.rs` | 同一应用二进制的 `--remote-helper` 模式，不启动 Tauri；远端资源查询、Codex 会话/回执/锁证据、workspace 重排、完整校验后原子发布附件 |
 | `herdr.rs` / `herdr_cli.rs` | 本机使用 --session；远端通过已验证的辅助程序执行同一官方 CLI，冻结主机/session，避免运行中修改 profile 导致写入错机；Windows 会话锁与回执在实际执行电脑读取 |
 | `native_ssh.rs` / `native_client_connection.rs` | 官方 remote-client-bridge 原始帧流，私有客户端连接内 pane.zoom 与快照确认；取消只终止本连接及本看板 WezTerm |
-| `MachineDialog.tsx` / `useRemoteMachines.ts` | 接入管理、明确 session、独立检查和缓存；远端慢查询不阻塞 Local 刷新，迟到快照按机器和选择代次隔离 |
+| `MachineDialog.tsx` / `useRemoteMachines.ts` | 接入管理、授权结果轮询、检查后回到 Workspace 选择；远端慢查询不阻塞 Local，迟到快照按机器和选择代次隔离 |
+| `machine_enrollment.rs` / `enroll-windows-machine.ps1` | 独立操作 ID、原生进程及结果文件；仅在进程退出且结果身份匹配时报告成功/失败，无结果退出为取消；按阶段显示可处理错误 |
 | `ProjectSidebar.tsx` / `ProjectFormDialog.tsx` | 机器分组、状态、同机器重排和新项目机器选择；远端目录手动输入，不弹本机目录选择器 |
 
 新增 IPC：`list_machines`、`saved_machines`、`enroll_machine`、`connect_machine`、`rename_machine`、`remove_machine`、`machine_status`。`sync_projects` / `workspace_operations` / `create_project` / 新建关联接受可选 machineId；已有 Project/Task 操作从本地记录推导归属，不信任前端指定目标机器。文件/技能搜索和读取接受可选 projectId；旧本机调用继续可用。
 
-`enroll_machine` 打开本机交互 PowerShell，用户在原生 SSH 提示符输入密码；脚本只传公钥并保留已有授权，私钥留在本机。正式连接检查远端平台、Herdr 会话和 Codex，并安装本版本辅助程序。当前仅支持 Windows x64。
+`enroll_machine` 打开本机交互 PowerShell并返回授权操作 ID；`enrollment_status(operationId)` 只读当前操作结果，密码不进入 WebView。脚本只传公钥并保留已有授权，私钥留在本机。等待阶段可退出界面，后台观测器等待原生进程结束并清理本操作临时文件；重新打开界面可从已保存 profile 继续。成功结果按 target/session 精确选择唯一 profile，随后连接检查远端平台、Herdr 会话和 Codex，并安装本版本辅助程序；歧义要求在已保存列表明确选择。接入记录在检查期间保持 disabled，只有全部检查通过才启用；失败保留配置供重试。当前仅支持 Windows x64。
 
 自动启动冻结机器、工作目录和文档后交给后台线程。`images::FrozenDocument` 在数据库锁内提取图片元数据和已校验内容，释放锁后读取远端引用/上传图片，提示词使用远端绝对路径。手动图文派发在解析成功并复核任务后，将图片引用与操作快照同事务保存再发送，失败准备不遗留附件引用。传输失败阻止缺图提示词派发；精确恢复沿用原会话，不重放正文。远端图片以内容摘要存储，保留缓存，不在停用连接时清理。
 

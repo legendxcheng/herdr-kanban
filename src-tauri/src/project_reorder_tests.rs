@@ -6,7 +6,7 @@ fn setup_reorder() -> (ProjectService, Arc<FakeHerdr>, Vec<Project>) {
     let herdr = Arc::new(FakeHerdr::default());
     *herdr.spaces.lock().unwrap() = ["a", "b", "c", "d"].map(navigation_workspace).to_vec();
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
-    let projects = service.sync().unwrap().projects;
+    let projects = select_discovered(&service).projects;
     (service, herdr, projects)
 }
 fn names(projects: &[Project]) -> Vec<&str> {
@@ -165,7 +165,7 @@ fn dragged_order_survives_database_reopen_and_offline_sync() {
     let herdr = Arc::new(FakeHerdr::default());
     *herdr.spaces.lock().unwrap() = ["a", "b"].map(navigation_workspace).to_vec();
     let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
-    let projects = service.sync().unwrap().projects;
+    let projects = select_discovered(&service).projects;
     service
         .move_project(&projects[1].id, Some(&projects[0].id))
         .unwrap();

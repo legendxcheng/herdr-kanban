@@ -2,13 +2,18 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
 import type {
-  Machine, SavedMachine, Project, ProjectGitStatus, ProjectSnapshot, WorkspaceOperation, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
+  Machine, SavedMachine, EnrollmentStatus, WorkspaceChoices, NavigationState, Project, ProjectGitStatus, ProjectSnapshot, WorkspaceOperation, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
 } from "./types";
 
 // Projects
 export const listMachines = () => invoke<Machine[]>("list_machines");
 export const savedMachines = () => invoke<SavedMachine[]>("saved_machines");
-export const enrollMachine = (target: string, session: string) => invoke<void>("enroll_machine", { target, session });
+export const enrollMachine = (target: string, session: string) => invoke<EnrollmentStatus>("enroll_machine", { target, session });
+export const enrollmentStatus = (operationId: string) => invoke<EnrollmentStatus>("enrollment_status", { operationId });
+export const workspaceChoices = (machineId: string) => invoke<WorkspaceChoices>("workspace_choices", { machineId });
+export const addExistingWorkspaces = (machineId: string, session: string, workspaceIds: string[]) => invoke<void>("add_existing_workspaces", { machineId, session, workspaceIds });
+export const hideProject = (id: string) => invoke<void>("hide_project", { id });
+export const navigationState = () => invoke<NavigationState>("navigation_state");
 export const connectMachine = (profileId: string) => invoke<Machine>("connect_machine", { profileId });
 export const renameMachine = (id: string, name: string) => invoke<void>("rename_machine", { id, name });
 export const removeMachine = (id: string) => invoke<void>("remove_machine", { id });

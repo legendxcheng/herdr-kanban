@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Project, WorkspaceOperation } from "./types";
+import type { NavigationState, Project, WorkspaceOperation } from "./types";
 import * as api from "./api";
 import { useLocalizedMessage } from "./i18n";
 import { notify } from "./Toast";
@@ -9,6 +9,8 @@ import { useRemoteMachines } from "./useRemoteMachines";
 export function useProjectSync() {
   const remote = useRemoteMachines();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [navigation, setNavigation] = useState<NavigationState>({ configured: false, recovery_projects: [] });
+  const navigationVersion = useRef(0);
   const [gitRefresh, setGitRefresh] = useState(0);
   const allProjects = [...projects, ...remote.projects];
   const gitStatuses = useProjectGitStatus(allProjects, gitRefresh);
@@ -25,6 +27,9 @@ export function useProjectSync() {
   const initialized = useRef(false);
   const reloadLocal = useRef(false);
   const sync = useCallback((localChanged = false) => {
+    if (localChanged) revision.current++;
+    const navRequest = ++navigationVersion.current;
+    void api.navigationState().then(value => { if (mounted.current && navRequest === navigationVersion.current && value) setNavigation(value); }).catch(() => {});
     setGitRefresh(value => value + 1);
     reloadLocal.current ||= localChanged;
     if (moving.current) { repeat.current = true; return Promise.resolve(); }
@@ -63,10 +68,11 @@ export function useProjectSync() {
     if (moving.current) return;
     moving.current = true;
     revision.current++;
+    const moveRevision = revision.current;
     setReordering(true);
     try {
       const result = await api.moveProject(projectId, beforeProjectId);
-      if (mounted.current) {
+      if (mounted.current && revision.current === moveRevision) {
         setProjects(result.projects); setSession(result.session); setOperations(result.operations);
         setError(""); initialized.current = true;
       }
@@ -95,5 +101,12 @@ export function useProjectSync() {
       try { await remote.move(id, before); } catch(e) { notify({ prefix: "workspace.reorder_failed", error: String(e) }, "error"); }
     } else await move(id, before);
   };
-  return { projects: allProjects, machines: remote.machines, machineErrors: remote.errors, machineBusy: remote.busy, gitStatuses, operations: [...operations, ...remote.operations], syncing, error, refresh, session, reordering, move: moveOnMachine };
+  const hide = async (id: string) => {
+    await api.hideProject(id);
+    revision.current++;
+    setProjects(previous => previous.filter(p => p.id !== id));
+    remote.forget(id);
+    void refresh();
+  };
+  return { projects: allProjects, navigation, hide, machines: remote.machines, machineErrors: remote.errors, machineBusy: remote.busy, gitStatuses, operations: [...operations, ...remote.operations], syncing, error, refresh, session, reordering, move: moveOnMachine };
 }
