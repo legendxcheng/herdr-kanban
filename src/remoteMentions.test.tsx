@@ -64,9 +64,13 @@ it("shows remote wait and failure, retries without losing the draft, then saves 
   ui.unmount();
   render(form(project, { id: "saved", name: "Saved", priority: "normal", prompt_json: saved } as Task));
   expect(document.querySelectorAll(".mention-chip")).toHaveLength(2);
-  expect(await resolveMentions(JSON.parse(saved), project.root_path, project.id)).toContain("REMOTE-CONTENT");
-  expect(await resolveMentions(JSON.parse(saved), project.root_path, project.id)).toContain("$remote-skill");
-  expect(invoke).toHaveBeenCalledWith("read_file_content", { absPath: file.abs_path, projectId: project.id });
+  const prompt = resolveMentions(JSON.parse(saved), project.root_path);
+  expect(prompt).toContain("remote.txt");
+  expect(prompt).not.toContain("[文件:");
+  expect(prompt).not.toContain("\n");
+  expect(prompt).toContain("$remote-skill");
+  expect(prompt).not.toContain("REMOTE-CONTENT");
+  expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "read_file_content" || command === "read_skill_content")).toBe(false);
 });
 
 it.each(["@", "$"])("shows empty results for %s and Escape dismisses the popover without closing the form", async trigger => {

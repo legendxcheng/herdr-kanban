@@ -1,0 +1,116 @@
+[
+  {
+    "root": "G:/herdr-kanban",
+    "file": "G:/herdr-kanban/README.md",
+    "expected": "README.md",
+    "formatted": "README.md"
+  },
+  {
+    "root": "G:\\herdr-kanban\\",
+    "file": "g:/HERDR-KANBAN/src/App.tsx",
+    "expected": "src/App.tsx",
+    "formatted": "src/App.tsx"
+  },
+  {
+    "root": "D:/远端项目",
+    "file": "D:/远端项目/docs/说明 文件.md",
+    "expected": "docs/说明 文件.md",
+    "formatted": "\"docs/说明 文件.md\""
+  },
+  {
+    "root": "G:/herdr-kanban",
+    "file": "G:/herdr-kanban-old/README.md",
+    "expected": "G:/herdr-kanban-old/README.md",
+    "formatted": "G:/herdr-kanban-old/README.md"
+  },
+  {
+    "root": "G:/herdr-kanban",
+    "file": "D:/other/README.md",
+    "expected": "D:/other/README.md",
+    "formatted": "D:/other/README.md"
+  },
+  {
+    "root": "G:/herdr-kanban",
+    "file": "./src/App.tsx",
+    "expected": "src/App.tsx",
+    "formatted": "src/App.tsx"
+  },
+  {
+    "root": "G:/herdr-kanban",
+    "file": "G:/herdr-kanban/docs/../README.md",
+    "expected": "README.md",
+    "formatted": "README.md"
+  },
+  {
+    "root": "G:/herdr-kanban",
+    "file": "G:/herdr-kanban/../other/README.md",
+    "expected": "G:/other/README.md",
+    "formatted": "G:/other/README.md"
+  },
+  {
+    "root": "G:/herdr-kanban",
+    "file": "\\\\?\\G:\\herdr-kanban\\README.md",
+    "expected": "README.md",
+    "formatted": "README.md"
+  },
+  {
+    "root": "\\\\server\\share\\repo",
+    "file": "\\\\?\\UNC\\SERVER\\share\\repo\\src\\a.ts",
+    "expected": "src/a.ts",
+    "formatted": "src/a.ts"
+  },
+  {
+    "root": "G:/",
+    "file": "G:/README.md",
+    "expected": "README.md",
+    "formatted": "README.md"
+  },
+  {
+    "root": "/work/repo/",
+    "file": "/work/repo/src/a.ts",
+    "expected": "src/a.ts",
+    "formatted": "src/a.ts"
+  },
+  {
+    "root": "/",
+    "file": "/work/a.ts",
+    "expected": "work/a.ts",
+    "formatted": "work/a.ts"
+  },
+  {
+    "root": "/Work",
+    "file": "/work/a.ts",
+    "expected": "/work/a.ts",
+    "formatted": "/work/a.ts"
+  },
+  {
+    "root": "",
+    "file": "G:/repo/README.md",
+    "expected": "G:/repo/README.md",
+    "formatted": "G:/repo/README.md"
+  },
+  {
+    "root": "G:/repo",
+    "file": "G:/repo/docs/a\" b.md",
+    "expected": "docs/a\" b.md",
+    "formatted": "docs/a\" b.md"
+  },
+  {
+    "root": "G:/repo",
+    "file": "G:/repo/docs/tab\tname.md",
+    "expected": "docs/tab\tname.md",
+    "formatted": "\"docs/tab\tname.md\""
+  },
+  {
+    "root": "G:/repo",
+    "file": "G:/repo/docs/ab.md",
+    "expected": "docs/ab.md",
+    "formatted": "\"docs/ab.md\""
+  },
+  {
+    "root": "G:/repo",
+    "file": "G:/repo/docs/a﻿b.md",
+    "expected": "docs/a﻿b.md",
+    "formatted": "docs/a﻿b.md"
+  }
+]

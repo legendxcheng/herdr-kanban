@@ -37,6 +37,7 @@ mod project_commands;
 mod project_git;
 mod project_visibility;
 mod projects;
+mod prompt_reference;
 mod skill_discovery;
 mod start;
 mod task_overview;

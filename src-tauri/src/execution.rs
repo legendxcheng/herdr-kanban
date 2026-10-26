@@ -46,11 +46,11 @@ impl Resources for LocalResources {
 }
 
 impl crate::workflow::Workflow {
-    pub fn resolve_document(&self, document: &str) -> Result<String, String> {
+    pub fn resolve_document(&self, document: &str, root_path: &str) -> Result<String, String> {
         let frozen = {
             let db = self.db.lock().map_err(|e| e.to_string())?;
             crate::images::freeze_document(&db, document)?
         };
-        frozen.resolve(self.herdr.resources())
+        frozen.resolve(self.herdr.resources(), root_path)
     }
 }

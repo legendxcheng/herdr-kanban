@@ -102,7 +102,7 @@ impl Workflow {
                 };
                 let prompt = if request.needs_prompt {
                     progress("reading_prompt")?;
-                    let resolved = worker.resolve_document(&request.prompt_json);
+                    let resolved = worker.resolve_document(&request.prompt_json, &request.cwd);
                     match resolved {
                         Ok(text) => text,
                         Err(error) => {

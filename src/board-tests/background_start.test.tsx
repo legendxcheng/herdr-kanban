@@ -59,10 +59,12 @@ describe("保留其他拖放与派发行为", () => {
     expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "start_task")).toHaveLength(0);
   });
 
-  it("预览和派发都保留技能调用，不读取技能正文", async () => {
+  it("预览与手动派发使用相同的相对文件路径和技能名称，不读取正文", async () => {
     board.storedTask.prompt_json = JSON.stringify({ type: "doc", content: [
       { type: "paragraph", content: [
         { type: "text", text: "开始实现 " },
+        { type: "mention", attrs: { kind: "file", label: "README.md", ref: "E:/fixture/docs/设计 说明.md" } },
+        { type: "text", text: " " },
         { type: "mention", attrs: { kind: "skill", label: "to-spec", ref: "C:/skills/to-spec/SKILL.md" } },
       ] },
     ] });
@@ -71,11 +73,13 @@ describe("保留其他拖放与派发行为", () => {
     const select = await screen.findByRole("combobox", { name: "独立 Agent" });
     fireEvent.change(select, { target: { value: agent.pane_id } });
     fireEvent.click(screen.getByRole("button", { name: "预览提示词" }));
-    expect(screen.getByText("开始实现 $to-spec")).toBeTruthy();
+    const expected = '开始实现 "docs/设计 说明.md" $to-spec';
+    expect(document.querySelector(".prompt-preview")?.textContent).toBe(expected);
     const dialog = screen.getByRole("heading", { name: /派发任务:/ }).closest(".dialog") as HTMLElement;
     fireEvent.click(within(dialog).getByRole("button", { name: "派发" }));
-    await waitFor(() => expect(sendPrompt).toHaveBeenCalledWith(expect.objectContaining({ promptText: "开始实现 $to-spec" })));
+    await waitFor(() => expect(sendPrompt).toHaveBeenCalledWith(expect.objectContaining({ promptText: expected })));
     expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "read_skill_content")).toBe(false);
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "read_file_content")).toBe(false);
   });
 
   it.each(["todo", "in_progress", "done"] as const)("拖回原列 %s 不触发派发或状态更新", async (status) => {

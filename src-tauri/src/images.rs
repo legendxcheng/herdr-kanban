@@ -493,7 +493,7 @@ impl crate::workflow::Workflow {
         let prompt = if let Some(prompt) = previous {
             prompt
         } else {
-            let frozen = {
+            let (frozen, root_path) = {
                 let db = self.db.lock().map_err(error)?;
                 let stored: String = db
                     .query_row("SELECT prompt_json FROM tasks WHERE id=?1", [task], |r| {
@@ -505,10 +505,14 @@ impl crate::workflow::Workflow {
                 }
                 // Frozen bytes survive local GC while SSH runs. Persist references
                 // only with a completed snapshot, so failed preparation has no pins.
-                freeze_document(&db, json)?
+                let root_path: String = db.query_row(
+                    "SELECT p.root_path FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?1",
+                    [task], |r| r.get(0),
+                ).map_err(error)?;
+                (freeze_document(&db, json)?, root_path)
             };
-            // SSH reads and uploads cannot block Local database operations.
-            let resolved = frozen.resolve(self.herdr.resources())?;
+            // Image uploads cannot block Local database operations.
+            let resolved = frozen.resolve(self.herdr.resources(), &root_path)?;
             let db = self.db.lock().map_err(error)?;
             tasks::ensure_active(&db, task)?;
             let stored: String = db
@@ -554,7 +558,7 @@ pub fn resolve_prompt_in(
     json: &str,
     resources: &dyn crate::execution::Resources,
 ) -> Result<String, String> {
-    freeze_document(db, json)?.resolve(resources)
+    freeze_document(db, json)?.resolve(resources, "")
 }
 
 pub struct FrozenDocument {
@@ -572,10 +576,15 @@ pub fn freeze_document(db: &Connection, json: &str) -> Result<FrozenDocument, St
     Ok(FrozenDocument { doc, images })
 }
 impl FrozenDocument {
-    pub fn resolve(&self, resources: &dyn crate::execution::Resources) -> Result<String, String> {
+    pub fn resolve(
+        &self,
+        resources: &dyn crate::execution::Resources,
+        root_path: &str,
+    ) -> Result<String, String> {
         fn walk(
             images: &std::collections::HashMap<String, (PromptImage, PathBuf, Vec<u8>)>,
             resources: &dyn crate::execution::Resources,
+            root_path: &str,
             node: &serde_json::Value,
             text: &mut String,
         ) -> Result<(), String> {
@@ -591,12 +600,7 @@ impl FrozenDocument {
                     let label = node["attrs"]["label"].as_str().unwrap_or("");
                     if node["attrs"]["kind"] == "file" {
                         let file = node["attrs"]["ref"].as_str().unwrap_or("");
-                        match resources.read_text(file) {
-                            Ok(content) => text.push_str(&format!(
-                                "\n--- @文件: {label} ({file}) ---\n```\n{content}\n```\n"
-                            )),
-                            Err(e) => text.push_str(&format!("\n[引用失败: {label} — {e}]\n")),
-                        }
+                        text.push_str(&crate::prompt_reference::file_reference(file, root_path));
                     } else {
                         text.push_str(&format!("${label}"));
                     }
@@ -604,7 +608,7 @@ impl FrozenDocument {
                 _ => {
                     if let Some(children) = node["content"].as_array() {
                         for child in children {
-                            walk(images, resources, child, text)?;
+                            walk(images, resources, root_path, child, text)?;
                         }
                     }
                 }
@@ -615,7 +619,7 @@ impl FrozenDocument {
             Ok(())
         }
         let mut text = String::new();
-        walk(&self.images, resources, &self.doc, &mut text)?;
+        walk(&self.images, resources, root_path, &self.doc, &mut text)?;
         Ok(text.trim().into())
     }
 }

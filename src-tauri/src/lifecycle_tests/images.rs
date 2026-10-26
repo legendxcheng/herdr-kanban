@@ -1,13 +1,9 @@
 use super::*;
 
-struct Resources(Arc<Mutex<rusqlite::Connection>>);
+struct Resources;
 impl crate::execution::Resources for Resources {
     fn read_text(&self, _: &str) -> Result<String, String> {
-        assert!(
-            self.0.try_lock().is_ok(),
-            "network preparation must not hold database mutex"
-        );
-        Ok("REMOTE CONTENT".into())
+        panic!("file and skill references must never read bodies")
     }
     fn directory_exists(&self, _: &str) -> Result<bool, String> {
         Ok(true)
@@ -34,19 +30,26 @@ impl crate::execution::Resources for Resources {
 }
 
 #[test]
-fn remote_reference_resolution_releases_database_and_never_reads_same_local_path() {
+fn remote_references_send_relative_paths_without_reading_bodies() {
     let (mut app, _) = fixture();
     let fake = Arc::new(Fake(
         Mutex::new(State::default()),
-        Some(Arc::new(Resources(app.db.clone()))),
+        Some(Arc::new(Resources)),
     ));
     app.herdr = fake.clone();
-    let source = std::env::temp_dir().join(format!(
-        "kanban-local-reference-{}.txt",
-        uuid::Uuid::new_v4()
-    ));
-    std::fs::write(&source, "LOCAL CONTENT").unwrap();
-    let doc=serde_json::json!({"type":"doc","content":[{"type":"mention","attrs":{"kind":"file","label":"reference","ref":source}}]}).to_string();
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE projects SET root_path='D:/remote/work' WHERE id='p1'",
+            [],
+        )
+        .unwrap();
+    let doc = serde_json::json!({"type":"doc","content":[
+        {"type":"mention","attrs":{"kind":"file","label":"README.md","ref":"D:/remote/work/docs/设计 说明.md"}},
+        {"type":"text","text":" "},
+        {"type":"mention","attrs":{"kind":"skill","label":"review","ref":"D:/skills/review/SKILL.md"}}
+    ]}).to_string();
     crate::tasks::update(
         &app.db.lock().unwrap(),
         "a",
@@ -55,24 +58,31 @@ fn remote_reference_resolution_releases_database_and_never_reads_same_local_path
         crate::models::TaskPriority::Normal,
     )
     .unwrap();
-    let prompt = app.resolve_document(&doc).unwrap();
-    assert!(prompt.contains("REMOTE CONTENT"));
-    assert!(!prompt.contains("LOCAL CONTENT"));
+    let prompt = app.resolve_document(&doc, "D:/remote/work").unwrap();
+    assert_eq!(prompt, "\"docs/设计 说明.md\" $review");
     let app = Arc::new(app);
     app.submit_start("a", &op(), Arc::new(|_| {})).unwrap();
     assert_eq!(await_start(&app, "a").state.as_deref(), Some("succeeded"));
     assert_eq!(fake.0.lock().unwrap().sent, vec![prompt]);
-    std::fs::remove_file(source).unwrap();
 }
 
 #[test]
-fn prompt_preview_and_background_start_use_the_same_execution_environment() {
+fn local_reference_content_is_not_sent_by_background_start() {
     let (app, fake) = fixture();
-    let source =
-        std::env::temp_dir().join(format!("kanban-reference-{}.txt", uuid::Uuid::new_v4()));
-    std::fs::write(&source, "执行环境中的原文").unwrap();
-    let document = serde_json::json!({"type":"doc","content":[
-        {"type":"mention","attrs":{"kind":"file","label":"参考","ref":source.to_str().unwrap()}},
+    let directory =
+        std::env::temp_dir().join(format!("kanban-references-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("README.md");
+    std::fs::write(&source, "FILE BODY MUST NOT BE SENT").unwrap();
+    let root = directory.to_str().unwrap();
+    app.db
+        .lock()
+        .unwrap()
+        .execute("UPDATE projects SET root_path=?1 WHERE id='p1'", [root])
+        .unwrap();
+    let doc = serde_json::json!({"type":"doc","content":[
+        {"type":"mention","attrs":{"kind":"file","label":"README.md","ref":source}},
+        {"type":"text","text":" "},
         {"type":"mention","attrs":{"kind":"skill","label":"review"}}
     ]})
     .to_string();
@@ -80,18 +90,18 @@ fn prompt_preview_and_background_start_use_the_same_execution_environment() {
         &app.db.lock().unwrap(),
         "a",
         "References",
-        &document,
+        &doc,
         crate::models::TaskPriority::Normal,
     )
     .unwrap();
-    let preview = app.resolve_document(&document).unwrap();
-    assert!(preview.contains("执行环境中的原文"));
-    assert!(preview.contains("$review"));
+    let prompt = app.resolve_document(&doc, root).unwrap();
+    assert_eq!(prompt, "README.md $review");
     let app = Arc::new(app);
     app.submit_start("a", &op(), Arc::new(|_| {})).unwrap();
     assert_eq!(await_start(&app, "a").state.as_deref(), Some("succeeded"));
-    assert_eq!(fake.0.lock().unwrap().sent.as_slice(), &[preview]);
+    assert_eq!(fake.0.lock().unwrap().sent, vec![prompt]);
     std::fs::remove_file(source).unwrap();
+    std::fs::remove_dir(directory).unwrap();
 }
 
 #[test]
@@ -113,7 +123,17 @@ fn manual_dispatch_reads_images_once_and_rejects_a_stale_document() {
         let db = app.db.lock().unwrap();
         let draft = crate::images::open_draft(&db, "p1", Some("a")).unwrap();
         let image=crate::images::import_image(&db,&draft,"手动派发.png","image/png","iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8DwHwyBNBAw/AcAR8oI+ItOQ4UAAAAASUVORK5CYII=").unwrap();
-        doc=serde_json::json!({"type":"doc","content":[{"type":"promptImage","attrs":{"imageId":image.id}}]}).to_string();
+        db.execute(
+            "UPDATE projects SET root_path='D:/remote/work' WHERE id='p1'",
+            [],
+        )
+        .unwrap();
+        doc=serde_json::json!({"type":"doc","content":[
+            {"type":"promptImage","attrs":{"imageId":image.id}},
+            {"type":"mention","attrs":{"kind":"file","label":"README.md","ref":"D:/remote/work/docs/设计 说明.md"}},
+            {"type":"text","text":" "},
+        {"type":"mention","attrs":{"kind":"skill","label":"review"}}
+        ]}).to_string();
         crate::images::save_task(
             &db,
             Some("a"),
@@ -139,7 +159,7 @@ fn manual_dispatch_reads_images_once_and_rejects_a_stale_document() {
     let original = app.herdr.clone();
     app.herdr = Arc::new(Fake(
         Mutex::new(State::default()),
-        Some(Arc::new(Resources(app.db.clone()))),
+        Some(Arc::new(Resources)),
     ));
     assert_eq!(
         app.dispatch_document("a", "manual-pane", &doc, "failed-upload")
@@ -169,6 +189,7 @@ fn manual_dispatch_reads_images_once_and_rejects_a_stale_document() {
     assert_eq!(sent.len(), 1);
     assert!(sent[0].contains("手动派发.png"));
     assert!(sent[0].contains("view_image"));
+    assert!(sent[0].contains("\"docs/设计 说明.md\" $review"));
     drop(app);
     std::fs::remove_dir_all(directory).unwrap();
 }

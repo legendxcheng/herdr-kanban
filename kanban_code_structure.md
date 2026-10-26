@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-26。文件引用对齐 Codex CLI 0.164.0：预览、手动派发、后台启动及图文混合派发直接输出 Workspace 相对路径，不展开正文、不加 `[文件:]` 或额外换行；含 Unicode 空白且不含双引号时加双引号。技能仍发送 `$技能名`，由 Codex 加载。相关前端 40 项、Rust 213 项测试通过（20 项跳过），限定本次模块及其依赖的 TypeScript 检查和 Vite 构建通过。实际序列化结果交给本机 Codex `debug prompt-input` 的三个案例也逐字一致。共享工作区全量前端当次为 215 通过、1 项汇总交互测试失败，常规构建另受汇总测试类型错误阻断；不将其他进行中改动计为本次通过。未重新打包安装或完成真实 TUI/Herdr 派发验收。提交前另将仅含本次 14 个文件/改动块的暂存树导出为隔离副本，完整前端 215 项、Rust 201 项测试通过（19 项环境依赖测试跳过），`npm run build` 通过；这些结果验证本提交不依赖共享工作区其他未提交改动。规则来源见[原生引用研究](docs/research/2026-10-26-codex-native-references.md)，实现见 6.4、6.6.1。
+
 更新日期：2026-10-26。远端 @/$ 使用预热索引和持久 SSH 查询通道；任务切换按电脑/session 复用 Herdr/WezTerm 客户端，切换期间关闭输入通路，确认新定位后恢复。实现、生命周期与实际测量见 6.3、6.5 及[长连接验收记录](docs/verification/2026-10-26-persistent-connections.md)。
 
 更新日期：2026-10-26。原生 Herdr 字号记忆：在 WezTerm 正常加载用户配置后追加字号快捷键处理，本机 Kanban 的任务及 Workspace 共用字号偏好；窗口切换、重连及应用重启恢复，重置字号清除覆盖。原配置、普通输入与原生菜单沿用；实现见 6.5，真实桌面结果及未覆盖项见[字号验收记录](docs/verification/2026-10-26-native-font-persistence.md)。
@@ -146,7 +148,7 @@ herdr-kanban/
 │  ├─ DispatchRecovery.tsx         核实不确定的派发结果
 │  ├─ i18n.ts / locales/           中英词库、语言订阅、本机偏好、插值与错误显示
 │  ├─ LanguageSelect.tsx          侧栏语言选择；不重建组件树
-│  ├─ dispatchUtils.ts             引用展开为最终提示词文本
+│  ├─ dispatchUtils.ts             文件相对路径与原生技能名称序列化；预览共用文件格式
 │  └─ Toast.tsx                    全局通知函数与展示容器
 ├─ src-tauri/
 │  ├─ Cargo.toml / Cargo.lock      Rust 依赖
@@ -175,7 +177,8 @@ herdr-kanban/
 │     ├─ lifecycle.rs              自动分配、会话记录、完成清理与启动核实
 │     ├─ lifecycle_tests/          共用 fixture 与分配、后台启动、完成清理、恢复场景
 │     ├─ agent_start_tests.rs      实际 CLI 适配器的启动拒绝/有界重试进程替身，以及隔离 Herdr/Codex 复用验收
-│     ├─ start.rs                  持久化受理、后台引用展开及启动通知
+│     ├─ start.rs                  持久化受理、后台提示词序列化及启动通知
+│     ├─ prompt_reference.rs       执行电脑路径的词法归一化及 Workspace 相对路径
 │     ├─ images.rs                 附件/引用存储、短事务、后台回收及提示词解析
 │     ├─ image_commands.rs         图片草稿、导入、预览及关闭 IPC
 │     ├─ image_tests.rs / lifecycle_tests/images.rs  持久化、回收、两种派发与不重发回归
@@ -304,7 +307,7 @@ flowchart TD
 | [TaskFormDialog.tsx](src/TaskFormDialog.tsx) | 提示词、优先级、标题草稿与保存基线 | TaskFormDialog 与 TaskEditPanel 共用表单；Todo 保存后保持面板；requestLeave 处理保存/放弃/继续编辑；主动改名才提交 name |
 | [PromptEditor.tsx](src/PromptEditor.tsx) | Tiptap Editor 实例 | 接收 JSON 字符串；每次编辑输出序列化 JSON |
 | [MentionPopover.tsx](src/MentionPopover.tsx) | 搜索词、引用种类、候选项、选择下标、展开状态 | 查询文件/技能；写入编辑器 transaction |
-| [DispatchDialog.tsx](src/DispatchDialog.tsx) | Agent 列表、选中 pane、loading、错误、预览文本 | 重新查 Agent、展开引用、派发 |
+| [DispatchDialog.tsx](src/DispatchDialog.tsx) | Agent 列表、选中 pane、loading、错误、预览文本 | 重新查 Agent、序列化引用、派发 |
 | [Toast.tsx](src/Toast.tsx) | 通知数组及自增 ID | 模块级 `_notify` 指向容器回调，3 秒后删除通知 |
 
 没有 Redux、Zustand 或查询缓存层。操作回调通知父组件重新查询。`KanbanBoard.initialLoading` 只覆盖首次查询，最新有效请求结束后关闭；成功返回空列表同样结束加载，首次失败保留原错误通知并结束占位。后续轮询、焦点刷新及操作后的查询均不重置此状态，标题、工具栏与三列保留原 DOM，删除最后一张任务后仍可使用新建入口。请求代次阻止迟到列表覆盖新结果。App 用 Project ID 作为 KanbanBoard 的 key，切项目销毁旧任务选择、弹窗和终端连接，并重新进入该项目的首次加载。`board-tests/refresh.test.tsx` 覆盖慢请求、空列表、失败恢复、删除最后一项及切项目迟到响应；本次自动化与桌面验证见[验收记录](docs/verification/2026-10-26-empty-board-refresh.md)。
@@ -355,7 +358,7 @@ flowchart TD
 | `id`、`project_id` | 卡片主键及所属项目；SQL 声明项目外键 |
 | `name`、`status` | 名称与 `todo / in_progress / done` 三态 |
 | `prompt_json` | Tiptap 文档的 JSON 字符串；新建表单直接提交正文，旧 IPC 调用省略 promptJson 时兼容 `"{}"` |
-| `prompt_snapshot` | 最近一次成功派发时实际发送的展开文本，可为空 |
+| `prompt_snapshot` | 最近一次成功派发时实际发送的文本，可为空；历史快照不重写 |
 | `dispatched_at`、`dispatched_to` | 最近一次派发时间与 `workspace/pane_id`，可为空 |
 | `priority` | normal / high / urgent，显示一般 / 优先 / 紧急；默认 normal，SQL CHECK 与 IPC 枚举拒绝非法值 |
 | `archived_at` | 可空归档时间；非空任务不在看板及三列状态计数中出现，仍保留 done 状态及历史；今日已完成单独包含归档任务 |
@@ -424,7 +427,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `preview_prompt_image` | draftId、imageId | 校验草稿引用及文件摘要，返回临时预览 data URL |
 | `close_image_draft` | draftId | 释放草稿引用并安排独立连接回收，不删除仍被任务或操作引用的原图 |
 | `update_task_status` | id、status | todo 直接更新；done 兼容入口转完整完成工作流；拒绝直接 in_progress |
-| `start_task` | taskId、operationId | 短事务持久化受理后返回 Flow；后台展开已保存提示词、预占/创建 pane 并启动或恢复；同一操作 ID 不重复执行 |
+| `start_task` | taskId、operationId | 短事务持久化受理后返回 Flow；后台序列化已保存提示词、预占/创建 pane 并启动或恢复；同一操作 ID 不重复执行 |
 | `complete_task` | taskId、operationId | 标记完成、保存会话、关闭 pane；返回可为空的 warning |
 | `recover_lifecycle` | taskId、operationId | 只核实未知启动，不发送/启动/关闭；确认已派发或精确恢复，或确认启动 pane 已不存在后释放 |
 | `delete_task` | id | 本地事务删除卡片，允许未决操作；级联释放绑定/会话/目录，保留操作事实，关闭本应用查看连接 |
@@ -512,7 +515,7 @@ schema 13 的 `project_visibility(project_id, visible)` 保存明确显示/隐�
 2. `create_task → TaskTitles::create → images::save_task_in` 以短事务保存 todo 卡片、图片引用与标题请求，立即返回摘要标题；生成失败不撤销卡片，前端关闭弹窗并重新加载。标题状态使用迁移 11，正文仍复用 prompt_json。
 3. Tiptap 编辑内容经 `getJSON()` 序列化到面板草稿。
 4. Todo 点击卡片或铅笔按钮使用右侧 TaskEditPanel，其他状态编辑使用 TaskFormDialog；均以任务 ID 为 key 并复用 TaskForm。允许手动改名；未主动修改标题时 `update_task` 省略 name，由后端保留最新名称，避免旧草稿覆盖生成结果。正文或显式改名使在途标题请求失效，只改优先级不使请求失效。保存后刷新，同列按优先级重排；Todo 面板和编辑器保持打开，其他编辑弹窗关闭。
-5. 卡片拖到“开发中”时立即投影到目标列并选中，显示“窗口准备中”，调用 `start_task` 仅等待本地受理。首次执行在后台展开已保存提示词并发送，已保存会话或保留原绑定的任务只恢复/连接、不重发。准备完成通过通知及查询刷新，不抢回后来选择的任务。拖到“完成”及完成按钮统一走 `complete_task`，关闭失败也刷新完成状态并显示清理警告。拖到“未开发”调用 `update_task_status`；拖到原列不执行更新。任务流转期间禁用该卡片操作和拖拽，并用同步 Set 阻止重复请求。
+5. 卡片拖到“开发中”时立即投影到目标列并选中，显示“窗口准备中”，调用 `start_task` 仅等待本地受理。首次执行在后台序列化已保存提示词并发送，已保存会话或保留原绑定的任务只恢复/连接、不重发。准备完成通过通知及查询刷新，不抢回后来选择的任务。拖到“完成”及完成按钮统一走 `complete_task`，关闭失败也刷新完成状态并显示清理警告。拖到“未开发”调用 `update_task_status`；拖到原列不执行更新。任务流转期间禁用该卡片操作和拖拽，并用同步 Set 阻止重复请求。
 
 列之间允许迁移，包括 done 回 todo；从 todo 或 done 拖入 in_progress 自动启动或恢复，无派发确认弹窗。同一列不提供手动排序；后端按紧急、优先、一般，再按创建时间和 ID 排序。前端仅对开发中列做稳定分组，将身份匹配且状态为 blocked 的任务放到顶部；组内保持后端顺序，状态恢复后回到原位置。重排不改变已选任务或终端连接。“标记完成”按钮只出现在 in_progress 卡片；拖放可以把任意状态卡片直接移到 done。
 
@@ -655,7 +658,7 @@ Todo 面板与 TerminalPanel 条件互斥。切到 Todo 卸载 TerminalPanel，�
 
 按用户追加确认的交互，正文仅显示 120×120px 缩略图；鼠标悬停或键盘聚焦时显示右上角删除按钮，删除可撤销。点击缩略图通过 Portal 打开大图，底层任务表单 inert；Escape、关闭按钮或背景点击只关闭大图并恢复缩略图焦点。多图横向排列，窄窗口仍由原表单正文区域滚动。
 
-保存任务及其引用在一个事务内完成。编辑草稿保护原引用，取消不改原任务，失败可重试；归档保留原图。首次启动受理时在原短事务中固定图片引用，后台通过共享解析器生成原图绝对路径和明确 `view_image` 指令；后续编辑不改变该次输入。手动图片派发同样冻结正文及展开文本，旧卡片正文变化会要求刷新；普通文件引用展开和原生技能名称保持原语义。发送前再校验操作图片可读及摘要一致，缺图不静默发送残余文字，发送后的未知结果不重发；恢复旧会话不再解析或发送历史图片。
+保存任务及其引用在一个事务内完成。编辑草稿保护原引用，取消不改原任务，失败可重试；归档保留原图。首次启动受理时在原短事务中固定图片引用，后台通过共享解析器生成原图绝对路径和明确 `view_image` 指令；后续编辑不改变该次输入。手动图片派发同样冻结正文及发送文本，旧卡片正文变化会要求刷新；普通文件引用仅发送相对路径，技能仅发送原生名称。发送前再校验操作图片可读及摘要一致，缺图不静默发送残余文字，发送后的未知结果不重发；恢复旧会话不再解析或发送历史图片。
 
 单任务删除和草稿关闭只安排后台回收，文件操作使用独立 SQLite 连接，不持应用数据库 Mutex。回收保护任务、草稿、已受理启动和真实派发记录的引用；仅在删除/重开边界释放没有实际操作记录的孤儿手动准备。实际操作证据继续保留，不依赖 Herdr 返回才允许删除任务。详情及验证限制见[图片输入验收记录](docs/verification/2026-10-24-kanban-image-input.md)。
 
@@ -687,11 +690,11 @@ sequenceDiagram
 
 派发和修复对话框可以刷新列表，其他任务占用目标显示为禁用；后端数据库约束仍是最终保障。再派发复用已有有效目标。顶部不再展示 Agent 列表；手动派发仍需通过卡片入口打开对话框确认，不直接发送。
 
-**预览。** `buildPreview()` 调用本地 `extractTextWithMentions()`，展示普通文本、`[@文件: ...]` 占位符与原样的 `$技能名`，不读取引用正文。技能的预览与实际发送一致；文件在实际派发时展开。
+**预览。** `DispatchDialog` 调用本地 `extractTextWithMentions()`；文件使用与实际发送共用的 `fileReference()`，显示 `docs/README.md` 或 `"docs/说明 文件.md"`，技能显示原样的 `$技能名`。文件和技能的预览与发送一致，不读取正文；图片预览仍显示名称占位符，实际发送时由后端准备原图路径。
 
-**实际展开。** [resolveMentions()](src/dispatchUtils.ts) 递归处理文档：普通文字直接追加；文件正文放入带路径的分隔标题和代码块；技能引用只输出 `$技能名`，不读取或注入 SKILL.md 正文，由目标 Agent 解析技能调用。段落和标题补换行；并非完整 Markdown 序列化，粗体、列表、hardBreak 等结构没有对应的完整格式恢复。
+**实际序列化。** [resolveMentions()](src/dispatchUtils.ts) 同步递归处理文档：普通文字直接追加；文件直接输出相对路径，基准为 `project.root_path`，不保留 `@`、包装标题或强制换行；技能只输出 `$技能名`。后台启动及图文混合派发由 `images::FrozenDocument::resolve` 使用同样的格式，不读取文件或技能正文。段落和标题补换行；并非完整 Markdown 序列化，粗体、列表、hardBreak 等结构没有对应的完整格式恢复。
 
-引用读取按文档顺序逐个 await，无缓存和去重。仅文件引用会读取正文，每次派发读取当时的文件内容，可能与编写提示词时不同。单个引用读取失败会替换为“引用失败”文本并继续发送；参数 `_rootPath` 当前未使用，读取路径不会重新限制在项目根目录内。
+路径处理是纯词法操作：统一斜杠、处理 Windows 扩展路径前缀和 `.`/`..`，Windows 盘符/UNC 比较忽略 ASCII 大小写，以完整目录边界移除 Workspace 前缀。本机和远端均使用所属执行电脑的路径，绝不读取本机同名文件。历史引用若在根目录之外、跨盘或缺少根目录，保留其路径，避免误指向 Workspace 内同名文件。路径输出遵循 CLI `insert_selected_path`：含 Unicode White_Space 且没有双引号时才外加双引号，否则原样输出；前端使用 `\p{White_Space}` 与 Rust `char::is_whitespace` 对齐。引用之间保留编辑器已有文字/空格，段落保持换行，不额外添加分隔；编辑器选中候选时原有的尾部空格机制继续生效。前后端使用 `src/promptPathCases.json` 的同一组 19 个路径及输出案例回归。引用保存仍为原 `kind/label/ref`，无需数据库或 IPC 迁移；已发送的历史快照不重写，文件可读性由 Codex 按需读取时处理。
 
 **执行及落库。** CLI 用参数数组执行，不通过 shell 拼接；常规请求超时 12 秒，Agent 启动外层超时 40 秒（Herdr 启动默认 30 秒），stdout/stderr 各限 4 MiB。操作 ID 防止重复提交，未知结果须人工核实。其他平台/Agent 仍用 `agent prompt`。正文发送后任何错误都视为 unknown，不能自动重发；成功不代表 Agent 已完成业务。
 
@@ -765,7 +768,7 @@ Approve For Me 下本机 Codex 0.164.0 会额外持有辅助会话写锁。仅�
 
 任务业务 status 仍在真实派发/恢复成功后提交。准备中和待核实任务通过 `flow.requested_status` 显示在开发中，`flow.stage` 表示 queued、reading_prompt、preparing_window、starting_agent、dispatching，成功视图返回 ready。准备状态不代表 binding valid、prompt sent 或 Agent working。明确失败撤销列投影并提供重试启动；未知结果保留目标列与核实入口。同任务未决操作禁止冲突流转、派发和归档，但保留原删除按钮；其他任务可继续操作。
 
-引用展开使用受理时的文档快照，文件正文在后台实际读取；技能仍仅输出原生 `$技能名`，文件读取失败仍输出引用失败文本。恢复或保留绑定不读取旧提示词。实际发送文本沿用 dispatch_operations 在发送前持久化。手动派发仍使用原前端展开路径。
+引用序列化使用受理时的文档快照和冻结的执行工作目录 `request.cwd`；首次启动以 Workspace 根目录为基准，文件仅发送相对路径，技能仅发送 `$技能名`。恢复或保留绑定不读取旧提示词。实际发送文本沿用 dispatch_operations 在发送前持久化。无图片手动派发在前端序列化；带图片派发在后端读取任务所属 Project 根目录后统一序列化。同一操作重试继续复用原快照，不改变不确定结果的核实与不重发规则。
 
 `task-start-changed` 携带项目、任务与操作 ID，仅提示重新读取权威任务快照；前台每 2 秒、焦点及恢复可见时补查，事件缺失不永久停滞。补查复用在途列表查询，不触发额外 Herdr 发现；任务列表代次及乐观投影隔离旧响应，切项目卸载旧订阅。终端准备中不连接、不接收输入，也不误报绑定修复；只有仍选中的任务就绪后才连接。后台完成不会强制选择或抢焦点。
 
@@ -930,7 +933,7 @@ Herdr 对外仍使用 `Cli` 与 `Herdr`。内部 `herdr_cli` 承担进程执行�
 
 `enroll_machine` 打开本机交互 PowerShell并返回授权操作 ID；`enrollment_status(operationId)` 只读当前操作结果，密码不进入 WebView。脚本只传公钥并保留已有授权，私钥留在本机。等待阶段可退出界面，后台观测器等待原生进程结束并清理本操作临时文件；重新打开界面可从已保存 profile 继续。成功结果按 target/session 精确选择唯一 profile，随后连接检查远端平台、Herdr 会话和 Codex，并安装本版本辅助程序；歧义要求在已保存列表明确选择。接入记录在检查期间保持 disabled，只有全部检查通过才启用；失败保留配置供重试。当前仅支持 Windows x64。
 
-自动启动冻结机器、工作目录和文档后交给后台线程。`images::FrozenDocument` 在数据库锁内提取图片元数据和已校验内容，释放锁后读取远端引用/上传图片，提示词使用远端绝对路径。手动图文派发在解析成功并复核任务后，将图片引用与操作快照同事务保存再发送，失败准备不遗留附件引用。传输失败阻止缺图提示词派发；精确恢复沿用原会话，不重放正文。远端图片以内容摘要存储，保留缓存，不在停用连接时清理。
+自动启动冻结机器、工作目录和文档后交给后台线程。`images::FrozenDocument` 在数据库锁内提取图片元数据和已校验内容，释放锁后序列化文件相对路径并上传图片；文件引用不读取正文，图片仍使用远端绝对路径。手动图文派发在解析成功并复核任务后，将图片引用与操作快照同事务保存再发送，失败准备不遗留附件引用。传输失败阻止缺图提示词派发；精确恢复沿用原会话，不重放正文。远端图片以内容摘要存储，保留缓存，不在停用连接时清理。
 
 全量前端测试、迁移/身份隔离、远端只读和官方客户端定位验证已执行。远端 Codex 的环境准备、npm 包装器兼容、真实闭环和未覆盖项见 [SSH 验证记录](docs/verification/2026-10-25-ssh-multi-machine.md)；尚不能标记 #3–#13 全部验收完成。
 远端刷新按机器合并在途请求，普通定时轮询不废弃慢响应；显式 CRUD 刷新淘汰旧快照并补刷。未决 Workspace 操作直接读取本地缓存，离线及停用后仍可见。终端标题和错误显示所属电脑，最大化时也保留。原生 SSH 桥接在启动官方二进制流前再次核验主机身份，不经过 PowerShell 文本管道。

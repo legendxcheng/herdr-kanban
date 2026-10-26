@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import type { Task, Project, HerdrAgent } from "./types";
 import * as api from "./api";
 import { normalizeAgentStatus } from "./agentStatus";
-import { hasPromptImages, resolveMentions } from "./dispatchUtils";
+import { fileReference, hasPromptImages, resolveMentions } from "./dispatchUtils";
 import { tr, useLocalizedMessage } from "./i18n";
 
 interface DispatchDialogProps {
@@ -29,7 +29,7 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
   const [previewOpen, setPreviewOpen] = useState(false);
   let preview = "";
   if (previewOpen) {
-    try { preview = extractTextWithMentions(JSON.parse(task.prompt_json)); } catch { /* Invalid content has no preview. */ }
+    try { preview = extractTextWithMentions(JSON.parse(task.prompt_json), project.root_path); } catch { /* Invalid content has no preview. */ }
   }
   const [refresh, setRefresh] = useState(0);
   const isOccupied = (agent: HerdrAgent) => !!agent.occupied_by && agent.occupied_by !== task.id;
@@ -58,9 +58,9 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
     setError("");
     setLoading(true);
     try {
-      // Expand files, retaining skill names for the target agent to resolve.
+      // Send workspace-relative file paths and native skill names.
       const doc = JSON.parse(task.prompt_json);
-      const resolved = hasPromptImages(doc) ? "" : await resolveMentions(doc, project.root_path, project.machine_id && project.machine_id !== "local" ? project.id : undefined);
+      const resolved = hasPromptImages(doc) ? "" : resolveMentions(doc, project.root_path);
       if (!mounted.current) return;
       await api.dispatchToHerdr(task.id, selected, project.herdr_workspace, resolved, operation.current, hasPromptImages(doc) ? task.prompt_json : undefined);
       // A closed dialog may refresh persisted results, but cannot select a task
@@ -124,7 +124,7 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
 }
 
 /** Extract text from a Tiptap doc, keeping mention placeholders for preview. */
-function extractTextWithMentions(doc: any): string {
+function extractTextWithMentions(doc: any, rootPath: string): string {
   if (!doc || !doc.content) return "";
   let text = "";
   function walk(node: any) {
@@ -134,7 +134,7 @@ function extractTextWithMentions(doc: any): string {
       text += `\n[${tr("image.reference")}: ${node.attrs.name}]\n`;
     } else if (node.type === "mention") {
       text += node.attrs.kind === "file"
-        ? `\n[${tr("dispatch.file")}: ${node.attrs.label}]\n`
+        ? fileReference(node.attrs.ref, rootPath)
         : `$${node.attrs.label}`;
     } else if (node.content) {
       node.content.forEach(walk);
