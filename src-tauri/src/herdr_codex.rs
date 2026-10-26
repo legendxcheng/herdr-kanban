@@ -65,21 +65,6 @@ impl Cli {
         } else if !live.agent.is_empty() {
             return Err("flow.not_idle".into());
         }
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            check_current()?;
-            let (shell, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
-            if shell.terminal_id != target.terminal_id {
-                return Err("binding.identity_changed".into());
-            }
-            if shell.agent.is_empty() && self.ready(&shell, &info) {
-                break;
-            }
-            if Instant::now() >= deadline {
-                return Err("flow.not_idle".into());
-            }
-            thread::sleep(Duration::from_millis(150));
-        }
         let mut args = vec![
             "agent",
             "start",
@@ -98,8 +83,52 @@ impl Cli {
             args.extend(["resume", id]);
         }
         args.extend(["-C", cwd]);
-        check_current()?;
-        self.json(&args)?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut ready_shell: Option<Target> = None;
+        let mut rejection = None;
+        loop {
+            check_current()?;
+            let (shell, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
+            // During exit the Agent registry may still describe the old Codex
+            // even though process inspection already reports its parent shell.
+            let exiting_agent = shell.agent == live.agent
+                && (shell.same_identity(&live)
+                    || shell
+                        .process_id
+                        .split_once(':')
+                        .is_some_and(|(pid, group)| pid == group));
+            if shell.terminal_id != target.terminal_id
+                || (!target.process_id.is_empty()
+                    && shell.process_id.split(':').next() != target.process_id.split(':').next())
+                || (!shell.agent.is_empty() && !exiting_agent)
+            {
+                return Err("binding.identity_changed".into());
+            }
+            if Instant::now() >= deadline {
+                return Err(rejection.unwrap_or_else(|| "flow.not_idle".into()));
+            }
+            if shell.agent.is_empty() && self.ready(&shell, &info) {
+                if ready_shell
+                    .as_ref()
+                    .is_some_and(|old| !old.same_identity(&shell))
+                {
+                    return Err("binding.identity_changed".into());
+                }
+                ready_shell = Some(shell);
+                check_current()?;
+                match self.json(&args) {
+                    Ok(_) => break,
+                    // Windows process inspection can see the shell before Herdr's
+                    // cached Agent state catches up. Only an explicit rejection
+                    // is safe to retry; never repeat an uncertain launch.
+                    Err(error) if super::agent_start_rejected_busy(&error) => {
+                        rejection = Some(error);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            thread::sleep(Duration::from_millis(150));
+        }
         let (mut live, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
         if live.terminal_id != target.terminal_id
             || live.agent != "codex"

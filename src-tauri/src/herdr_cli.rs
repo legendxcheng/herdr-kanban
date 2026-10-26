@@ -4,6 +4,20 @@ use crate::workflow::SendError;
 use serde_json::Value;
 use std::{process::Command, time::Duration};
 
+/// Only a complete, explicit rejection of agent.start proves no launch occurred.
+/// Also accepts the persisted stderr envelope from older Kanban versions.
+pub(crate) fn agent_start_rejected_busy(error: &str) -> bool {
+    let Some(json) = error.strip_prefix("herdr.failed: ") else {
+        return false;
+    };
+    let Ok(doc) = serde_json::from_str::<Value>(json) else {
+        return false;
+    };
+    doc["id"] == "cli:agent:start"
+        && doc["error"]["code"] == "agent_pane_busy"
+        && doc.get("result").is_none()
+}
+
 impl Cli {
     pub(crate) fn client_endpoint(&self) -> Result<std::path::PathBuf, String> {
         let path = self.api_endpoint()?;
@@ -161,7 +175,11 @@ impl Cli {
             || doc.get("error").is_some_and(|e| !e.is_null())
         {
             return Err(SendError {
-                message: "herdr.failed".into(),
+                message: if args.starts_with(&["agent", "start"]) {
+                    format!("herdr.failed: {doc}")
+                } else {
+                    "herdr.failed".into()
+                },
                 uncertain: true,
             });
         }

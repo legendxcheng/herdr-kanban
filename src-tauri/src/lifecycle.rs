@@ -196,6 +196,36 @@ impl Workflow {
         tx.execute("DELETE FROM task_working_directories WHERE task_id=?1 AND NOT EXISTS(SELECT 1 FROM task_bindings WHERE task_id=?1) AND NOT EXISTS(SELECT 1 FROM task_sessions WHERE task_id=?1)", [task]).map_err(err)?;
         tx.commit().map_err(err)
     }
+    /// A server rejection never launched our Agent. Release only this operation's
+    /// reservation, without closing the pane or replaying any prompt/session.
+    fn release_rejected_start(&self, task: &str, op: &str, error: &str) -> Result<(), String> {
+        if !crate::herdr::agent_start_rejected_busy(error) {
+            return Err("dispatch.operation_conflict".into());
+        }
+        let mut db = self.db.lock().map_err(err)?;
+        let tx = db.transaction().map_err(err)?;
+        ensure_operation(&tx, task, op)?;
+        let releasable: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM lifecycle_operations o JOIN task_bindings b ON b.task_id=o.task_id
+             WHERE o.id=?1 AND o.task_id=?2 AND o.kind='start' AND b.state='reserved'
+             AND b.target_json=o.target_json AND (o.state='pending' OR (o.state='unknown' AND o.error=?3))
+             AND NOT EXISTS(SELECT 1 FROM dispatch_operations d WHERE d.id=?4 OR (d.task_id=?2 AND d.state IN ('pending','unknown'))))",
+            params![op, task, error, format!("{op}:dispatch")], |r| r.get(0),
+        ).map_err(err)?;
+        if !releasable {
+            return Err("dispatch.operation_conflict".into());
+        }
+        tx.execute("DELETE FROM task_bindings WHERE task_id=?1", [task])
+            .map_err(err)?;
+        tx.execute(
+            "UPDATE pane_allocations SET resolved=1 WHERE operation_id=?1",
+            [op],
+        )
+        .map_err(err)?;
+        tx.execute("UPDATE lifecycle_operations SET state='failed',error=?2,evidence='Agent start explicitly rejected; no dispatch attempted; pane preserved' WHERE id=?1", params![op, error]).map_err(err)?;
+        tx.execute("DELETE FROM task_working_directories WHERE task_id=?1 AND NOT EXISTS(SELECT 1 FROM task_sessions WHERE task_id=?1)", [task]).map_err(err)?;
+        tx.commit().map_err(err)
+    }
     fn reserve_target(&self, task: &str, op: &str, target: &Target) -> Result<(), String> {
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
@@ -278,6 +308,7 @@ impl Workflow {
         progress: &dyn Fn(&str) -> Result<(), String>,
     ) -> Result<Outcome, String> {
         let mut touched = false;
+        let mut start_rejected = false;
         let result = (|| {
             self.check_flow(task, op)?;
             let (workspace, cwd) = match context {
@@ -358,13 +389,19 @@ impl Workflow {
             touched = true;
             progress("starting_agent")?;
             self.check_flow(task, op)?;
-            let live = self.herdr.prepare_codex(
-                &target,
-                &cwd,
-                saved.as_deref(),
-                &format!("kb-{}", &op.replace('-', "")[..24]),
-                &|| self.check_flow(task, op),
-            )?;
+            let live = self
+                .herdr
+                .prepare_codex(
+                    &target,
+                    &cwd,
+                    saved.as_deref(),
+                    &format!("kb-{}", &op.replace('-', "")[..24]),
+                    &|| self.check_flow(task, op),
+                )
+                .map_err(|error| {
+                    start_rejected = crate::herdr::agent_start_rejected_busy(&error);
+                    error
+                })?;
             self.reserve_target(task, op, &live)?;
             self.save_session(task, &live, &cwd, saved.as_deref())?;
             self.db
@@ -391,7 +428,9 @@ impl Workflow {
             Ok(Outcome::default())
         })();
         if let Err(ref e) = result {
-            if touched {
+            if start_rejected {
+                self.release_rejected_start(task, op, e)?;
+            } else if touched {
                 self.end_flow(op, "unknown", e)?;
             } else {
                 self.fail_unstarted(task, op, e)?;
@@ -467,8 +506,8 @@ impl Workflow {
             }
         }
     }
-    /// Reconcile without sending, starting or closing anything. An unresolved launch may only
-    /// be released after its exact pane is gone, or its already-confirmed dispatch is committed.
+    /// Reconcile without sending, starting or closing anything. Explicitly rejected starts
+    /// may release their reservation; uncertain launches still require pane/dispatch evidence.
     pub fn recover_lifecycle(&self, task: &str, op: &str) -> Result<(), String> {
         let (workspace, _, _) = self.project_context(task)?;
         let flow = view(&*self.db.lock().map_err(err)?, task)?;
@@ -484,6 +523,11 @@ impl Workflow {
                 return Err("dispatch.operation_conflict".into());
             }
             return self.confirm_received_dispatch(dispatch);
+        }
+        if flow.kind.as_deref() == Some("start")
+            && crate::herdr::agent_start_rejected_busy(&flow.error)
+        {
+            return self.release_rejected_start(task, op, &flow.error);
         }
         let sent: bool = self
             .db

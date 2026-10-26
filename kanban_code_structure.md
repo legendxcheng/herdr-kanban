@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-26。修复复用旧 Codex 窗格时 `agent_pane_busy` 导致启动卡住：仅对明确拒绝的启动请求，在同一窗格身份下有界等待重试；持续明确拒绝转为可重试失败，旧卡片可通过“核实启动结果”释放本次预占。超时和不确定响应仍保留核实保护。实现见 6.6.2，真实 Herdr 三次复用均触发原错误并成功恢复，验证及运行中应用未替换的边界见 [启动时序验收记录](docs/verification/2026-10-26-agent-start-busy.md)。
+
 更新日期：2026-10-26。空 Workspace 定时闪烁修复：看板仅首次查询期间显示加载占位；空列表、后台轮询、焦点刷新、删除最后一张任务及失败重试均保留已展示的看板。已重新生成 0.1.0 Windows x64 NSIS 安装包并核对 SHA-256，未执行安装验证。实现与验证边界见 [空看板刷新验收记录](docs/verification/2026-10-26-empty-board-refresh.md)。
 
 更新日期：2026-10-26。本地 Herdr 自定义安装入口修复：优先使用 PATH 中的 Herdr，Windows 按 PATHEXT 解析 `.exe/.com/.cmd/.bat`，默认安装目录仅作回退；保留显式 `KANBAN_HERDR_EXECUTABLE`。Workspace 目录通过同一入口查询会话目录并核对 session/socket，不再假定 `%APPDATA%/herdr`。实现与验证边界见 [本地 Herdr 入口验收记录](docs/verification/2026-10-26-local-herdr-entry.md)。
@@ -161,6 +163,7 @@ herdr-kanban/
 │     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
 │     ├─ lifecycle.rs              自动分配、会话记录、完成清理与启动核实
 │     ├─ lifecycle_tests/          共用 fixture 与分配、后台启动、完成清理、恢复场景
+│     ├─ agent_start_tests.rs      实际 CLI 适配器的启动拒绝/有界重试进程替身，以及隔离 Herdr/Codex 复用验收
 │     ├─ start.rs                  持久化受理、后台引用展开及启动通知
 │     ├─ images.rs                 附件/引用存储、短事务、后台回收及提示词解析
 │     ├─ image_commands.rs         图片草稿、导入、预览及关闭 IPC
@@ -719,6 +722,18 @@ Approve For Me 下本机 Codex 0.164.0 会额外持有辅助会话写锁。仅�
 `task-start-changed` 携带项目、任务与操作 ID，仅提示重新读取权威任务快照；前台每 2 秒、焦点及恢复可见时补查，事件缺失不永久停滞。补查复用在途列表查询，不触发额外 Herdr 发现；任务列表代次及乐观投影隔离旧响应，切项目卸载旧订阅。终端准备中不连接、不接收输入，也不误报绑定修复；只有仍选中的任务就绪后才连接。后台完成不会强制选择或抢焦点。
 
 自动化与原生测试边界见[异步启动验证记录](docs/verification/2026-10-24-kanban-async-start.md)。独立 WebView2 配合 Herdr CLI 替身属于宿主链路验证，不能替代真实 Herdr/Codex 生命周期验收。
+
+### 6.6.2 旧 Codex 退出与新 Agent 启动的时序恢复（2026-10-26）
+
+Windows 进程查询可能先观察到 shell，而 Herdr 的 Agent 注册状态尚未清除旧 Codex。`herdr_codex::prepare_codex_session` 将等待 shell 与启动重试放在同一个 10 秒窗口，每轮重新查询窗格并核对 terminal、shell PID 和已观察到的就绪 shell 身份；旧 Codex 退出期间的注册状态滞后允许继续等待，替换的 terminal/shell/其他 Agent 拒绝继续。每次外部写入前仍检查任务有效性。
+
+只有完整 JSON 错误中的 `id=cli:agent:start`、`error.code=agent_pane_busy` 且没有 result，才证明该次启动明确被拒绝并允许间隔 150ms 重试。CLI 非零退出的 stderr 及成功退出但携带错误的 stdout 都保留可核验的错误信封。窗口到期不再发送新启动请求；单次 CLI 调用仍遵守原有独立超时，因此总耗时可能超过 10 秒。连接失败、响应损坏、超时或任何一次启动成功后的检查失败均不重试启动。
+
+持续明确拒绝时，`lifecycle::release_rejected_start` 在事务中要求本次 start 操作仍有效、binding 为 reserved 且目标快照与该操作一致，并且本次没有任何 dispatch 记录或任务其他未决 dispatch，才释放绑定/分配隔离并标记 failed，显示既有“重试启动”入口。保留窗格、任务正文及已保存的恢复会话；无保存会话时清除本次冻结的工作目录。此路径不关闭窗格、不启动 Agent、不发送提示词，不新增 IPC 或数据库迁移。
+
+旧版本将同一明确拒绝记成 unknown 的卡片，点击“核实启动结果”也执行上述事务，可以在原窗格仍存在时恢复为可重试失败。这是 6.6 中“必须确认 pane 不存在才释放”的明确拒绝例外；错误不完整、身份预占不一致或派发已经开始时保持原有保守路径。正常未知派发依然只核实回执，不自动重发。
+
+验证：完整 Rust 常规回归 181 passed / 19 ignored；相关前端模拟 IPC 回归 29 passed。另显式执行真实 Herdr/Codex 测试：同一个测试 pane 完成首次启动和三次退出重启，三次均观察到原始 `agent_pane_busy` 并经重试成功，未发送业务提示词。测试 pane 与 workspace 已清理。未替换正在运行的桌面程序、未打包安装，也未修改用户实际卡片；详情见 [启动时序验收记录](docs/verification/2026-10-26-agent-start-busy.md)。
 
 ## 7. 当前实现的关键边界与维护风险
 

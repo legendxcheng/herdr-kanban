@@ -16,6 +16,7 @@ struct State {
     close_error: bool,
     close_then_error: bool,
     prepare_error: bool,
+    prepare_busy: bool,
     mismatch: bool,
     send_error: bool,
     receipt_available: bool,
@@ -154,6 +155,9 @@ impl Herdr for Fake {
         let mut s = self.0.lock().unwrap();
         if s.prepare_error {
             return Err("timeout".into());
+        }
+        if s.prepare_busy {
+            return Err(r#"herdr.failed: {"error":{"code":"agent_pane_busy","message":"not an available shell"},"id":"cli:agent:start"}"#.into());
         }
         let id = if s.mismatch {
             uuid::Uuid::new_v4().to_string()

@@ -281,6 +281,85 @@ fn failed_start_requires_pane_absence_before_releasing_reservation() {
 }
 
 #[test]
+fn pane_busy_releases_rejected_start_without_closing_or_sending() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().prepare_busy = true;
+    let id = op();
+    assert!(app.start_task("a", "A", &id).is_err());
+    assert_eq!(
+        view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+        Some("failed")
+    );
+    assert!(app.binding("a").unwrap().target.is_none());
+    {
+        let s = fake.0.lock().unwrap();
+        assert!(s.sent.is_empty());
+        assert!(s.closed.is_empty());
+        assert_eq!(s.panes.len(), 1);
+    }
+    fake.0.lock().unwrap().prepare_busy = false;
+    app.start_task("a", "A", &op()).unwrap();
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["A"]);
+}
+
+#[test]
+fn pane_busy_legacy_unknown_can_be_checked_without_removing_pane() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().prepare_error = true;
+    let id = op();
+    assert!(app.start_task("a", "A", &id).is_err());
+    app.end_flow(
+        &id,
+        "unknown",
+        r#"herdr.failed: {"error":{"code":"agent_pane_busy"},"id":"cli:agent:start"}"#,
+    )
+    .unwrap();
+    app.recover_lifecycle("a", &id).unwrap();
+    assert_eq!(
+        view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+        Some("failed")
+    );
+    assert!(app.binding("a").unwrap().target.is_none());
+    let s = fake.0.lock().unwrap();
+    assert_eq!(s.panes.len(), 1);
+    assert!(s.closed.is_empty());
+    assert!(s.sent.is_empty());
+}
+
+#[test]
+fn pane_busy_keeps_saved_session_for_explicit_resume_retry() {
+    let (app, fake) = fixture();
+    app.start_task("a", "A", &op()).unwrap();
+    app.complete_task("a", &op()).unwrap();
+    let session = saved(&app, "a").unwrap();
+    fake.0.lock().unwrap().prepare_busy = true;
+    assert!(app.start_task("a", "ignored", &op()).is_err());
+    assert_eq!(saved(&app, "a").as_deref(), Some(session.as_str()));
+    fake.0.lock().unwrap().prepare_busy = false;
+    app.start_task("a", "ignored", &op()).unwrap();
+    let s = fake.0.lock().unwrap();
+    assert_eq!(s.sent, vec!["A"]);
+    assert_eq!(s.prepared.last(), Some(&Some(session)));
+}
+
+#[test]
+fn pane_busy_cannot_release_an_operation_that_has_dispatched() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().send_error = true;
+    let id = op();
+    assert!(app.start_task("a", "A", &id).is_err());
+    let error = r#"herdr.failed: {"error":{"code":"agent_pane_busy"},"id":"cli:agent:start"}"#;
+    app.end_flow(&id, "unknown", error).unwrap();
+    assert!(app.release_rejected_start("a", &id, error).is_err());
+    assert!(app.binding("a").unwrap().target.is_some());
+    assert_eq!(
+        view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+        Some("unknown")
+    );
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["A"]);
+}
+
+#[test]
 fn restart_marks_pending_launch_unknown_and_never_automatically_replays_it() {
     let (app, fake) = fixture();
     let id = op();

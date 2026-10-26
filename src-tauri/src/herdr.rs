@@ -2,6 +2,10 @@
 use crate::workflow::{Herdr, SendError, Target};
 #[path = "herdr_cli.rs"]
 mod cli;
+pub(crate) use cli::agent_start_rejected_busy;
+#[cfg(all(test, windows))]
+#[path = "agent_start_tests.rs"]
+mod agent_start_tests;
 #[path = "codex_process.rs"]
 mod codex_process;
 #[path = "herdr_executable.rs"]
