@@ -16,6 +16,8 @@ mod workspace_metadata;
 use workspace_metadata::workspace_directories;
 #[path = "herdr_codex.rs"]
 mod codex;
+#[path = "codex_receipt.rs"]
+mod codex_receipt;
 #[cfg(any(windows, test))]
 #[path = "herdr_codex_submit.rs"]
 mod codex_submit;
@@ -26,6 +28,7 @@ use std::path::PathBuf;
 pub struct Cli {
     pub executable: PathBuf,
     pub session: String,
+    pub remote: Option<crate::machines::Machine>,
 }
 
 impl Cli {
@@ -91,6 +94,7 @@ impl Cli {
             return Err("binding.identity_unknown".into());
         }
         Ok(Target {
+            machine_id: self.machine_id().into(),
             session: self.session.clone(),
             workspace_id: workspace_id.into(),
             pane_id: pane.into(),
@@ -118,10 +122,46 @@ fn field<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
         .ok_or_else(|| "herdr.invalid_response".into())
 }
 impl Herdr for Cli {
+    fn machine_id(&self) -> &str {
+        self.remote
+            .as_ref()
+            .map(|m| m.id.as_str())
+            .unwrap_or(crate::machines::LOCAL_ID)
+    }
+    fn resources(&self) -> &dyn crate::execution::Resources {
+        match &self.remote {
+            Some(machine) => machine,
+            None => &crate::execution::LOCAL,
+        }
+    }
+    fn terminal_client(&self) -> Result<Cli, String> {
+        Ok(self.clone())
+    }
+    fn prompt_receipt(
+        &self,
+        target: &Target,
+        prompt: &str,
+        after: &str,
+        expected_session: Option<&str>,
+    ) -> Result<Option<crate::workflow::PromptReceipt>, String> {
+        if let Some(machine) = &self.remote {
+            return crate::remote_transport::request(
+                machine,
+                serde_json::json!({"method":"prompt_receipt","target":target,"prompt":prompt,"after":after,"expected":expected_session}),
+            );
+        }
+        self.read_prompt_receipt(target, prompt, after, expected_session)
+    }
     fn session(&self) -> &str {
         &self.session
     }
     fn workspaces(&self) -> Result<Vec<crate::projects::Workspace>, String> {
+        if let Some(machine) = &self.remote {
+            return crate::remote_transport::request(
+                machine,
+                serde_json::json!({"method":"workspaces"}),
+            );
+        }
         let doc = self.json(&["workspace", "list"])?;
         self.parse_workspaces(&doc)
     }
@@ -130,6 +170,12 @@ impl Herdr for Cli {
         id: &str,
         before: Option<&str>,
     ) -> Result<Vec<crate::projects::Workspace>, String> {
+        if let Some(machine) = &self.remote {
+            return crate::remote_transport::request(
+                machine,
+                serde_json::json!({"method":"move_workspace","id":id,"before":before}),
+            );
+        }
         let doc = self.socket_request(
             "workspace.move_block",
             serde_json::json!({
@@ -194,7 +240,19 @@ impl Herdr for Cli {
                     .get("foreground_cwd")
                     .and_then(Value::as_str)
                     .or_else(|| info.get("cwd").and_then(Value::as_str));
-                if dir.is_some_and(|d| same_directory(d, cwd)) && self.ready(&target, &info) {
+                let directory_matches = if let Some(dir) = dir {
+                    if let Some(machine) = &self.remote {
+                        crate::remote_transport::request(
+                            machine,
+                            serde_json::json!({"method":"same_directory","a":dir,"b":cwd}),
+                        )?
+                    } else {
+                        same_directory(dir, cwd)
+                    }
+                } else {
+                    false
+                };
+                if directory_matches && self.ready(&target, &info) {
                     targets.push(target);
                 }
             }
@@ -228,7 +286,7 @@ impl Herdr for Cli {
         check_current: &dyn Fn() -> Result<(), String>,
     ) -> Result<Target, String> {
         check_current()?;
-        if !std::path::Path::new(cwd).is_dir() {
+        if !self.resources().directory_exists(cwd)? {
             return Err("flow.directory_missing".into());
         }
         let id = self.resolve_workspace_id(workspace)?;
@@ -271,6 +329,7 @@ impl Herdr for Cli {
         let pane_id = field(pane, "pane_id")?;
         // The pane identity is recorded even when shell initialization has not finished.
         Ok(Target {
+            machine_id: self.machine_id().into(),
             session: self.session.clone(),
             workspace_id: id,
             pane_id: pane_id.into(),
@@ -293,6 +352,12 @@ impl Herdr for Cli {
         self.prepare_codex_session(target, cwd, resume, name, check_current)
     }
     fn session_id(&self, target: &Target) -> Result<Option<String>, String> {
+        if let Some(machine) = &self.remote {
+            return crate::remote_transport::request(
+                machine,
+                serde_json::json!({"method":"session_id","target":target}),
+            );
+        }
         self.read_codex_session(target)
     }
     fn pane_exists(&self, target: &Target) -> Result<bool, String> {

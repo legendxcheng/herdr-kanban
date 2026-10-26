@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Default)]
 struct FakeHerdr {
+    machine_name: Option<String>,
     sent: Mutex<Vec<String>>,
     uncertain: Mutex<bool>,
     send_error_message: Mutex<Option<String>>,
@@ -10,9 +11,13 @@ struct FakeHerdr {
     after_send: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 impl Herdr for FakeHerdr {
+    fn machine_id(&self) -> &str {
+        self.machine_name.as_deref().unwrap_or("local")
+    }
     fn targets(&self, _: &str) -> Result<Vec<Target>, String> {
         Ok(vec![
             Target {
+                machine_id: self.machine_id().into(),
                 session: "default".into(),
                 workspace_id: "w1".into(),
                 pane_id: "w1:p1".into(),
@@ -24,6 +29,7 @@ impl Herdr for FakeHerdr {
                 status: "idle".into(),
             },
             Target {
+                machine_id: self.machine_id().into(),
                 session: "default".into(),
                 workspace_id: "w1".into(),
                 pane_id: "w1:p2".into(),
@@ -70,6 +76,38 @@ impl Herdr for FakeHerdr {
             Ok(())
         }
     }
+}
+
+#[test]
+fn same_pane_on_two_computers_can_be_bound_without_cross_machine_ownership() {
+    let (local, _) = fixture();
+    local.db.lock().unwrap().execute_batch("DELETE FROM tasks WHERE id='b'; UPDATE projects SET machine_id='devpc' WHERE id='p2'; INSERT INTO tasks(id,project_id,name,status,created_at,updated_at) VALUES ('b','p2','B','todo','now','now');").unwrap();
+    let remote = Workflow {
+        db: local.db.clone(),
+        herdr: Arc::new(FakeHerdr {
+            machine_name: Some("devpc".into()),
+            ..Default::default()
+        }),
+    };
+    local.repair("a", "w1:p1").unwrap();
+    remote.repair("b", "w1:p1").unwrap();
+    let first = local.binding("a").unwrap().target.unwrap();
+    let second = remote.binding("b").unwrap().target.unwrap();
+    assert_eq!(first.machine_id, "local");
+    assert_eq!(second.machine_id, "devpc");
+    assert!(!first.same_identity(&second));
+    assert_eq!(
+        pane_owner(&local.db.lock().unwrap(), &first)
+            .unwrap()
+            .as_deref(),
+        Some("a")
+    );
+    assert_eq!(
+        pane_owner(&remote.db.lock().unwrap(), &second)
+            .unwrap()
+            .as_deref(),
+        Some("b")
+    );
 }
 fn fixture() -> (Workflow, Arc<FakeHerdr>) {
     let db = Connection::open_in_memory().unwrap();

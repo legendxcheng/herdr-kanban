@@ -5,7 +5,7 @@ export function hasPromptImages(doc: any): boolean {
 }
 
 /** Expand file references, preserving native $skill invocations. */
-export async function resolveMentions(doc: any, _rootPath: string): Promise<string> {
+export async function resolveMentions(doc: any, _rootPath: string, projectId?: string): Promise<string> {
   const parts: string[] = [];
   async function walk(node: any) {
     if (node.type === "text") {
@@ -18,7 +18,7 @@ export async function resolveMentions(doc: any, _rootPath: string): Promise<stri
       const label = node.attrs.label;
       try {
         if (kind === "file") {
-          const content = await api.readFileContent(ref);
+          const content = await api.readFileContent(ref, projectId);
           parts.push(`\n--- @文件: ${label} (${ref}) ---\n\`\`\`\n${content}\n\`\`\`\n`);
         } else {
           parts.push(`$${label}`);

@@ -669,3 +669,9 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 .overview-table button:hover { color: #3ecf8e; }
 .overview-note { margin-top: 20px; }
 .overview-footer { padding-top: 14px; padding-bottom: 14px; border-top: 1px solid var(--border); }
+/* Execution computer headings share the existing navigation hierarchy. */
+.machine-heading { margin: 12px 12px 6px; font-size: 12px; color: var(--text-secondary, #aaa); }
+.machine-group > .error, .machine-group > .hint, .machine-group > [role="status"] { margin: 6px 12px; font-size: 12px; overflow-wrap: anywhere; }
+.machine-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.machine-entry > strong { min-width: 90px; }
+.machine-entry > span { flex: 1; min-width: 150px; color: var(--text-muted); font-size: 12px; }

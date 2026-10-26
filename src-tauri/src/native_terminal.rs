@@ -162,8 +162,7 @@ impl Drop for NativeTerminalManager {
     }
 }
 
-// Keep ordinary WezTerm/Herdr settings and native mouse bindings. Only override
-// window chrome needed for the independent window to occupy Kanban's slot.
+// Keep native input and the user's settings, with a per-view hidden sidebar.
 fn client_command(executable: &Path, cli: &Cli, class: &str, endpoint: &str) -> Command {
     let mut command = Command::new(executable);
     command
@@ -186,16 +185,11 @@ fn client_command(executable: &Path, cli: &Cli, class: &str, endpoint: &str) -> 
         // keeps the real session/config identity while using our private connection.
         .env("HERDR_SESSION", &cli.session)
         .env("HERDR_CLIENT_SOCKET_PATH", endpoint)
-        // Herdr otherwise keys sidebar preferences by the temporary pipe name.
-        // This preference-only identity is stable across task switches; it does
-        // not enable remote mode or alter the user's Herdr configuration.
+        // The identity matches the copied chrome preferences in the view's
+        // private state directory; it does not enable remote mode.
         .env(
             "HERDR_REMOTE_PREFERENCES_IDENTITY",
-            serde_json::json!([
-                format!("kanban-local:{}", crate::db::db_path().display()),
-                cli.session
-            ])
-            .to_string(),
+            serde_json::to_string(&profile::machine_identity(cli)).unwrap(),
         );
     // `client` connects only to an existing server. Never auto-start a server
     // (and therefore Agents) inside the viewer's kill-on-close Windows Job.
@@ -233,8 +227,10 @@ fn open_inner(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(
     let _gate = view.open_gate.lock().map_err(err)?;
     view.check()?;
     let target = app.target(&view.task, true)?;
-    let cli = Cli::from_env();
-    if target.session != cli.session {
+    let cli = app.herdr.terminal_client()?;
+    if target.session != cli.session
+        || target.machine_id != crate::workflow::Herdr::machine_id(&cli)
+    {
         return Err("binding.identity_changed".into());
     }
     view.check()?;
@@ -246,8 +242,11 @@ fn open_inner(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(
         .ok_or("terminal.window_timeout")?
         .join("terminal");
     std::fs::create_dir_all(&config_dir).map_err(err)?;
+    let profile = profile::Profile::prepare_machine(&config_dir, &cli)?;
     let diagnostics = std::fs::File::create(config_dir.join("wezterm.log")).map_err(err)?;
-    let child = client_command(&executable, &cli, &class, &connection.endpoint)
+    let mut command = client_command(&executable, &cli, &class, &connection.endpoint);
+    profile.apply(&mut command);
+    let child = command
         .stderr(diagnostics)
         .spawn()
         .map_err(|e| format!("terminal.wezterm_unavailable: {e}"))?;
@@ -284,6 +283,7 @@ fn open_inner(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(
                     hwnd,
                     *monitor.bounds.lock().unwrap(),
                     monitor.ready.load(Ordering::Acquire)
+                        && monitor.focused.load(Ordering::Acquire)
                         && monitor.presented.load(Ordering::Acquire),
                 );
             }
@@ -293,6 +293,8 @@ fn open_inner(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(
             windows::hide(hwnd);
         }
         // Drop closes this WezTerm and its Herdr CLIENT only, never the server.
+        drop(process);
+        drop(profile);
     });
     let deadline = Instant::now() + Duration::from_secs(15);
     while !(view.window_found.load(Ordering::Acquire) && view.focused.load(Ordering::Acquire))
@@ -308,7 +310,7 @@ fn open_inner(view: Arc<View>, app: Arc<Workflow>, main_hwnd: isize) -> Result<(
     if !view.focused.load(Ordering::Acquire) {
         return Err("terminal.client_focus_timeout".into());
     }
-    // Both native HWND discovery and connection-scoped focus are confirmed.
+    // Both native HWND discovery and connection-scoped single-pane display are confirmed.
     view.ready.store(true, Ordering::Release);
     Ok(())
 }
@@ -347,6 +349,9 @@ fn wezterm_executable() -> Result<PathBuf, String> {
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
+
+#[path = "native_client_profile.rs"]
+mod profile;
 
 #[cfg(windows)]
 #[path = "native_client_connection.rs"]
@@ -391,15 +396,19 @@ mod tests {
     #[test]
     fn launches_official_connect_only_client_without_proxy_or_input_overrides() {
         let cli = Cli {
+            remote: None,
             executable: "C:/Tools/Herdr/herdr.exe".into(),
             session: "test-session".into(),
         };
-        let command = client_command(
+        let base = std::env::temp_dir().join(format!("kanban-command-{}", uuid::Uuid::new_v4()));
+        let profile = profile::Profile::fixture(&base, &cli.session);
+        let mut command = client_command(
             Path::new("wezterm-gui.exe"),
             &cli,
             "test-window",
             "private-test-pipe",
         );
+        profile.apply(&mut command);
         let args: Vec<_> = command
             .get_args()
             .map(|s| s.to_string_lossy().into_owned())
@@ -436,6 +445,18 @@ mod tests {
                     .any(|(name, value)| name == key && value.is_none())
             );
         }
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "HERDR_CONFIG_PATH" && value.is_some())
+        );
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "XDG_STATE_HOME" && value.is_some())
+        );
+        drop(profile);
+        std::fs::remove_dir(&base).unwrap();
     }
     #[test]
     fn rejects_nonfinite_and_offscreen_webview_rectangles() {

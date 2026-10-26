@@ -42,6 +42,7 @@ mod tests {
             VALUES ('p','P','.','P','now','default','w1','ready');
             INSERT INTO tasks(id,project_id,name,status,created_at,updated_at) VALUES ('a','p','A','in_progress','now','now');").unwrap();
         let target = Target {
+            machine_id: crate::machines::local_id(),
             session: "default".into(),
             workspace_id: "w1".into(),
             pane_id: "w1:p1".into(),
@@ -170,15 +171,22 @@ mod tests {
 
 impl Workflow {
     pub fn list_agents(&self, project: &str) -> Result<Vec<AgentChoice>, String> {
-        let workspace = crate::projects::project_identity(
+        let workspace = crate::projects::project_identity_on(
             &*self.db.lock().map_err(|e| e.to_string())?,
             project,
+            self.herdr.machine_id(),
             self.herdr.session(),
         )?;
         // Never hold SQLite while waiting for Herdr.
         let targets = self.herdr.targets(&workspace)?;
         let db = self.db.lock().map_err(|e| e.to_string())?;
-        if crate::projects::project_identity(&db, project, self.herdr.session())? != workspace {
+        if crate::projects::project_identity_on(
+            &db,
+            project,
+            self.herdr.machine_id(),
+            self.herdr.session(),
+        )? != workspace
+        {
             return Err("binding.identity_changed".into());
         }
         targets.into_iter().map(|target| {

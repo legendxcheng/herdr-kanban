@@ -6,8 +6,9 @@ import { preparationLabel } from "./taskFlow";
 import { terminalBounds } from "./nativeTerminalBounds";
 import { Icon } from "./Icon";
 
-export function TerminalPanel({ task, onRepair, maximized = false, onToggleMaximized }: {
+export function TerminalPanel({ task, machineName, onRepair, maximized = false, onToggleMaximized }: {
   task: Task | null;
+  machineName?: string;
   onRepair?: () => void;
   maximized?: boolean;
   onToggleMaximized?: () => void;
@@ -83,7 +84,9 @@ export function TerminalPanel({ task, onRepair, maximized = false, onToggleMaxim
 
   return <aside className={`terminal-panel${maximized ? " terminal-panel-maximized" : ""}`} aria-label={tr("terminal.label")}>
     <header className="terminal-header">
-      <strong>{task?.name ?? tr("terminal.label")}</strong><span role="status">{tr(state)}</span>
+      <strong title={task ? `${machineName ?? tr("machine.local")} · ${task.name}` : undefined}>{task?.name ?? tr("terminal.label")}</strong>
+      {task && <span className="terminal-machine">{machineName ?? tr("machine.local")}</span>}
+      <span role="status">{tr(state)}</span>
       {onToggleMaximized && <button type="button" className="btn-icon terminal-size-toggle"
         aria-label={tr(maximized ? "terminal.restore" : "terminal.maximize")}
         title={tr(maximized ? "terminal.restore" : "terminal.maximize")} onClick={onToggleMaximized}>
@@ -92,7 +95,7 @@ export function TerminalPanel({ task, onRepair, maximized = false, onToggleMaxim
     </header>
     {!task && <p className="terminal-hint">{tr("terminal.empty")}</p>}
     {task && state !== "terminal.connected" && <div className="terminal-feedback">
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{machineName ?? tr("machine.local")} · {error}</p>}
       {!preparation && state !== "terminal.connecting" && <div className="task-actions">
         {bindingState === "valid" && <button className="btn-secondary" onClick={() => setAttempt((n) => n + 1)}>{tr("terminal.reconnect")}</button>}
         {onRepair && <button className="btn-ghost" onClick={onRepair}>{tr("binding.repair")}</button>}

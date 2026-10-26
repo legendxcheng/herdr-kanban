@@ -18,13 +18,14 @@ struct State {
     prepare_error: bool,
     mismatch: bool,
     send_error: bool,
+    receipt_available: bool,
     create_error: bool,
     lost_create_response: bool,
     prepare_gate: Option<Arc<(Mutex<bool>, std::sync::Condvar)>>,
     observe: Option<Arc<dyn Fn(&str) + Send + Sync>>,
 }
 #[derive(Default)]
-struct Fake(Mutex<State>);
+struct Fake(Mutex<State>, Option<Arc<dyn crate::execution::Resources>>);
 impl Fake {
     fn observe(&self, phase: &str) {
         let callback = self.0.lock().unwrap().observe.clone();
@@ -35,6 +36,7 @@ impl Fake {
 }
 fn target(id: &str) -> Target {
     Target {
+        machine_id: crate::machines::local_id(),
         session: "default".into(),
         workspace_id: "w1".into(),
         pane_id: id.into(),
@@ -47,6 +49,30 @@ fn target(id: &str) -> Target {
     }
 }
 impl Herdr for Fake {
+    fn resources(&self) -> &dyn crate::execution::Resources {
+        self.1.as_deref().unwrap_or(&crate::execution::LOCAL)
+    }
+    fn prompt_receipt(
+        &self,
+        t: &Target,
+        prompt: &str,
+        _: &str,
+        expected: Option<&str>,
+    ) -> Result<Option<crate::workflow::PromptReceipt>, String> {
+        let id = self.session_id(t)?.ok_or("flow.session_missing")?;
+        if expected.is_some_and(|old| old != id) {
+            return Err("flow.session_mismatch".into());
+        }
+        let s = self.0.lock().unwrap();
+        Ok(
+            (s.receipt_available && s.sent.iter().any(|p| p == prompt)).then(|| {
+                crate::workflow::PromptReceipt {
+                    session_id: id,
+                    evidence: "Exact user message after dispatch".into(),
+                }
+            }),
+        )
+    }
     fn targets(&self, _: &str) -> Result<Vec<Target>, String> {
         Ok(self
             .0

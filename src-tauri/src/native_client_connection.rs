@@ -1,5 +1,6 @@
 //! A private, one-client transport adapter for Herdr's native UI.
-//! It adds only the initial connection-scoped pane.focus. All other frames pass
+//! It adds connection-scoped pane.zoom On to show the selected task alone.
+//! A no-focus split is re-zoomed while that task remains selected. Other frames pass
 //! unchanged; no terminal renderer, input translator, or public/global focus API.
 use super::View;
 use crate::herdr::Cli;
@@ -38,7 +39,11 @@ pub struct Connection {
 }
 impl Connection {
     pub fn start(cli: &Cli, view: Arc<View>, pane: String) -> Result<Self, String> {
-        let upstream = cli.client_endpoint()?;
+        let upstream = if let Some(machine) = &cli.remote {
+            Endpoint::Remote(machine.clone())
+        } else {
+            Endpoint::Local(cli.client_endpoint()?)
+        };
         let endpoint = format!("kanban-herdr-{}", uuid::Uuid::new_v4());
         let listener = Pipe::listen(&endpoint)?;
         let stop = Arc::new(AtomicBool::new(false));
@@ -78,24 +83,29 @@ fn check(view: &View, stop: &AtomicBool, deadline: Instant) -> Result<(), String
 }
 fn relay(
     mut downstream: Pipe,
-    upstream: &Path,
+    upstream: &Endpoint,
     view: &View,
     stop: &AtomicBool,
     pane: String,
 ) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut deadline = Instant::now() + Duration::from_secs(15);
     while !downstream.accept()? {
         check(view, stop, deadline)?;
         thread::sleep(Duration::from_millis(2));
     }
     let mut upstream = loop {
         check(view, stop, deadline)?;
-        match Pipe::connect(upstream) {
-            Ok(pipe) => break pipe,
-            Err(error) if error.raw_os_error() == Some(231) => {
-                thread::sleep(Duration::from_millis(2))
+        match upstream {
+            Endpoint::Remote(machine) => {
+                break Upstream::Remote(crate::native_ssh::Stream::connect(machine)?);
             }
-            Err(error) => return Err(format!("terminal.client_connect: {error}")),
+            Endpoint::Local(path) => match Pipe::connect(path) {
+                Ok(pipe) => break Upstream::Local(pipe),
+                Err(error) if error.raw_os_error() == Some(231) => {
+                    thread::sleep(Duration::from_millis(2))
+                }
+                Err(error) => return Err(format!("terminal.client_connect: {error}")),
+            },
         }
     };
     let mut input = Vec::new();
@@ -123,12 +133,13 @@ fn relay(
             upstream.send(&wire::frame(&payload), view, stop)?;
         }
         while let Some(payload) = wire::next_frame(&mut output)? {
-            let (request, forward) = if position.ready {
-                (None, true)
-            } else {
-                position.receive(&payload)?
-            };
+            let was_ready = position.ready;
+            let (request, forward) = position.receive(&payload)?;
             if let Some(request) = request {
+                if was_ready {
+                    deadline = Instant::now() + Duration::from_secs(15);
+                }
+                view.focused.store(false, Ordering::Release);
                 upstream.send(&request, view, stop)?;
             }
             if forward {
@@ -144,6 +155,31 @@ fn relay(
     }
 }
 struct Pipe(File);
+enum Endpoint {
+    Local(std::path::PathBuf),
+    Remote(crate::machines::Machine),
+}
+enum Upstream {
+    Local(Pipe),
+    Remote(crate::native_ssh::Stream),
+}
+impl Upstream {
+    fn read_available(&mut self, buffer: &mut Vec<u8>) -> Result<bool, String> {
+        match self {
+            Self::Local(pipe) => pipe.read_available(buffer),
+            Self::Remote(stream) => stream.read_available(buffer),
+        }
+    }
+    fn send(&mut self, bytes: &[u8], view: &View, stop: &AtomicBool) -> Result<(), String> {
+        match self {
+            Self::Local(pipe) => pipe.send(bytes, view, stop),
+            Self::Remote(stream) => {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                stream.send(bytes, || check(view, stop, deadline))
+            }
+        }
+    }
+}
 impl Pipe {
     fn listen(endpoint: &str) -> Result<Self, String> {
         let path: Vec<u16> = format!(r"\\.\pipe\{endpoint}")
@@ -290,9 +326,223 @@ fn error() -> String {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "requires explicit remote acceptance fixture and native WezTerm"]
+    fn live_remote_native_client_switch_and_reconnect() {
+        let data = std::env::var("KANBAN_DATA_DIR").unwrap();
+        assert!(data.contains("ssh-multi-machine") && data.contains("acceptance"));
+        let machine: crate::machines::Machine =
+            serde_json::from_slice(&std::fs::read(Path::new(&data).join("machine.json")).unwrap())
+                .unwrap();
+        let fixture: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(Path::new(&data).join("fixture.json")).unwrap())
+                .unwrap();
+        let workspace = fixture["workspace"].as_str().unwrap();
+        let mut cli = Cli::from_env();
+        cli.session = machine.session.clone();
+        cli.remote = Some(machine);
+        let spaces = cli
+            .request(&["workspace", "list"])
+            .unwrap_or_else(|e| panic!("{}", e.message));
+        assert!(
+            spaces["result"]["workspaces"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|w| w["workspace_id"] == workspace
+                    && w["label"]
+                        .as_str()
+                        .unwrap_or("")
+                        .starts_with("kanban-acceptance-"))
+        );
+        let panes = cli
+            .request(&["pane", "list", "--workspace", workspace])
+            .unwrap_or_else(|e| panic!("{}", e.message));
+        let ids: Vec<_> = panes["result"]["panes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["pane_id"].as_str().unwrap().to_string())
+            .collect();
+        assert!(ids.len() >= 2);
+        let manager = crate::native_terminal::NativeTerminalManager::default();
+        for pane in [&ids[0], &ids[1], &ids[0], &ids[1]] {
+            let id = uuid::Uuid::new_v4().to_string();
+            let view = manager
+                .select(
+                    id.clone(),
+                    id,
+                    crate::native_terminal::Bounds {
+                        x: 0.,
+                        y: 0.,
+                        width: 100.,
+                        height: 100.,
+                        viewport_width: 100.,
+                        viewport_height: 100.,
+                        visible: true,
+                    },
+                    Arc::new(|event| eprintln!("status {}", event.message)),
+                )
+                .unwrap();
+            let profile = crate::native_terminal::profile::Profile::prepare_machine(
+                &Path::new(&data).join("terminal"),
+                &cli,
+            )
+            .unwrap();
+            let connection = Connection::start(&cli, view.clone(), pane.clone()).unwrap();
+            let mut command = crate::native_terminal::client_command(
+                &crate::native_terminal::wezterm_executable().unwrap(),
+                &cli,
+                &format!("kanban-acceptance-{}", uuid::Uuid::new_v4()),
+                &connection.endpoint,
+            );
+            profile.apply(&mut command);
+            let process =
+                crate::native_terminal::windows::Process::new(command.spawn().unwrap()).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(25);
+            while !view.focused.load(Ordering::Acquire) {
+                check(&view, &AtomicBool::new(false), deadline).unwrap();
+                thread::sleep(Duration::from_millis(20));
+            }
+            println!("native remote focus+zoom confirmed: {pane}");
+            manager.close_all();
+            drop(connection);
+            drop(process);
+            drop(profile);
+        }
+        let after = cli
+            .request(&["pane", "list", "--workspace", workspace])
+            .unwrap_or_else(|e| panic!("{}", e.message));
+        assert_eq!(
+            after["result"]["panes"].as_array().unwrap().len(),
+            ids.len()
+        );
+    }
+    #[test]
+    #[ignore = "requires a fresh isolated kanban-acceptance session with one shell pane and native WezTerm"]
+    fn live_client_zoom() {
+        let cli = Cli {
+            remote: None,
+            executable: std::env::var("KANBAN_HERDR_EXECUTABLE").unwrap().into(),
+            session: std::env::var("KANBAN_HERDR_SESSION").unwrap(),
+        };
+        assert!(cli.session.starts_with("kanban-acceptance-"));
+        let request = |args: &[&str]| {
+            cli.request(args)
+                .unwrap_or_else(|e| panic!("{}", e.message))
+        };
+        let profile = crate::native_terminal::profile::Profile::prepare(
+            &crate::db::db_path().parent().unwrap().join("terminal"),
+            &cli.session,
+        )
+        .unwrap();
+        let initial = request(&["pane", "layout", "--pane", "w1:p1"]);
+        assert_eq!(
+            initial["result"]["layout"]["panes"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let manager = crate::native_terminal::NativeTerminalManager::default();
+        let open = |pane: &str| {
+            let id = uuid::Uuid::new_v4().to_string();
+            let view = manager
+                .select(
+                    id.clone(),
+                    id,
+                    crate::native_terminal::Bounds {
+                        x: 0.,
+                        y: 0.,
+                        width: 100.,
+                        height: 100.,
+                        viewport_width: 100.,
+                        viewport_height: 100.,
+                        visible: true,
+                    },
+                    Arc::new(|event| eprintln!("status: {}", event.message)),
+                )
+                .unwrap();
+            let connection = Connection::start(&cli, view.clone(), pane.into()).unwrap();
+            let exe = crate::native_terminal::wezterm_executable().unwrap();
+            let mut command = crate::native_terminal::client_command(
+                &exe,
+                &cli,
+                "kanban-zoom-test",
+                &connection.endpoint,
+            );
+            profile.apply(&mut command);
+            let child = command.spawn().unwrap();
+            let process = crate::native_terminal::windows::Process::new(child).unwrap();
+            (view, connection, process)
+        };
+        let wait = |view: &View| {
+            let deadline = Instant::now() + Duration::from_secs(18);
+            while !view.focused.load(Ordering::Acquire) {
+                check(view, &AtomicBool::new(false), deadline).unwrap();
+                thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let layout =
+            |pane: &str| request(&["pane", "layout", "--pane", pane])["result"]["layout"].clone();
+        let (view, connection, process) = open("w1:p1");
+        wait(&view);
+        assert_eq!(layout("w1:p1")["zoomed"], false); // single-pane no-op succeeds
+        let split = request(&[
+            "pane",
+            "split",
+            "w1:p1",
+            "--direction",
+            "right",
+            "--no-focus",
+        ]);
+        eprintln!("split: {split}");
+        let deadline = Instant::now() + Duration::from_secs(18);
+        loop {
+            let current = layout("w1:p1");
+            if current["zoomed"] == true {
+                assert_eq!(current["focused_pane_id"], "w1:p1");
+                break;
+            }
+            check(&view, &AtomicBool::new(false), deadline).unwrap();
+            thread::sleep(Duration::from_millis(30));
+        }
+        wait(&view);
+        manager.close_all();
+        drop(connection);
+        drop(process);
+        // Reconnect, switch both directions, and reconnect an already zoomed pane.
+        for pane in ["w1:p2", "w1:p1", "w1:p1", "w1:p2"] {
+            let (view, connection, process) = open(pane);
+            wait(&view);
+            let current = layout(pane);
+            assert_eq!(current["zoomed"], true);
+            assert_eq!(current["focused_pane_id"], pane);
+            manager.close_all();
+            drop(connection);
+            drop(process);
+        }
+        // A superseded connection cannot win the final selection.
+        let (_old, old_connection, old_process) = open("w1:p1");
+        let (view, connection, process) = open("w1:p2");
+        drop(old_connection);
+        drop(old_process);
+        wait(&view);
+        assert_eq!(layout("w1:p2")["focused_pane_id"], "w1:p2");
+        manager.close_all();
+        drop(connection);
+        drop(process);
+        let panes = request(&["pane", "list"]);
+        assert_eq!(panes["result"]["panes"].as_array().unwrap().len(), 2);
+        eprintln!(
+            "single pane, background split, repeated zoom, reconnect, switching, cancellation and pane survival passed"
+        );
+    }
+
+    #[test]
     #[ignore = "requires an isolated running Herdr session and native WezTerm"]
     fn live_client_focus() {
         let cli = Cli {
+            remote: None,
             executable: std::env::var("KANBAN_HERDR_EXECUTABLE").unwrap().into(),
             session: std::env::var("KANBAN_HERDR_SESSION").unwrap(),
         };
@@ -315,14 +565,19 @@ mod tests {
             .unwrap();
         let connection = Connection::start(&cli, view.clone(), "w1:p1".into()).unwrap();
         let exe = crate::native_terminal::wezterm_executable().unwrap();
-        let child = crate::native_terminal::client_command(
+        let profile = crate::native_terminal::profile::Profile::prepare(
+            &crate::db::db_path().parent().unwrap().join("terminal"),
+            &cli.session,
+        )
+        .unwrap();
+        let mut command = crate::native_terminal::client_command(
             &exe,
             &cli,
             "kanban-connection-test",
             &connection.endpoint,
-        )
-        .spawn()
-        .unwrap();
+        );
+        profile.apply(&mut command);
+        let child = command.spawn().unwrap();
         let _process = crate::native_terminal::windows::Process::new(child).unwrap();
         let deadline = Instant::now() + Duration::from_secs(18);
         while !view.focused.load(Ordering::Acquire) {

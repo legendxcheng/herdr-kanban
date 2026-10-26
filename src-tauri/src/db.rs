@@ -25,6 +25,11 @@ pub fn db_path() -> PathBuf {
 }
 
 pub fn init(conn: &Connection) -> Result<()> {
+    init_before_machines(conn)?;
+    crate::machines::init(conn)
+}
+
+pub(crate) fn init_before_machines(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=3000;")?;
     conn.execute_batch(
         "

@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 const RESULT_LIMIT: usize = 50;
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct FileEntry {
     pub rel_path: String,
     pub abs_path: String,

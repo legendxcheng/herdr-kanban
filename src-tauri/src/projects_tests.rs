@@ -7,12 +7,50 @@ mod reorder;
 
 #[derive(Default)]
 struct FakeHerdr {
+    machine_name: Option<String>,
     spaces: Mutex<Vec<Workspace>>,
     lose_response: Mutex<bool>,
     offline: Mutex<bool>,
     reject_create: Mutex<bool>,
     session_name: Option<String>,
     moves: Mutex<Vec<(String, Option<String>)>>,
+}
+
+#[test]
+fn machines_with_the_same_workspace_identity_keep_separate_projects_and_presence() {
+    let db = Connection::open_in_memory().unwrap();
+    crate::db::init(&db).unwrap();
+    let db = Arc::new(Mutex::new(db));
+    let local = Arc::new(FakeHerdr::default());
+    let remote = Arc::new(FakeHerdr {
+        machine_name: Some("devpc".into()),
+        ..Default::default()
+    });
+    *local.spaces.lock().unwrap() = vec![navigation_workspace("w1")];
+    *remote.spaces.lock().unwrap() = vec![navigation_workspace("w1")];
+    let local_service = ProjectService::new(db.clone(), local.clone());
+    let remote_service = ProjectService::new(db.clone(), remote.clone());
+    let local_id = local_service.sync().unwrap().projects[0].id.clone();
+    remote_service.sync().unwrap();
+    let projects = visible_list(&db.lock().unwrap()).unwrap();
+    assert_eq!(projects.len(), 2);
+    assert!(
+        projects
+            .iter()
+            .any(|p| p.id == local_id && p.machine_id == "local")
+    );
+    assert!(
+        projects
+            .iter()
+            .any(|p| p.id != local_id && p.machine_id == "devpc")
+    );
+    let created = remote_service
+        .create(&uuid::Uuid::new_v4().to_string(), "Remote only", ".")
+        .unwrap();
+    assert_eq!(created.machine_id, "devpc");
+    remote.spaces.lock().unwrap().clear();
+    remote_service.sync().unwrap();
+    assert_eq!(visible_list(&db.lock().unwrap()).unwrap()[0].id, local_id);
 }
 
 fn navigation_workspace(id: &str) -> Workspace {
@@ -245,6 +283,9 @@ fn navigation_hides_closed_workspace_and_restores_only_the_same_identity_with_hi
     );
 }
 impl Herdr for FakeHerdr {
+    fn machine_id(&self) -> &str {
+        self.machine_name.as_deref().unwrap_or("local")
+    }
     fn session(&self) -> &str {
         self.session_name.as_deref().unwrap_or("default")
     }
@@ -445,6 +486,7 @@ fn legacy_binding_identity_wins_over_a_stale_name_even_during_recovery() {
     )
     .unwrap();
     let target = Target {
+        machine_id: crate::machines::local_id(),
         session: "default".into(),
         workspace_id: "w1".into(),
         pane_id: "w1:p1".into(),

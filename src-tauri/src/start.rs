@@ -54,7 +54,12 @@ impl Workflow {
                 }
                 return Ok(flow);
             }
-            let workspace = crate::projects::task_identity(&tx, task, self.herdr.session())?;
+            let workspace = crate::projects::task_identity_on(
+                &tx,
+                task,
+                self.herdr.machine_id(),
+                self.herdr.session(),
+            )?;
             lifecycle::begin_flow_in(&tx, task, op, "start")?;
             let (project_id, cwd, prompt_json, original_status, saved): (String, String, String, String, bool) = tx.query_row(
                 "SELECT t.project_id,COALESCE(s.cwd,d.cwd,p.root_path),t.prompt_json,t.status,s.codex_session_id IS NOT NULL
@@ -97,10 +102,7 @@ impl Workflow {
                 };
                 let prompt = if request.needs_prompt {
                     progress("reading_prompt")?;
-                    let resolved = {
-                        let db = worker.db.lock().map_err(err)?;
-                        crate::images::resolve_prompt(&db, &request.prompt_json)
-                    };
+                    let resolved = worker.resolve_document(&request.prompt_json);
                     match resolved {
                         Ok(text) => text,
                         Err(error) => {

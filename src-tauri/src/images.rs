@@ -444,11 +444,23 @@ pub fn verify_operation(db: &Connection, operation: &str) -> Result<(), String> 
     Ok(())
 }
 
+#[cfg(test)]
 pub fn prepare_prompt(
     db: &Connection,
     task: &str,
     operation: &str,
     json: &str,
+) -> Result<String, String> {
+    prepare_prompt_in(db, task, operation, json, &crate::execution::LOCAL)
+}
+
+#[cfg(test)]
+fn prepare_prompt_in(
+    db: &Connection,
+    task: &str,
+    operation: &str,
+    json: &str,
+    resources: &dyn crate::execution::Resources,
 ) -> Result<String, String> {
     let previous:Option<(String,String,String)>=db.query_row("SELECT task_id,prompt_json,prompt_text FROM image_prompt_snapshots WHERE operation_id=?1",[operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(error)?;
     if let Some((owner, document, text)) = previous {
@@ -459,7 +471,7 @@ pub fn prepare_prompt(
     }
     let tx = db.unchecked_transaction().map_err(error)?;
     pin_prompt(&tx, task, operation, json)?;
-    let prompt = resolve_prompt(&tx, json)?;
+    let prompt = resolve_prompt_in(&tx, json, resources)?;
     tx.execute("INSERT INTO image_prompt_snapshots(operation_id,task_id,prompt_json,prompt_text) VALUES(?1,?2,?3,?4)",params![operation,task,json,prompt]).map_err(error)?;
     tx.commit().map_err(error)?;
     Ok(prompt)
@@ -473,17 +485,16 @@ impl crate::workflow::Workflow {
         json: &str,
         operation: &str,
     ) -> Result<crate::models::DispatchRecord, String> {
-        let prompt = {
+        let previous = {
             let db = self.db.lock().map_err(error)?;
             tasks::ensure_active(&db, task)?;
-            let prepared: bool = db
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM image_prompt_snapshots WHERE operation_id=?1)",
-                    [operation],
-                    |r| r.get(0),
-                )
-                .map_err(error)?;
-            if !prepared {
+            prompt_snapshot(&db, task, operation, json)?
+        };
+        let prompt = if let Some(prompt) = previous {
+            prompt
+        } else {
+            let frozen = {
+                let db = self.db.lock().map_err(error)?;
                 let stored: String = db
                     .query_row("SELECT prompt_json FROM tasks WHERE id=?1", [task], |r| {
                         r.get(0)
@@ -492,55 +503,121 @@ impl crate::workflow::Workflow {
                 if stored != json {
                     return Err("image.task_changed".into());
                 }
+                // Frozen bytes survive local GC while SSH runs. Persist references
+                // only with a completed snapshot, so failed preparation has no pins.
+                freeze_document(&db, json)?
+            };
+            // SSH reads and uploads cannot block Local database operations.
+            let resolved = frozen.resolve(self.herdr.resources())?;
+            let db = self.db.lock().map_err(error)?;
+            tasks::ensure_active(&db, task)?;
+            let stored: String = db
+                .query_row("SELECT prompt_json FROM tasks WHERE id=?1", [task], |r| {
+                    r.get(0)
+                })
+                .map_err(error)?;
+            if stored != json {
+                return Err("image.task_changed".into());
             }
-            prepare_prompt(&db, task, operation, json)?
+            let tx = db.unchecked_transaction().map_err(error)?;
+            pin_prompt(&tx, task, operation, json)?;
+            tx.execute("INSERT OR IGNORE INTO image_prompt_snapshots(operation_id,task_id,prompt_json,prompt_text) VALUES(?1,?2,?3,?4)",params![operation,task,json,resolved]).map_err(error)?;
+            tx.commit().map_err(error)?;
+            prompt_snapshot(&db, task, operation, json)?.ok_or("image.missing")?
         };
         self.dispatch(task, pane, &prompt, operation)
     }
 }
 
-pub fn resolve_prompt(db: &Connection, json: &str) -> Result<String, String> {
-    fn walk(db: &Connection, node: &serde_json::Value, text: &mut String) -> Result<(), String> {
-        match node["type"].as_str().unwrap_or("") {
-            "text" => text.push_str(node["text"].as_str().unwrap_or("")),
-            "promptImage" => {
-                let id = node["attrs"]["imageId"].as_str().ok_or("image.missing")?;
-                let (image, _) = read(db, id)?;
-                let file = path(db, &image)?.canonicalize().map_err(error)?;
-                text.push_str(&format!("\n[图片: {}]\n请使用 view_image 读取这张本地原图，再根据图像内容处理任务。原图绝对路径：\n{}\n",image.name,file.display()));
-            }
-            "mention" => {
-                let label = node["attrs"]["label"].as_str().unwrap_or("");
-                if node["attrs"]["kind"] == "file" {
-                    let file = node["attrs"]["ref"].as_str().unwrap_or("");
-                    match std::fs::read_to_string(file) {
-                        Ok(content) => text.push_str(&format!(
-                            "\n--- @文件: {label} ({file}) ---\n```\n{content}\n```\n"
-                        )),
-                        Err(e) => text.push_str(&format!("\n[引用失败: {label} — {e}]\n")),
-                    }
-                } else {
-                    text.push_str(&format!("${label}"));
-                }
-            }
-            _ => {
-                if let Some(children) = node["content"].as_array() {
-                    for child in children {
-                        walk(db, child, text)?;
-                    }
-                }
-            }
-        }
-        if matches!(node["type"].as_str(), Some("paragraph" | "heading")) {
-            text.push('\n');
-        }
-        Ok(())
+fn prompt_snapshot(
+    db: &Connection,
+    task: &str,
+    operation: &str,
+    json: &str,
+) -> Result<Option<String>, String> {
+    let previous:Option<(String,String,String)>=db.query_row("SELECT task_id,prompt_json,prompt_text FROM image_prompt_snapshots WHERE operation_id=?1",[operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(error)?;
+    match previous {
+        Some((owner, document, text)) if owner == task && document == json => Ok(Some(text)),
+        Some(_) => Err("dispatch.operation_conflict".into()),
+        None => Ok(None),
     }
+}
+
+#[cfg(test)]
+pub fn resolve_prompt(db: &Connection, json: &str) -> Result<String, String> {
+    resolve_prompt_in(db, json, &crate::execution::LOCAL)
+}
+
+#[cfg(test)]
+pub fn resolve_prompt_in(
+    db: &Connection,
+    json: &str,
+    resources: &dyn crate::execution::Resources,
+) -> Result<String, String> {
+    freeze_document(db, json)?.resolve(resources)
+}
+
+pub struct FrozenDocument {
+    doc: serde_json::Value,
+    images: std::collections::HashMap<String, (PromptImage, PathBuf, Vec<u8>)>,
+}
+pub fn freeze_document(db: &Connection, json: &str) -> Result<FrozenDocument, String> {
     let doc = serde_json::from_str(json).map_err(|e| format!("flow.prompt_invalid: {e}"))?;
-    document_images(json)?;
-    let mut text = String::new();
-    walk(db, &doc, &mut text)?;
-    Ok(text.trim().into())
+    let mut images = std::collections::HashMap::new();
+    for id in document_images(json)? {
+        let (image, bytes) = read(db, &id)?;
+        let file = path(db, &image)?;
+        images.insert(id, (image, file, bytes));
+    }
+    Ok(FrozenDocument { doc, images })
+}
+impl FrozenDocument {
+    pub fn resolve(&self, resources: &dyn crate::execution::Resources) -> Result<String, String> {
+        fn walk(
+            images: &std::collections::HashMap<String, (PromptImage, PathBuf, Vec<u8>)>,
+            resources: &dyn crate::execution::Resources,
+            node: &serde_json::Value,
+            text: &mut String,
+        ) -> Result<(), String> {
+            match node["type"].as_str().unwrap_or("") {
+                "text" => text.push_str(node["text"].as_str().unwrap_or("")),
+                "promptImage" => {
+                    let id = node["attrs"]["imageId"].as_str().ok_or("image.missing")?;
+                    let (image, source, bytes) = images.get(id).ok_or("image.missing")?;
+                    let file = resources.prepare_image(source, bytes)?;
+                    text.push_str(&format!("\n[图片: {}]\n请使用 view_image 读取这张本地原图，再根据图像内容处理任务。原图绝对路径：\n{}\n",image.name,file.display()));
+                }
+                "mention" => {
+                    let label = node["attrs"]["label"].as_str().unwrap_or("");
+                    if node["attrs"]["kind"] == "file" {
+                        let file = node["attrs"]["ref"].as_str().unwrap_or("");
+                        match resources.read_text(file) {
+                            Ok(content) => text.push_str(&format!(
+                                "\n--- @文件: {label} ({file}) ---\n```\n{content}\n```\n"
+                            )),
+                            Err(e) => text.push_str(&format!("\n[引用失败: {label} — {e}]\n")),
+                        }
+                    } else {
+                        text.push_str(&format!("${label}"));
+                    }
+                }
+                _ => {
+                    if let Some(children) = node["content"].as_array() {
+                        for child in children {
+                            walk(images, resources, child, text)?;
+                        }
+                    }
+                }
+            }
+            if matches!(node["type"].as_str(), Some("paragraph" | "heading")) {
+                text.push('\n');
+            }
+            Ok(())
+        }
+        let mut text = String::new();
+        walk(&self.images, resources, &self.doc, &mut text)?;
+        Ok(text.trim().into())
+    }
 }
 
 pub fn close_draft(db: &Connection, draft: &str) -> Result<(), String> {

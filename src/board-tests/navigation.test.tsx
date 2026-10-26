@@ -5,6 +5,42 @@ import { describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import App from "../App";
 
+it("keeps Local refreshing while a remote computer is disconnected and retains remote cards", async () => {
+  const remote = { ...project, id: "remote-project", machine_id: "devpc-id", name: "远端项目" };
+  let localName = project.name;
+  let rejectRemote!: (e: Error) => void;
+  const base = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((command, args, options) => {
+    if (command === "list_machines") return Promise.resolve([{ id: "devpc-id", name: "devpc", kind: "ssh", session: "default", disabled: false }]);
+    if (command === "list_projects") return Promise.resolve([project, remote]);
+    if (command === "sync_projects") {
+      if ((args as { machineId?: string } | undefined)?.machineId === "devpc-id") return new Promise((_resolve, reject) => { rejectRemote = reject; });
+      return Promise.resolve({ projects: [{ ...project, name: localName }], session: "default", operations: [], workspaces: [] });
+    }
+    return base(command, args, options);
+  });
+  render(<App />);
+  await screen.findByRole("heading", { name: /devpc/ });
+  await screen.findByRole("button", { name: /^远端项目/ });
+  localName = "本机仍可刷新";
+  fireEvent(window, new Event("focus"));
+  await screen.findByRole("button", { name: /^本机仍可刷新/ });
+  await act(async () => rejectRemote(new Error("machine.timeout")));
+  expect(screen.getByRole("button", { name: /^远端项目/ })).toBeTruthy();
+});
+
+it("groups existing projects under the Local execution computer", async () => {
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_projects") return [project];
+    if (command === "sync_projects") return { projects: [project], session: "default", workspaces: [], operations: [] };
+    return original(command, args);
+  });
+  render(<App />);
+  expect(await screen.findByRole("heading", { name: "本机" })).toBeTruthy();
+  expect(await screen.findByRole("button", { name: new RegExp(`^${project.name}`) })).toBeTruthy();
+});
+
 it("synchronizes Herdr workspaces on focus while retaining local tasks on failure", async () => {
   let offline = false;
   const original = vi.mocked(invoke).getMockImplementation()!;

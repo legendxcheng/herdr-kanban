@@ -4,11 +4,14 @@ import * as api from "./api";
 import { useLocalizedMessage } from "./i18n";
 import { notify } from "./Toast";
 import { useProjectGitStatus } from "./useProjectGitStatus";
+import { useRemoteMachines } from "./useRemoteMachines";
 
 export function useProjectSync() {
+  const remote = useRemoteMachines();
   const [projects, setProjects] = useState<Project[]>([]);
   const [gitRefresh, setGitRefresh] = useState(0);
-  const gitStatuses = useProjectGitStatus(projects, gitRefresh);
+  const allProjects = [...projects, ...remote.projects];
+  const gitStatuses = useProjectGitStatus(allProjects, gitRefresh);
   const [operations, setOperations] = useState<WorkspaceOperation[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useLocalizedMessage();
@@ -39,7 +42,7 @@ export function useProjectSync() {
         if (readLocal) {
           try {
             const cached = await api.listProjects();
-            if (current() && !repeat.current) { setProjects(cached); initialized.current = true; }
+            if (current() && !repeat.current) { setProjects(cached.filter(p => !p.machine_id || p.machine_id === "local")); initialized.current = true; }
           } catch (e) { if (current()) setError(String(e)); }
         }
         try {
@@ -55,7 +58,7 @@ export function useProjectSync() {
     running.current = run().finally(() => { running.current = null; });
     return running.current;
   }, []);
-  const refresh = useCallback(() => sync(true), [sync]);
+  const refresh = useCallback(() => { void remote.refresh(true); return sync(true); }, [sync, remote.refresh]);
   const move = useCallback(async (projectId: string, beforeProjectId: string | null) => {
     if (moving.current) return;
     moving.current = true;
@@ -87,5 +90,10 @@ export function useProjectSync() {
     window.addEventListener("focus", focus);
     return () => { mounted.current = false; window.clearInterval(timer); window.removeEventListener("focus", focus); };
   }, [sync]);
-  return { projects, gitStatuses, operations, syncing, error, refresh, session, reordering, move };
+  const moveOnMachine = async (id: string, before: string | null) => {
+    if (remote.projects.some(p => p.id === id)) {
+      try { await remote.move(id, before); } catch(e) { notify({ prefix: "workspace.reorder_failed", error: String(e) }, "error"); }
+    } else await move(id, before);
+  };
+  return { projects: allProjects, machines: remote.machines, machineErrors: remote.errors, machineBusy: remote.busy, gitStatuses, operations: [...operations, ...remote.operations], syncing, error, refresh, session, reordering, move: moveOnMachine };
 }

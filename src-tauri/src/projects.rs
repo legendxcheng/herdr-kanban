@@ -11,6 +11,7 @@ pub struct Workspace {
 }
 #[derive(serde::Serialize)]
 pub struct Snapshot {
+    pub machine_id: String,
     pub session: String,
     pub projects: Vec<Project>,
     pub workspaces: Vec<Workspace>,
@@ -18,6 +19,7 @@ pub struct Snapshot {
 }
 #[derive(Clone, serde::Serialize)]
 pub struct CreateOperation {
+    pub machine_id: String,
     pub id: String,
     pub session: String,
     pub name: String,
@@ -30,16 +32,18 @@ pub struct CreateOperation {
 pub struct ProjectService {
     pub db: Arc<Mutex<Connection>>,
     herdr: Arc<dyn Herdr>,
-    gate: Mutex<()>,
+    gate: Arc<Mutex<()>>,
+    gates: Arc<Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>>,
 }
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 pub fn list(conn: &Connection) -> Result<Vec<Project>, String> {
-    let mut stmt = conn.prepare("SELECT id,name,root_path,herdr_workspace,cs_task_id,created_at,herdr_session,workspace_id,sync_status,directory_source,herdr_directory FROM projects ORDER BY workspace_order IS NULL,workspace_order,created_at,id").map_err(err)?;
+    let mut stmt = conn.prepare("SELECT id,name,root_path,herdr_workspace,cs_task_id,created_at,herdr_session,workspace_id,sync_status,directory_source,herdr_directory,machine_id FROM projects ORDER BY workspace_order IS NULL,workspace_order,created_at,id").map_err(err)?;
     let rows = stmt
         .query_map([], |r| {
             Ok(Project {
+                machine_id: r.get(11)?,
                 id: r.get(0)?,
                 name: r.get(1)?,
                 root_path: r.get(2)?,
@@ -64,12 +68,61 @@ pub fn visible_list(conn: &Connection) -> Result<Vec<Project>, String> {
         .collect())
 }
 impl ProjectService {
+    fn valid_fallback(&self, path: Option<&str>) -> Result<bool, String> {
+        match path.filter(|p| !p.is_empty()) {
+            Some(path) => self.herdr.resources().directory_exists(path),
+            None => Ok(true),
+        }
+    }
+
     pub fn new(db: Arc<Mutex<Connection>>, herdr: Arc<dyn Herdr>) -> Self {
+        let gate = Arc::new(Mutex::new(()));
+        let gates = Arc::new(Mutex::new(std::collections::HashMap::from([(
+            herdr.machine_id().to_string(),
+            gate.clone(),
+        )])));
         Self {
             db,
             herdr,
-            gate: Mutex::new(()),
+            gate,
+            gates,
         }
+    }
+    pub fn for_machine(&self, id: &str) -> Result<Self, String> {
+        let herdr = crate::machine_routing::adapter(&self.db, &self.herdr, id)?;
+        let gate = self
+            .gates
+            .lock()
+            .map_err(err)?
+            .entry(id.into())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone();
+        Ok(Self {
+            db: self.db.clone(),
+            herdr,
+            gate,
+            gates: self.gates.clone(),
+        })
+    }
+    pub fn for_project(&self, id: &str) -> Result<Self, String> {
+        let machine = {
+            let db = self.db.lock().map_err(err)?;
+            crate::machines::project_machine(&db, id)?
+        };
+        self.for_machine(&machine)
+    }
+    pub fn for_operation(&self, id: &str) -> Result<Self, String> {
+        let machine: String = self
+            .db
+            .lock()
+            .map_err(err)?
+            .query_row(
+                "SELECT machine_id FROM workspace_operations WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        self.for_machine(&machine)
     }
     pub fn sync(&self) -> Result<Snapshot, String> {
         let _gate = self.gate.lock().map_err(err)?;
@@ -80,11 +133,11 @@ impl ProjectService {
     pub fn move_project(&self, id: &str, before: Option<&str>) -> Result<Snapshot, String> {
         let _gate = self.gate.lock().map_err(err)?;
         let project = self.get(id)?;
-        let workspace = identity(&project, self.herdr.session())?;
+        let workspace = identity_on(&project, self.herdr.machine_id(), self.herdr.session())?;
         let anchor = before
             .map(|id| {
                 let p = self.get(id)?;
-                identity(&p, self.herdr.session())
+                identity_on(&p, self.herdr.machine_id(), self.herdr.session())
             })
             .transpose()?;
         if anchor.as_deref() == Some(&workspace) {
@@ -113,19 +166,22 @@ impl ProjectService {
     fn store_snapshot(&self, workspaces: Vec<Workspace>) -> Result<Snapshot, String> {
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
-        let existing = list(&tx)?;
-        let pending = operations(&tx, self.herdr.session())?;
-        tx.execute("UPDATE projects SET sync_status='missing' WHERE herdr_session=?1 AND workspace_id IS NOT NULL",[self.herdr.session()]).map_err(err)?;
+        let existing: Vec<_> = list(&tx)?
+            .into_iter()
+            .filter(|p| p.machine_id == self.herdr.machine_id())
+            .collect();
+        let pending = operations(&tx, self.herdr.machine_id(), self.herdr.session())?;
+        tx.execute("UPDATE projects SET sync_status='missing' WHERE herdr_session=?1 AND machine_id=?2 AND workspace_id IS NOT NULL",params![self.herdr.session(),self.herdr.machine_id()]).map_err(err)?;
         for (order, ws) in workspaces.iter().enumerate() {
             // Presence is independent of whether a pending creation can be imported.
-            tx.execute("UPDATE projects SET sync_status='ready',workspace_order=?3 WHERE herdr_session=?1 AND workspace_id=?2", params![self.herdr.session(),ws.id,order as i64]).map_err(err)?;
+            tx.execute("UPDATE projects SET sync_status='ready',workspace_order=?3 WHERE herdr_session=?1 AND workspace_id=?2 AND machine_id=?4", params![self.herdr.session(),ws.id,order as i64,self.herdr.machine_id()]).map_err(err)?;
             if pending.iter().any(|op| {
                 op.workspace_id.as_deref() == Some(&ws.id)
                     || ws.name == format!("kanban-create-{}", op.id)
             }) {
                 continue;
             }
-            let excluded:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM workspace_exclusions WHERE session=?1 AND workspace_id=?2)",params![self.herdr.session(),ws.id],|r|r.get(0)).map_err(err)?;
+            let excluded:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM workspace_exclusions WHERE session=?1 AND workspace_id=?2 AND machine_id=?3)",params![self.herdr.session(),ws.id,self.herdr.machine_id()],|r|r.get(0)).map_err(err)?;
             if excluded {
                 continue;
             }
@@ -133,16 +189,19 @@ impl ProjectService {
             for p in existing.iter().filter(|p| p.workspace_id.is_none()) {
                 let targets = legacy_targets(&tx, &p.id)?;
                 let identity_match = targets.as_ref().is_some_and(|items| {
-                    items
-                        .iter()
-                        .any(|t| t.workspace_id == ws.id && t.session == self.herdr.session())
+                    items.iter().any(|t| {
+                        t.workspace_id == ws.id
+                            && t.machine_id == self.herdr.machine_id()
+                            && t.session == self.herdr.session()
+                    })
                 });
                 if p.herdr_workspace == ws.name || identity_match {
                     candidates.push((p, targets));
                 }
             }
             if !existing.iter().any(|p| {
-                p.herdr_session.as_deref() == Some(self.herdr.session())
+                p.machine_id == self.herdr.machine_id()
+                    && p.herdr_session.as_deref() == Some(self.herdr.session())
                     && p.workspace_id.as_deref() == Some(&ws.id)
             }) && !candidates.is_empty()
             {
@@ -158,9 +217,11 @@ impl ProjectService {
                                 .as_ref()
                                 .is_some_and(|d| same_directory(d, &candidate.root_path))
                     } else {
-                        items
-                            .iter()
-                            .all(|t| t.session == self.herdr.session() && t.workspace_id == ws.id)
+                        items.iter().all(|t| {
+                            t.machine_id == self.herdr.machine_id()
+                                && t.session == self.herdr.session()
+                                && t.workspace_id == ws.id
+                        })
                     }
                 });
                 if !proven {
@@ -169,37 +230,46 @@ impl ProjectService {
                 tx.execute("UPDATE projects SET herdr_session=?2,workspace_id=?3,sync_status='ready' WHERE id=?1", params![candidate.id,self.herdr.session(),ws.id]).map_err(err)?;
             }
             let current = list(&tx)?.into_iter().find(|p| {
-                p.herdr_session.as_deref() == Some(self.herdr.session())
+                p.machine_id == self.herdr.machine_id()
+                    && p.herdr_session.as_deref() == Some(self.herdr.session())
                     && p.workspace_id.as_deref() == Some(&ws.id)
             });
             let (root, source) = directory_state(current.as_ref(), ws.directory.as_deref());
-            tx.execute("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at,herdr_session,workspace_id,sync_status,directory_source,herdr_directory,workspace_order)
-                VALUES (?1,?2,?3,?2,?4,?5,?6,'ready',?7,?8,?9)
+            tx.execute("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at,herdr_session,workspace_id,sync_status,directory_source,herdr_directory,workspace_order,machine_id)
+                VALUES (?1,?2,?3,?2,?4,?5,?6,'ready',?7,?8,?9,?10)
                 ON CONFLICT DO UPDATE SET name=excluded.name,herdr_workspace=excluded.herdr_workspace,
                 sync_status='ready',root_path=excluded.root_path,directory_source=excluded.directory_source,herdr_directory=excluded.herdr_directory,workspace_order=excluded.workspace_order",
-                params![uuid::Uuid::new_v4().to_string(),ws.name,root,chrono::Utc::now().to_rfc3339(),self.herdr.session(),ws.id,source,ws.directory,order as i64]).map_err(err)?;
+                params![uuid::Uuid::new_v4().to_string(),ws.name,root,chrono::Utc::now().to_rfc3339(),self.herdr.session(),ws.id,source,ws.directory,order as i64,self.herdr.machine_id()]).map_err(err)?;
         }
         tx.commit().map_err(err)?;
         Ok(Snapshot {
+            machine_id: self.herdr.machine_id().into(),
             session: self.herdr.session().into(),
-            projects: visible_list(&db)?,
+            projects: visible_list(&db)?
+                .into_iter()
+                .filter(|p| p.machine_id == self.herdr.machine_id())
+                .collect(),
             workspaces,
-            operations: operations(&db, self.herdr.session())?,
+            operations: operations(&db, self.herdr.machine_id(), self.herdr.session())?,
         })
     }
     pub fn operations(&self) -> Result<Vec<CreateOperation>, String> {
-        operations(&*self.db.lock().map_err(err)?, self.herdr.session())
+        operations(
+            &*self.db.lock().map_err(err)?,
+            self.herdr.machine_id(),
+            self.herdr.session(),
+        )
     }
     pub fn update(&self, id: &str, name: &str, fallback: Option<&str>) -> Result<Project, String> {
         let _gate = self.gate.lock().map_err(err)?;
         if name.trim().is_empty() {
             return Err("workspace.invalid_input".into());
         }
-        if fallback.is_some_and(|d| !d.is_empty() && !std::path::Path::new(d).is_dir()) {
+        if !self.valid_fallback(fallback)? {
             return Err("workspace.invalid_input".into());
         }
         let p = self.get(id)?;
-        let wid = identity(&p, self.herdr.session())?;
+        let wid = identity_on(&p, self.herdr.machine_id(), self.herdr.session())?;
         // Name changes do not alter task targets, and need not block running work.
         if p.name != name.trim() {
             self.herdr.rename_workspace(&wid, name.trim())?;
@@ -243,7 +313,7 @@ impl ProjectService {
     pub fn get(&self, id: &str) -> Result<Project, String> {
         list(&*self.db.lock().map_err(err)?)?
             .into_iter()
-            .find(|p| p.id == id)
+            .find(|p| p.id == id && p.machine_id == self.herdr.machine_id())
             .ok_or("workspace.project_missing".into())
     }
     pub fn link(
@@ -253,7 +323,7 @@ impl ProjectService {
         fallback: Option<&str>,
     ) -> Result<Project, String> {
         let _gate = self.gate.lock().map_err(err)?;
-        if fallback.is_some_and(|d| !d.is_empty() && !std::path::Path::new(d).is_dir()) {
+        if !self.valid_fallback(fallback)? {
             return Err("workspace.invalid_input".into());
         }
         let ws = self
@@ -264,11 +334,14 @@ impl ProjectService {
             .ok_or("workspace.missing")?;
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
-        if operations(&tx, self.herdr.session())?.iter().any(|o| {
-            o.state != "failed"
-                && (o.workspace_id.as_deref() == Some(workspace)
-                    || ws.name == format!("kanban-create-{}", o.id))
-        }) {
+        if operations(&tx, self.herdr.machine_id(), self.herdr.session())?
+            .iter()
+            .any(|o| {
+                o.state != "failed"
+                    && (o.workspace_id.as_deref() == Some(workspace)
+                        || ws.name == format!("kanban-create-{}", o.id))
+            })
+        {
             return Err("workspace.verify_required".into());
         }
         let id = project
@@ -276,9 +349,13 @@ impl ProjectService {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         if project.is_some() {
             ensure_editable(&tx, &id, true)?;
+            if crate::machines::project_machine(&tx, &id)? != self.herdr.machine_id() {
+                return Err("machine.identity_changed".into());
+            }
         }
         if list(&tx)?.iter().any(|p| {
             p.id != id
+                && p.machine_id == self.herdr.machine_id()
                 && p.herdr_session.as_deref() == Some(self.herdr.session())
                 && p.workspace_id.as_deref() == Some(workspace)
         }) {
@@ -295,11 +372,11 @@ impl ProjectService {
         if project.is_some() {
             tx.execute("UPDATE projects SET name=?2,herdr_workspace=?2,herdr_session=?3,workspace_id=?4,root_path=?5,herdr_directory=?6,directory_source=?7,sync_status='ready' WHERE id=?1",params![id,ws.name,self.herdr.session(),workspace,root,ws.directory,source]).map_err(err)?;
         } else {
-            tx.execute("INSERT INTO projects(id,name,herdr_workspace,herdr_session,workspace_id,root_path,herdr_directory,directory_source,sync_status,created_at) VALUES (?1,?2,?2,?3,?4,?5,?6,?7,'ready',?8)",params![id,ws.name,self.herdr.session(),workspace,root,ws.directory,source,chrono::Utc::now().to_rfc3339()]).map_err(err)?;
+            tx.execute("INSERT INTO projects(id,name,herdr_workspace,herdr_session,workspace_id,root_path,herdr_directory,directory_source,sync_status,created_at,machine_id) VALUES (?1,?2,?2,?3,?4,?5,?6,?7,'ready',?8,?9)",params![id,ws.name,self.herdr.session(),workspace,root,ws.directory,source,chrono::Utc::now().to_rfc3339(),self.herdr.machine_id()]).map_err(err)?;
         }
         tx.execute(
-            "DELETE FROM workspace_exclusions WHERE session=?1 AND workspace_id=?2",
-            params![self.herdr.session(), workspace],
+            "DELETE FROM workspace_exclusions WHERE session=?1 AND workspace_id=?2 AND machine_id=?3",
+            params![self.herdr.session(), workspace, self.herdr.machine_id()],
         )
         .map_err(err)?;
         tx.commit().map_err(err)?;
@@ -317,8 +394,8 @@ impl ProjectService {
             .ok_or("workspace.project_missing")?;
         if let (Some(session), Some(wid)) = (p.herdr_session, p.workspace_id) {
             tx.execute(
-                "INSERT OR IGNORE INTO workspace_exclusions(session,workspace_id) VALUES (?1,?2)",
-                params![session, wid],
+                "INSERT OR IGNORE INTO workspace_exclusions(session,workspace_id,machine_id) VALUES (?1,?2,?3)",
+                params![session, wid, p.machine_id],
             )
             .map_err(err)?;
         }
@@ -350,10 +427,10 @@ impl ProjectService {
                 )
                 .map_err(err)?;
         }
-        if name.trim().is_empty() || !std::path::Path::new(cwd).is_dir() {
+        if name.trim().is_empty() || !self.herdr.resources().directory_exists(cwd)? {
             return Err("workspace.invalid_input".into());
         }
-        self.db.lock().map_err(err)?.execute("INSERT INTO workspace_operations(id,session,name,cwd,project_id,state,created_at) VALUES (?1,?2,?3,?4,?1,'pending',?5)",params![id,self.herdr.session(),name.trim(),cwd,chrono::Utc::now().to_rfc3339()]).map_err(err)?;
+        self.db.lock().map_err(err)?.execute("INSERT INTO workspace_operations(id,session,name,cwd,project_id,state,created_at,machine_id) VALUES (?1,?2,?3,?4,?1,'pending',?5,?6)",params![id,self.herdr.session(),name.trim(),cwd,chrono::Utc::now().to_rfc3339(),self.herdr.machine_id()]).map_err(err)?;
         match self
             .herdr
             .create_workspace(&format!("kanban-create-{id}"), cwd)
@@ -389,7 +466,7 @@ impl ProjectService {
     }
     fn operation(&self, id: &str) -> Result<Option<CreateOperation>, String> {
         let db = self.db.lock().map_err(err)?;
-        db.query_row("SELECT id,session,name,cwd,workspace_id,project_id,state,error FROM workspace_operations WHERE id=?1 AND session=?2",params![id,self.herdr.session()],operation_row).optional().map_err(err)
+        db.query_row("SELECT id,session,name,cwd,workspace_id,project_id,state,error,machine_id FROM workspace_operations WHERE id=?1 AND session=?2 AND machine_id=?3",params![id,self.herdr.session(),self.herdr.machine_id()],operation_row).optional().map_err(err)
     }
     fn recover_inner(
         &self,
@@ -424,16 +501,20 @@ impl ProjectService {
         // Persist the exact identity before rename, so a lost rename response is readable on retry.
         {
             let db = self.db.lock().map_err(err)?;
-            if operations(&db, self.herdr.session())?.iter().any(|other| {
-                other.id != op.id
-                    && (other.workspace_id.as_deref() == Some(&ws.id)
-                        || ws.name == format!("kanban-create-{}", other.id))
-                    && other.state != "failed"
-            }) {
+            if operations(&db, self.herdr.machine_id(), self.herdr.session())?
+                .iter()
+                .any(|other| {
+                    other.id != op.id
+                        && (other.workspace_id.as_deref() == Some(&ws.id)
+                            || ws.name == format!("kanban-create-{}", other.id))
+                        && other.state != "failed"
+                })
+            {
                 return Err("workspace.occupied".into());
             }
             if let Some(existing) = list(&db)?.into_iter().find(|p| {
-                p.herdr_session.as_deref() == Some(&op.session)
+                p.machine_id == op.machine_id
+                    && p.herdr_session.as_deref() == Some(&op.session)
                     && p.workspace_id.as_deref() == Some(&ws.id)
                     && p.id != op.project_id
             }) {
@@ -460,7 +541,7 @@ impl ProjectService {
             .ok_or("workspace.verify_required")?;
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
-        tx.execute("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at,herdr_session,workspace_id,sync_status,directory_source,herdr_directory) VALUES (?1,?2,?3,?2,?4,?5,?6,'ready',?7,?8) ON CONFLICT(id) DO UPDATE SET name=excluded.name,herdr_workspace=excluded.herdr_workspace,sync_status='ready'",params![op.project_id,actual.name,actual.directory.as_deref().unwrap_or(&op.cwd),chrono::Utc::now().to_rfc3339(),op.session,actual.id,if actual.directory.is_some(){"herdr"}else{"fallback"},actual.directory]).map_err(err)?;
+        tx.execute("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at,herdr_session,workspace_id,sync_status,directory_source,herdr_directory,machine_id) VALUES (?1,?2,?3,?2,?4,?5,?6,'ready',?7,?8,?9) ON CONFLICT(id) DO UPDATE SET name=excluded.name,herdr_workspace=excluded.herdr_workspace,sync_status='ready'",params![op.project_id,actual.name,actual.directory.as_deref().unwrap_or(&op.cwd),chrono::Utc::now().to_rfc3339(),op.session,actual.id,if actual.directory.is_some(){"herdr"}else{"fallback"},actual.directory,op.machine_id]).map_err(err)?;
         tx.execute(
             "UPDATE workspace_operations SET state='succeeded',error='' WHERE id=?1",
             [&op.id],
@@ -491,33 +572,49 @@ fn legacy_targets(
         .collect::<Result<Vec<_>, _>>()
         .ok())
 }
-pub fn identity(p: &Project, session: &str) -> Result<String, String> {
+pub fn identity_on(p: &Project, machine: &str, session: &str) -> Result<String, String> {
+    if p.machine_id != machine {
+        return Err("machine.identity_changed".into());
+    }
     if p.herdr_session.as_deref() != Some(session) {
         return Err("workspace.session_mismatch".into());
     }
     p.workspace_id.clone().ok_or("workspace.unlinked".into())
 }
-pub fn project_identity(db: &Connection, id: &str, session: &str) -> Result<String, String> {
-    let (owner, workspace): (Option<String>, Option<String>) = db
+pub fn project_identity_on(
+    db: &Connection,
+    id: &str,
+    machine: &str,
+    session: &str,
+) -> Result<String, String> {
+    let (owner, workspace, machine_id): (Option<String>, Option<String>, String) = db
         .query_row(
-            "SELECT herdr_session,workspace_id FROM projects WHERE id=?1",
+            "SELECT herdr_session,workspace_id,machine_id FROM projects WHERE id=?1",
             [id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .map_err(err)?;
+    if machine_id != machine {
+        return Err("machine.identity_changed".into());
+    }
     let workspace = workspace.ok_or("workspace.unlinked")?;
     if owner.as_deref() != Some(session) {
         return Err("workspace.session_mismatch".into());
     }
     Ok(workspace)
 }
-pub fn task_identity(db: &Connection, id: &str, session: &str) -> Result<String, String> {
+pub fn task_identity_on(
+    db: &Connection,
+    id: &str,
+    machine: &str,
+    session: &str,
+) -> Result<String, String> {
     let project: String = db
         .query_row("SELECT project_id FROM tasks WHERE id=?1", [id], |r| {
             r.get(0)
         })
         .map_err(err)?;
-    project_identity(db, &project, session)
+    project_identity_on(db, &project, machine, session)
 }
 fn ensure_editable(db: &Connection, id: &str, relink: bool) -> Result<(), String> {
     let active:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM tasks t WHERE t.project_id=?1 AND (
@@ -539,6 +636,7 @@ fn ensure_editable(db: &Connection, id: &str, relink: bool) -> Result<(), String
 }
 fn operation_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CreateOperation> {
     Ok(CreateOperation {
+        machine_id: r.get(8)?,
         id: r.get(0)?,
         session: r.get(1)?,
         name: r.get(2)?,
@@ -549,9 +647,15 @@ fn operation_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CreateOperation> {
         error: r.get(7)?,
     })
 }
-fn operations(db: &Connection, session: &str) -> Result<Vec<CreateOperation>, String> {
-    let mut stmt=db.prepare("SELECT id,session,name,cwd,workspace_id,project_id,state,error FROM workspace_operations WHERE session=?1 AND state<>'succeeded' ORDER BY created_at").map_err(err)?;
-    let rows = stmt.query_map([session], operation_row).map_err(err)?;
+pub(crate) fn operations(
+    db: &Connection,
+    machine: &str,
+    session: &str,
+) -> Result<Vec<CreateOperation>, String> {
+    let mut stmt=db.prepare("SELECT id,session,name,cwd,workspace_id,project_id,state,error,machine_id FROM workspace_operations WHERE session=?1 AND machine_id=?2 AND state<>'succeeded' ORDER BY created_at").map_err(err)?;
+    let rows = stmt
+        .query_map(params![session, machine], operation_row)
+        .map_err(err)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(err)
 }
 fn directory_state(current: Option<&Project>, remote: Option<&str>) -> (String, &'static str) {

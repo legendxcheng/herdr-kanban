@@ -14,10 +14,21 @@ use std::{
 const OUTPUT_LIMIT: usize = 64 * 1024;
 
 pub fn run(
+    command: Command,
+    input: Vec<u8>,
+    stop: &AtomicBool,
+    timeout: Duration,
+) -> Result<Vec<u8>, String> {
+    run_with_limit(command, input, stop, timeout, OUTPUT_LIMIT, false)
+}
+
+pub fn run_with_limit(
     mut command: Command,
     input: Vec<u8>,
     stop: &AtomicBool,
     timeout: Duration,
+    output_limit: usize,
+    diagnostics: bool,
 ) -> Result<Vec<u8>, String> {
     let deadline = Instant::now() + timeout;
     if stop.load(Ordering::Acquire) {
@@ -44,12 +55,13 @@ pub fn run(
     fn reader(
         stream: impl Read + Send + 'static,
         overflow: Arc<AtomicBool>,
+        output_limit: usize,
     ) -> mpsc::Receiver<Vec<u8>> {
         let (send, receive) = mpsc::channel();
         thread::spawn(move || {
             let mut bytes = Vec::new();
-            let _ = stream.take(OUTPUT_LIMIT as u64 + 1).read_to_end(&mut bytes);
-            if bytes.len() > OUTPUT_LIMIT {
+            let _ = stream.take(output_limit as u64 + 1).read_to_end(&mut bytes);
+            if bytes.len() > output_limit {
                 overflow.store(true, Ordering::Release);
             }
             let _ = send.send(bytes);
@@ -59,10 +71,12 @@ pub fn run(
     let stdout = reader(
         guard.child.stdout.take().ok_or("title.io")?,
         overflow.clone(),
+        output_limit,
     );
     let stderr = reader(
         guard.child.stderr.take().ok_or("title.io")?,
         overflow.clone(),
+        output_limit,
     );
     let mut stdin = guard.child.stdin.take().ok_or("title.io")?;
     let (written, write_result) = mpsc::channel();
@@ -93,13 +107,23 @@ pub fn run(
     };
     let out = stdout.recv_timeout(remaining()).map_err(|_| "title.io")?;
     let errors = stderr.recv_timeout(remaining()).map_err(|_| "title.io")?;
-    if out.len() > OUTPUT_LIMIT || errors.len() > OUTPUT_LIMIT {
+    if out.len() > output_limit || errors.len() > output_limit {
         return Err("title.output_limit".into());
     }
     if !status.success() {
         #[cfg(test)]
         eprintln!("CLI diagnostic: {}", String::from_utf8_lossy(&errors));
-        return Err("title.cli_failed".into());
+        return Err(if diagnostics {
+            format!(
+                "title.cli_failed: {}",
+                String::from_utf8_lossy(&errors)
+                    .chars()
+                    .take(800)
+                    .collect::<String>()
+            )
+        } else {
+            "title.cli_failed".into()
+        });
     }
     write_result
         .recv_timeout(remaining())

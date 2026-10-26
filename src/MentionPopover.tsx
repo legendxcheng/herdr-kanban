@@ -17,7 +17,7 @@ const mentionTrigger = /([@$])([\p{L}\p{N}_./\\-]*)$/u;
  * Mention popover controller. Renders a floating suggestion list when the
  * editor has an active @ or $ trigger, and inserts a mention node on select.
  */
-export function MentionPopover({ rootPath }: { rootPath: string }) {
+export function MentionPopover({ rootPath, projectId }: { rootPath: string; projectId?: string }) {
   const { editor } = useCurrentEditor();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<Suggestion[]>([]);
@@ -116,14 +116,14 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
         let suggestions: Suggestion[] = [];
         if (kind === "file") {
           if (!rootPath) return;
-          const files = await api.searchFiles(rootPath, query);
+          const files = await api.searchFiles(rootPath, query, projectId);
           suggestions = files.map((f: FileEntry) => ({
             kind: "file" as const,
             label: f.rel_path,
             ref: f.abs_path,
           }));
         } else {
-          const skills = await api.searchSkills(rootPath, query);
+          const skills = await api.searchSkills(rootPath, query, projectId);
           suggestions = skills.map((s: SkillEntry) => ({
             kind: "skill" as const,
             label: s.name,
@@ -144,7 +144,7 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
     const timer = kind === "file" ? window.setTimeout(search, 120) : undefined;
     if (kind === "skill") void search();
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [open, query, kind, rootPath]);
+  }, [open, query, kind, rootPath, projectId]);
 
   // Keyboard handling inside editor
   useEffect(() => {

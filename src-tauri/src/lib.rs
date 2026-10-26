@@ -1,22 +1,44 @@
 mod agent_status;
 mod commands;
 mod db;
+mod execution;
 mod file_search;
 mod herdr;
 mod image_commands;
 mod images;
 mod lifecycle;
+mod machine_commands;
+mod machine_routing;
+mod machines;
+#[cfg(test)]
+mod remote_acceptance;
+mod remote_helper;
+mod remote_images;
+mod remote_install;
+mod remote_resources;
+mod remote_transport;
+
+pub fn remote_helper_main() -> i32 {
+    remote_helper::run()
+}
+
+pub fn remote_bridge_main() -> i32 {
+    remote_helper::bridge()
+}
 mod models;
+#[cfg(windows)]
+mod native_ssh;
+mod native_terminal;
 mod project_commands;
 mod project_git;
 mod projects;
+mod skill_discovery;
 mod start;
 mod task_overview;
 mod task_titles;
 mod tasks;
 #[cfg(test)]
 mod terminal;
-mod native_terminal;
 mod title_cli;
 mod title_process;
 mod title_prompt;
@@ -73,11 +95,20 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 use tauri::Manager;
-                window.state::<Arc<native_terminal::NativeTerminalManager>>().close_all();
+                window
+                    .state::<Arc<native_terminal::NativeTerminalManager>>()
+                    .close_all();
                 window.state::<task_titles::TaskTitles>().shutdown();
             }
         })
         .invoke_handler(tauri::generate_handler![
+            machine_commands::list_machines,
+            machine_commands::enroll_machine,
+            machine_commands::saved_machines,
+            machine_commands::connect_machine,
+            machine_commands::rename_machine,
+            machine_commands::remove_machine,
+            machine_commands::machine_status,
             image_commands::open_image_draft,
             image_commands::import_prompt_image,
             image_commands::preview_prompt_image,

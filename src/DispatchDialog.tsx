@@ -60,7 +60,7 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
     try {
       // Expand files, retaining skill names for the target agent to resolve.
       const doc = JSON.parse(task.prompt_json);
-      const resolved = hasPromptImages(doc) ? "" : await resolveMentions(doc, project.root_path);
+      const resolved = hasPromptImages(doc) ? "" : await resolveMentions(doc, project.root_path, project.machine_id && project.machine_id !== "local" ? project.id : undefined);
       if (!mounted.current) return;
       await api.dispatchToHerdr(task.id, selected, project.herdr_workspace, resolved, operation.current, hasPromptImages(doc) ? task.prompt_json : undefined);
       // A closed dialog may refresh persisted results, but cannot select a task

@@ -149,11 +149,18 @@ pub(crate) fn begin_flow_in(
 
 impl Workflow {
     fn check_flow(&self, task: &str, op: &str) -> Result<(), String> {
-        ensure_operation(&*self.db.lock().map_err(err)?, task, op)
+        let db = self.db.lock().map_err(err)?;
+        crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
+        ensure_operation(&db, task, op)
     }
     fn project_context(&self, task: &str) -> Result<(String, String, String), String> {
         let db = self.db.lock().map_err(err)?;
-        let workspace = crate::projects::task_identity(&db, task, self.herdr.session())?;
+        let workspace = crate::projects::task_identity_on(
+            &db,
+            task,
+            self.herdr.machine_id(),
+            self.herdr.session(),
+        )?;
         db.query_row(
             "SELECT COALESCE(s.cwd,d.cwd,p.root_path),t.status FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN task_sessions s ON s.task_id=t.id LEFT JOIN task_working_directories d ON d.task_id=t.id WHERE t.id=?1",
             [task], |r|Ok((workspace,r.get(0)?,r.get(1)?))).map_err(err)
@@ -198,7 +205,7 @@ impl Workflow {
             return Err("binding.occupied".into());
         }
         let json = serde_json::to_string(target).map_err(err)?;
-        tx.execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state) VALUES (?1,?2,?3,?4,'reserved') ON CONFLICT(task_id) DO UPDATE SET session=excluded.session,pane_id=excluded.pane_id,target_json=excluded.target_json,state='reserved'", params![task,target.session,target.pane_id,json]).map_err(err)?;
+        tx.execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state,machine_id) VALUES (?1,?2,?3,?4,'reserved',COALESCE(json_extract(?4,'$.machine_id'),'local')) ON CONFLICT(task_id) DO UPDATE SET machine_id=excluded.machine_id,session=excluded.session,pane_id=excluded.pane_id,target_json=excluded.target_json,state='reserved'", params![task,target.session,target.pane_id,json]).map_err(err)?;
         tx.execute(
             "UPDATE lifecycle_operations SET target_json=?2 WHERE id=?1",
             params![op, json],
@@ -308,8 +315,11 @@ impl Workflow {
             if saved.is_none() && prompt.trim().is_empty() {
                 return Err("dispatch.empty".into());
             }
-            let allocation_lock =
-                pane_allocation::workspace_lock(self.herdr.session(), &workspace)?;
+            let allocation_lock = pane_allocation::workspace_lock(
+                self.herdr.machine_id(),
+                self.herdr.session(),
+                &workspace,
+            )?;
             let allocation_guard = allocation_lock.lock().map_err(err)?;
             self.check_flow(task, op)?;
             let mut selected = None;
@@ -469,8 +479,11 @@ impl Workflow {
             return Err("flow.retry_cleanup".into());
         }
         let b = self.binding(task)?;
-        if b.operation.is_some() {
-            return Err("dispatch.verify_required".into());
+        if let Some(dispatch) = b.operation.as_ref() {
+            if dispatch.id != format!("{op}:dispatch") || dispatch.state != "unknown" {
+                return Err("dispatch.operation_conflict".into());
+            }
+            return self.confirm_received_dispatch(dispatch);
         }
         let sent: bool = self
             .db
@@ -483,6 +496,17 @@ impl Workflow {
             )
             .map_err(err)?;
         if sent {
+            if let Some(target) = b.target.as_ref() {
+                let (_, cwd, _) = self.project_context(task)?;
+                if self
+                    .save_session(task, target, &cwd, flow.session_id.as_deref())?
+                    .is_none()
+                {
+                    return Err("flow.session_missing".into());
+                }
+            } else {
+                return Err("binding.missing".into());
+            }
             return self.end_flow(op, "succeeded", "");
         }
         let prior: bool = self

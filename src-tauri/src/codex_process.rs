@@ -9,7 +9,11 @@ pub(super) fn session_locks(_: u64) -> Option<Vec<String>> {
 
 #[cfg(windows)]
 pub(super) fn session_locks(pid: u64) -> Option<Vec<String>> {
-    let mut ids: Vec<_> = windows::sessions(pid)?.into_iter().collect();
+    let owner = windows::codex_owner(pid)?;
+    let mut ids: Vec<_> = windows::sessions(owner)?.into_iter().collect();
+    if windows::codex_owner(pid)? != owner {
+        return None;
+    }
     ids.sort();
     Some(ids)
 }
@@ -64,6 +68,19 @@ mod windows {
 
     type Handle = *mut c_void;
     #[repr(C)]
+    struct ProcessEntry {
+        size: u32,
+        usage: u32,
+        pid: u32,
+        heap: usize,
+        module: u32,
+        threads: u32,
+        parent: u32,
+        priority: i32,
+        flags: u32,
+        exe: [u16; 260],
+    }
+    #[repr(C)]
     #[derive(Clone, Copy)]
     struct Entry {
         handle: Handle,
@@ -76,6 +93,16 @@ mod windows {
     }
     #[link(name = "kernel32")]
     unsafe extern "system" {
+        fn GetLastError() -> u32;
+        fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> Handle;
+        fn Process32FirstW(snapshot: Handle, entry: *mut ProcessEntry) -> i32;
+        fn Process32NextW(snapshot: Handle, entry: *mut ProcessEntry) -> i32;
+        fn QueryFullProcessImageNameW(
+            process: Handle,
+            flags: u32,
+            name: *mut u16,
+            size: *mut u32,
+        ) -> i32;
         fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
         fn CloseHandle(handle: Handle) -> i32;
         fn GetCurrentProcess() -> Handle;
@@ -109,6 +136,69 @@ mod windows {
                 CloseHandle(self.0);
             }
         }
+    }
+
+    fn image_name(pid: u32) -> Option<String> {
+        let process = Owned(unsafe { OpenProcess(0x1000, 0, pid) });
+        if process.0.is_null() {
+            return None;
+        }
+        let mut name = vec![0u16; 32768];
+        let mut len = name.len() as u32;
+        if unsafe { QueryFullProcessImageNameW(process.0, 0, name.as_mut_ptr(), &mut len) } == 0 {
+            return None;
+        }
+        Some(
+            String::from_utf16(&name[..len as usize])
+                .ok()?
+                .rsplit(['/', '\\'])
+                .next()?
+                .to_ascii_lowercase(),
+        )
+    }
+
+    // npm's codex.js keeps a node process as the foreground group and launches
+    // exactly one native Codex child. Never scan unrelated processes for locks.
+    pub(super) fn codex_owner(pid: u64) -> Option<u64> {
+        let pid = u32::try_from(pid).ok()?;
+        match image_name(pid)?.as_str() {
+            "codex.exe" => return Some(pid.into()),
+            "node.exe" => {}
+            _ => return None,
+        }
+        let snapshot = unsafe { CreateToolhelp32Snapshot(2, 0) };
+        if snapshot as isize == -1 {
+            return None;
+        }
+        let snapshot = Owned(snapshot);
+        let mut entry: ProcessEntry = unsafe { std::mem::zeroed() };
+        entry.size = size_of::<ProcessEntry>() as u32;
+        if unsafe { Process32FirstW(snapshot.0, &mut entry) } == 0 {
+            return None;
+        }
+        let mut child = None;
+        let mut count = 0;
+        loop {
+            count += 1;
+            if count > 32768 {
+                return None;
+            }
+            if entry.parent == pid {
+                // An inaccessible child cannot prove that the observed owner is unique.
+                if image_name(entry.pid)? == "codex.exe" {
+                    if child.replace(entry.pid as u64).is_some() {
+                        return None;
+                    }
+                }
+            }
+            if unsafe { Process32NextW(snapshot.0, &mut entry) } == 0 {
+                if unsafe { GetLastError() } != 18 {
+                    return None;
+                } // ERROR_NO_MORE_FILES
+                break;
+            }
+        }
+        child
     }
 
     fn handles(process: Handle) -> Option<Vec<Entry>> {

@@ -12,6 +12,7 @@ import "./promptImages.css";
 interface PromptEditorProps {
   content: string; // Tiptap JSON string
   rootPath: string;
+  projectId?: string;
   onChange: (json: string) => void;
   labelledBy?: string;
   disabled?: boolean;
@@ -21,7 +22,7 @@ interface PromptEditorProps {
   onImageError?: (reason: unknown) => void;
 }
 
-export function PromptEditor({ content, rootPath, onChange, labelledBy, disabled = false, autoFocus = false, getDraftId = async () => { throw new Error("image.draft_closed"); }, onImageBusy = () => {}, onImageError = () => {} }: PromptEditorProps) {
+export function PromptEditor({ content, rootPath, projectId, onChange, labelledBy, disabled = false, autoFocus = false, getDraftId = async () => { throw new Error("image.draft_closed"); }, onImageBusy = () => {}, onImageError = () => {} }: PromptEditorProps) {
   const locale = useLocale();
   const editor = useEditor({
     extensions: [
@@ -57,7 +58,7 @@ export function PromptEditor({ content, rootPath, onChange, labelledBy, disabled
       <div className="prompt-editor-wrap">
         <EditorContent editor={editor} className="prompt-editor" />
         <p className="image-paste-hint">{tr("image.hint")}</p>
-        {!disabled && <MentionPopover rootPath={rootPath} />}
+        {!disabled && <MentionPopover rootPath={rootPath} projectId={projectId} />}
       </div>
     </EditorContext.Provider>
   );

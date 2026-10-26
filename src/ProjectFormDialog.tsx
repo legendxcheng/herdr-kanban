@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef } from "react";
-import type { Project, ProjectSnapshot } from "./types";
+import type { Machine, Project, ProjectSnapshot } from "./types";
 import * as api from "./api";
 import { tr, useLocalizedMessage } from "./i18n";
 
 interface ProjectFormDialogProps {
+  machines?: Machine[];
   existing?: Project | null;
   onClose: () => void;
   onSaved: () => void;
 }
-export function ProjectFormDialog({ existing, onClose, onSaved }: ProjectFormDialogProps) {
+export function ProjectFormDialog({ machines = [], existing, onClose, onSaved }: ProjectFormDialogProps) {
+  const [machineId, setMachineId] = useState(existing?.machine_id ?? "local");
   const [name, setName] = useState(existing?.name ?? "");
   const [root, setRoot] = useState(existing?.root_path ?? "");
   const [mode, setMode] = useState(existing ? (existing.workspace_id && existing.sync_status !== "missing" ? "edit" : "link") : "create");
@@ -26,19 +28,19 @@ export function ProjectFormDialog({ existing, onClose, onSaved }: ProjectFormDia
     if (mode !== "link") return;
     let active = true;
     setLoading(true);
-    api.syncProjects().then((s) => { if (active) { setSnapshot(s); setError(""); } })
+    api.syncProjects(machineId).then((s) => { if (active) { setSnapshot(s); setError(""); } })
       .catch((e) => { if (active) setError(String(e)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [mode, refresh]);
+  }, [mode, refresh, machineId]);
   async function save() {
     if (busy.current) return;
     if (mode === "create" && (!name.trim() || !root.trim())) { setError("workspace.invalid_input"); return; }
     busy.current = true; setSaving(true); setError("");
     try {
       if (uncertain) await api.recoverWorkspace(operation.current);
-      else if (mode === "create") await api.createProject(name.trim(), root.trim(), operation.current);
-      else if (mode === "link") await api.linkWorkspace(existing?.id ?? null, selected, root.trim() || null);
+      else if (mode === "create") await api.createProject(name.trim(), root.trim(), operation.current, machineId);
+      else if (mode === "link") await api.linkWorkspace(existing?.id ?? null, selected, root.trim() || null, machineId);
       else if (existing) await api.updateProject(existing.id, name.trim(), useHerdrDirectory ? "" : root !== existing.root_path ? root.trim() : null);
       onSaved(); onClose();
     } catch (e) {
@@ -46,7 +48,7 @@ export function ProjectFormDialog({ existing, onClose, onSaved }: ProjectFormDia
       if (mode === "create") {
         // Durable operation state, not the error text, determines whether retry may create.
         try {
-          const ops = await api.workspaceOperations();
+          const ops = await api.workspaceOperations(machineId);
           const pending = ops.find((o) => o.id === operation.current);
           setUncertain(!!pending && pending.state !== "failed");
         } catch { setUncertain(true); }
@@ -60,6 +62,11 @@ export function ProjectFormDialog({ existing, onClose, onSaved }: ProjectFormDia
     <section className="dialog workspace-dialog" role="dialog" aria-label={tr(existing ? "workspace.edit" : "workspace.new")} onMouseDown={(e) => e.stopPropagation()}>
       <h3>{tr(existing ? "workspace.edit" : "workspace.new")}</h3>
       <p className="hint">{tr("workspace.source_help")}</p>
+      {!existing && <div className="dialog-section"><label htmlFor="workspace-machine">{tr("machine.computer")}</label>
+        <select id="workspace-machine" value={machineId} disabled={saving || uncertain} onChange={e => { setMachineId(e.target.value); setRoot(""); setSelected(""); setSnapshot(null); operation.current = crypto.randomUUID(); }}>
+          <option value="local">{tr("machine.local")}</option>
+          {machines.filter(m => !m.disabled).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select></div>}
       {!existing && <div className="workspace-mode">
         <button disabled={saving || uncertain} className={mode === "create" ? "btn-primary" : "btn-secondary"} onClick={() => setMode("create")}>{tr("workspace.new")}</button>
         <button disabled={saving || uncertain} className={mode === "link" ? "btn-primary" : "btn-secondary"} onClick={() => setMode("link")}>{tr("workspace.add_existing")}</button>
@@ -80,7 +87,7 @@ export function ProjectFormDialog({ existing, onClose, onSaved }: ProjectFormDia
         <label htmlFor="workspace-directory">{tr("workspace.directory")}</label>
         <div className="workspace-path">
           <input id="workspace-directory" value={useHerdrDirectory ? existing?.herdr_directory ?? "" : root} readOnly={!!directoryReadonly || useHerdrDirectory || (mode === "link" && !!candidates.find((w) => w.id === selected)?.directory)} disabled={saving || uncertain} onChange={(e) => setRoot(e.target.value)} />
-          {!directoryReadonly && !useHerdrDirectory && <button type="button" className="btn-secondary" disabled={saving || uncertain} onClick={async () => { try { const path = await api.pickFolder(); if (path) setRoot(path); } catch (e) { setError(String(e)); } }}>{tr("workspace.browse")}</button>}
+          {machineId === "local" && !directoryReadonly && !useHerdrDirectory && <button type="button" className="btn-secondary" disabled={saving || uncertain} onClick={async () => { try { const path = await api.pickFolder(); if (path) setRoot(path); } catch (e) { setError(String(e)); } }}>{tr("workspace.browse")}</button>}
         </div>
         {existing && <p className="hint">{tr(`workspace.directory_${existing.directory_source}`)}</p>}
         {existing?.herdr_directory && existing.directory_source !== "herdr" && <label className="workspace-directory-option"><input type="checkbox" checked={useHerdrDirectory} disabled={saving} onChange={(e) => setUseHerdrDirectory(e.target.checked)} />{tr("workspace.use_directory")} · {existing.herdr_directory}</label>}

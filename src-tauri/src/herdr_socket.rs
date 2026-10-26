@@ -259,6 +259,7 @@ mod tests {
     use super::*;
     fn cli() -> Cli {
         Cli {
+            remote: None,
             executable: "herdr".into(),
             session: "test-reorder".into(),
         }

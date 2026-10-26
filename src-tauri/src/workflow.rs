@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct Target {
+    #[serde(default = "crate::machines::local_id")]
+    pub machine_id: String,
     pub session: String,
     pub workspace_id: String,
     pub pane_id: String,
@@ -23,6 +25,12 @@ pub struct SendError {
     pub uncertain: bool,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PromptReceipt {
+    pub session_id: String,
+    pub evidence: String,
+}
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct PaneIdentity {
     pub pane_id: String,
@@ -35,7 +43,8 @@ pub(crate) fn ensure_project_target(
     session: &str,
 ) -> Result<(), String> {
     if target.session != session
-        || crate::projects::task_identity(db, task, session)? != target.workspace_id
+        || crate::projects::task_identity_on(db, task, &target.machine_id, session)?
+            != target.workspace_id
     {
         return Err("binding.identity_changed".into());
     }
@@ -43,6 +52,15 @@ pub(crate) fn ensure_project_target(
 }
 
 pub trait Herdr: Send + Sync {
+    fn machine_id(&self) -> &str {
+        crate::machines::LOCAL_ID
+    }
+    fn resources(&self) -> &dyn crate::execution::Resources {
+        &crate::execution::LOCAL
+    }
+    fn terminal_client(&self) -> Result<crate::herdr::Cli, String> {
+        Err("terminal.unsupported".into())
+    }
     fn session(&self) -> &str {
         "default"
     }
@@ -96,6 +114,16 @@ pub trait Herdr: Send + Sync {
         Err("flow.unsupported".into())
     }
     fn session_id(&self, _target: &Target) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+    /// Read-only evidence for this exact prompt after the durable dispatch began.
+    fn prompt_receipt(
+        &self,
+        _target: &Target,
+        _prompt: &str,
+        _after: &str,
+        _expected_session: Option<&str>,
+    ) -> Result<Option<PromptReceipt>, String> {
         Ok(None)
     }
     fn pane_exists(&self, _target: &Target) -> Result<bool, String> {
@@ -160,7 +188,8 @@ pub struct Binding {
 
 impl Target {
     pub fn same_identity(&self, other: &Self) -> bool {
-        self.session == other.session
+        self.machine_id == other.machine_id
+            && self.session == other.session
             && self.workspace_id == other.workspace_id
             && self.pane_id == other.pane_id
             && self.terminal_id == other.terminal_id
@@ -245,8 +274,8 @@ pub fn binding(conn: &Connection, task: &str) -> Result<Binding, String> {
 
 pub fn pane_owner(conn: &Connection, target: &Target) -> Result<Option<String>, String> {
     conn.query_row(
-        "SELECT task_id FROM task_bindings WHERE session=?1 AND pane_id=?2",
-        params![target.session, target.pane_id],
+        "SELECT task_id FROM task_bindings WHERE session=?1 AND pane_id=?2 AND machine_id=?3",
+        params![target.session, target.pane_id, target.machine_id],
         |r| r.get(0),
     )
     .optional()
@@ -280,14 +309,14 @@ impl Workflow {
             return Err("dispatch.verify_required".into());
         }
         ensure_available(&tx, &target, task)?;
-        tx.execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state) VALUES (?1,?2,?3,?4,'valid') ON CONFLICT(task_id) DO UPDATE SET session=excluded.session,pane_id=excluded.pane_id,target_json=excluded.target_json,state='valid'",
+        tx.execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state,machine_id) VALUES (?1,?2,?3,?4,'valid',COALESCE(json_extract(?4,'$.machine_id'),'local')) ON CONFLICT(task_id) DO UPDATE SET machine_id=excluded.machine_id,session=excluded.session,pane_id=excluded.pane_id,target_json=excluded.target_json,state='valid'",
             params![task,target.session,pane,serde_json::to_string(&target).map_err(err)?]).map_err(err)?;
         tx.commit().map_err(err)
     }
     pub(crate) fn workspace(&self, task: &str) -> Result<String, String> {
         let db = self.db.lock().map_err(err)?;
         crate::tasks::ensure_active(&db, task)?;
-        crate::projects::task_identity(&db, task, self.herdr.session())
+        crate::projects::task_identity_on(&db, task, self.herdr.machine_id(), self.herdr.session())
     }
     pub fn binding(&self, task: &str) -> Result<Binding, String> {
         binding(&*self.db.lock().map_err(err)?, task)
@@ -396,7 +425,7 @@ impl Workflow {
             };
             let json = serde_json::to_string(&target).map_err(err)?;
             tx.execute("INSERT OR IGNORE INTO task_working_directories(task_id,cwd) SELECT t.id,p.root_path FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?1",[task]).map_err(err)?;
-            tx.execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state) VALUES (?1,?2,?3,?4,'reserved') ON CONFLICT(task_id) DO UPDATE SET state='reserved'",
+            tx.execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state,machine_id) VALUES (?1,?2,?3,?4,'reserved',COALESCE(json_extract(?4,'$.machine_id'),'local')) ON CONFLICT(task_id) DO UPDATE SET state='reserved'",
                 params![task,target.session,pane,json]).map_err(|_|"binding.occupied".to_string())?;
             tx.execute("INSERT INTO dispatch_operations(id,task_id,workspace,target_json,prompt,created_at,state,had_binding) VALUES (?1,?2,?3,?4,?5,?6,'pending',?7)",
                 params![op.id,task,op.workspace,json,prompt,op.created_at,op.had_binding]).map_err(|_|"dispatch.verify_required".to_string())?;
@@ -405,6 +434,7 @@ impl Workflow {
         crate::tasks::ensure_active(&*self.db.lock().map_err(err)?, task)?;
         match self.herdr.send_checked(&target, prompt, &|| {
             let db = self.db.lock().map_err(err)?;
+            crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
             crate::tasks::ensure_active(&db, task)?;
             crate::images::verify_operation(&db, operation)
         }) {
@@ -417,6 +447,17 @@ impl Workflow {
             },
             Err(error) if error.uncertain => {
                 self.mark_unknown(&op.id);
+                if let Ok(Some(receipt)) = self.dispatch_receipt(&op) {
+                    self.finish_result(
+                        &op,
+                        true,
+                        &receipt.evidence,
+                        Some(&receipt.session_id),
+                        false,
+                    )
+                    .map_err(|_| "dispatch.verify_required".to_string())?;
+                    return Ok(record(&op));
+                }
                 Err(if error.message == "dispatch.submit_verify_required" {
                     error.message
                 } else {
@@ -454,13 +495,66 @@ impl Workflow {
         if op.id != operation || op.state != "unknown" {
             return Err("dispatch.operation_conflict".into());
         }
-        // This records an explicit user's observation, never an inferred send result.
-        self.finish(&op, sent, evidence.trim())
+        // Manual confirmation uses the same atomic start/session completion as log evidence.
+        if sent {
+            self.herdr.validate(&op.workspace, &op.target)?;
+            let session = self.herdr.session_id(&op.target)?;
+            self.finish_result(&op, true, evidence.trim(), session.as_deref(), true)
+        } else {
+            self.finish(&op, false, evidence.trim())
+        }
+    }
+    pub(crate) fn dispatch_receipt(&self, op: &Operation) -> Result<Option<PromptReceipt>, String> {
+        let expected: Option<String> = self
+            .db
+            .lock()
+            .map_err(err)?
+            .query_row(
+                "SELECT codex_session_id FROM task_sessions WHERE task_id=?1",
+                [&op.task_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(err)?;
+        self.herdr.validate(&op.workspace, &op.target)?;
+        let receipt = self.herdr.prompt_receipt(
+            &op.target,
+            &op.prompt,
+            &op.created_at,
+            expected.as_deref(),
+        )?;
+        self.herdr.validate(&op.workspace, &op.target)?;
+        Ok(receipt)
+    }
+    pub(crate) fn confirm_received_dispatch(&self, op: &Operation) -> Result<(), String> {
+        let receipt = self
+            .dispatch_receipt(op)?
+            .ok_or("dispatch.verify_required")?;
+        self.finish_result(op, true, &receipt.evidence, Some(&receipt.session_id), true)
     }
     fn finish(&self, op: &Operation, sent: bool, evidence: &str) -> Result<(), String> {
+        self.finish_result(op, sent, evidence, None, false)
+    }
+    fn finish_result(
+        &self,
+        op: &Operation,
+        sent: bool,
+        evidence: &str,
+        session_id: Option<&str>,
+        complete_start: bool,
+    ) -> Result<(), String> {
         let mut conn = self.db.lock().map_err(err)?;
         let tx = conn.transaction().map_err(err)?;
         crate::tasks::ensure_active(&tx, &op.task_id)?;
+        ensure_project_target(&tx, &op.task_id, &op.target, self.herdr.session())?;
+        let current = binding(&tx, &op.task_id)?;
+        if !current
+            .target
+            .as_ref()
+            .is_some_and(|t| t.same_identity(&op.target))
+        {
+            return Err("binding.identity_changed".into());
+        }
         let changed = tx.execute("UPDATE dispatch_operations SET state=?1,evidence=?2 WHERE id=?3 AND state IN ('pending','unknown')",
             params![if sent {"sent"} else {"not_sent"},evidence,op.id]).map_err(err)?;
         if changed != 1 {
@@ -474,6 +568,33 @@ impl Workflow {
                 [&op.task_id],
             )
             .map_err(err)?;
+            if let Some(session_id) = session_id {
+                uuid::Uuid::parse_str(session_id).map_err(|_| "flow.session_invalid")?;
+                let old: Option<String> = tx
+                    .query_row(
+                        "SELECT codex_session_id FROM task_sessions WHERE task_id=?1",
+                        [&op.task_id],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(err)?;
+                if old.as_deref().is_some_and(|old| old != session_id) {
+                    return Err("flow.session_mismatch".into());
+                }
+                tx.execute("INSERT INTO task_sessions(task_id,codex_session_id,cwd,updated_at) SELECT t.id,?2,COALESCE(d.cwd,p.root_path),?3 FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN task_working_directories d ON d.task_id=t.id WHERE t.id=?1 ON CONFLICT(task_id) DO UPDATE SET codex_session_id=excluded.codex_session_id,updated_at=excluded.updated_at", params![op.task_id,session_id,chrono::Utc::now().to_rfc3339()]).map_err(err)?;
+            }
+            if complete_start {
+                if let Some(start_id) = op.id.strip_suffix(":dispatch") {
+                    let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM lifecycle_operations WHERE id=?1 AND task_id=?2 AND kind='start' AND state='unknown')", params![start_id,op.task_id], |r| r.get(0)).map_err(err)?;
+                    if !active {
+                        return Err("dispatch.operation_conflict".into());
+                    }
+                    if session_id.is_none() {
+                        return Err("flow.session_missing".into());
+                    }
+                    tx.execute("UPDATE lifecycle_operations SET state='succeeded',error='',evidence=?2 WHERE id=?1",params![start_id,evidence]).map_err(err)?;
+                }
+            }
         } else if op.had_binding {
             tx.execute(
                 "UPDATE task_bindings SET state='valid' WHERE task_id=?1",

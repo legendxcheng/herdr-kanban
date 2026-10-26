@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Project {
+    #[serde(default = "crate::machines::local_id")]
+    pub machine_id: String,
     pub id: String,
     pub name: String,
     pub root_path: String,

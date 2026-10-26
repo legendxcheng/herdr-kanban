@@ -106,7 +106,7 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
         </div>}
         <div>
           <label id={`${id}-prompt`} className="field-label">{tr("task.prompt")}</label>
-          <PromptEditor content={promptJson} rootPath={project.root_path} onChange={setPromptJson}
+          <PromptEditor content={promptJson} rootPath={project.root_path} projectId={project.machine_id && project.machine_id !== "local" ? project.id : undefined} onChange={setPromptJson}
             getDraftId={draft.getId} onImageBusy={busy => { setImageBusy(busy); if (busy) setImageError(""); }} onImageError={reason => setImageError(String(reason))}
             labelledBy={`${id}-prompt`} disabled={saving} autoFocus={!task} />
           {imageError && <p role="alert" className="error">{imageError}</p>}

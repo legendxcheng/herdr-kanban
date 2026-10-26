@@ -1,15 +1,19 @@
 import { useRef, useState } from "react";
 import type { DragEvent } from "react";
-import type { Project, ProjectGitStatus, WorkspaceOperation } from "./types";
+import type { Machine, Project, ProjectGitStatus, WorkspaceOperation } from "./types";
 import * as api from "./api";
 import { ProjectFormDialog } from "./ProjectFormDialog";
 import { Icon } from "./Icon";
 import { WorkspaceRecovery } from "./WorkspaceRecovery";
-import { tr, useLocale } from "./i18n";
+import { tr, useLocale, errorText } from "./i18n";
 import { notify } from "./Toast";
 import { LanguageSelect } from "./LanguageSelect";
+import { MachineDialog } from "./MachineDialog";
 
 interface ProjectSidebarProps {
+  machines?: Machine[];
+  machineErrors?: Record<string,string>;
+  machineBusy?: Record<string,boolean>;
   inert?: boolean;
   projects: Project[];
   gitStatuses?: Record<string, ProjectGitStatus>;
@@ -25,19 +29,22 @@ interface ProjectSidebarProps {
   onMove?: (projectId: string, beforeProjectId: string | null) => Promise<void>;
 }
 
-export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, selectedId, onSelect, onChanged, onOverview, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
+export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy = {}, inert = false, projects, gitStatuses = {}, selectedId, onSelect, onChanged, onOverview, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
   useLocale();
   const [showNew, setShowNew] = useState(false);
+  const [manageMachines, setManageMachines] = useState(false);
   const [editTarget, setEditTarget] = useState<Project | null>(null);
   const dragging = useRef<string | null>(null);
   const suppressClick = useRef(false);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [insertion, setInsertion] = useState<{ id: string; after: boolean } | null>(null);
-  const movable = (p: Project) => !!onMove && !reordering && !!p.workspace_id && p.sync_status === "ready" && p.herdr_session === session;
+  const machineOf = (p: Project) => p.machine_id ?? "local";
+  const groups = [{ id: "local", name: tr("machine.local"), disabled: false }, ...machines];
+  const movable = (p: Project) => !!onMove && !reordering && !!p.workspace_id && p.sync_status === "ready" && (machineOf(p) === "local" ? p.herdr_session === session : !machines.find(m => m.id === p.machine_id)?.disabled && !machineErrors[machineOf(p)] && !machineBusy[machineOf(p)]);
 
   function clearDrag() { dragging.current = null; setDraggingId(null); setInsertion(null); }
   function dropPosition(e: DragEvent, p: Project) {
-    if (!dragging.current || dragging.current === p.id || !movable(p) || !projects.some(p => p.id === dragging.current && movable(p))) return null;
+    if (!dragging.current || dragging.current === p.id || !movable(p) || !projects.some(source => source.id === dragging.current && machineOf(source) === machineOf(p) && movable(source))) return null;
     const rect = e.currentTarget.getBoundingClientRect();
     return { id: p.id, after: e.clientY >= rect.top + rect.height / 2 };
   }
@@ -46,7 +53,7 @@ export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, sele
     if (!position) { clearDrag(); return; }
     e.preventDefault(); e.stopPropagation();
     const source = dragging.current!;
-    const current = projects.filter(movable).map(p => p.id);
+    const current = projects.filter(item => machineOf(item) === machineOf(p) && movable(item)).map(p => p.id);
     const reordered = current.filter(id => id !== source);
     const index = reordered.indexOf(p.id) + (position.after ? 1 : 0);
     reordered.splice(index, 0, source);
@@ -73,7 +80,13 @@ export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, sele
         <button onClick={() => setShowNew(true)} className="btn-icon" aria-label={tr("project.new")} title={tr("project.new")}><Icon name="plus" /></button>
       </div>
       <div className="project-list" aria-busy={reordering} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setInsertion(null); }}>
-        {projects.map((p) => {
+        {groups.map(group => <section key={group.id} className="machine-group">
+        <h3 className="machine-heading">{group.name}</h3>
+        {group.disabled && <p className="hint">{tr("machine.disabled")}</p>}
+        {machineBusy[group.id] && <p role="status">{tr("workspace.syncing")}</p>}
+        {group.id !== "local" && !group.disabled && !machineBusy[group.id] && machineErrors[group.id] === "" && <p className="hint">{tr("machine.online")}</p>}
+        {machineErrors[group.id] && <p className="error" role="alert">{tr("machine.offline")} · {errorText(machineErrors[group.id])}</p>}
+        {projects.filter(p => machineOf(p) === group.id).map((p) => {
           const git = gitStatuses[p.id];
           const label = p.sync_status !== "ready" ? tr(`workspace.${p.sync_status}`)
             : !git ? tr("workspace.git_loading")
@@ -110,6 +123,7 @@ export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, sele
           </div>
           );
         })}
+        </section>)}
       </div>
       <div className="workspace-sync"><button className="btn-secondary" disabled={syncing} onClick={onChanged}>{tr(syncing ? "workspace.syncing" : "workspace.refresh")}</button>
         {reordering && <p role="status">{tr("workspace.reordering")}</p>}
@@ -118,11 +132,14 @@ export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, sele
       {operations.length > 0 && <div className="workspace-pending"><strong>{tr("workspace.pending_title")}</strong>{operations.map((op) => <WorkspaceRecovery key={op.id} operation={op} onChanged={onChanged} />)}</div>}
       <button className="sidebar-create btn-secondary" onClick={() => setShowNew(true)}><Icon name="plus" />{tr("project.new")}</button>
       <LanguageSelect />
+      <button className="btn-secondary" onClick={() => setManageMachines(true)}>{tr("machine.manage")}</button>
+      {manageMachines && <MachineDialog machines={machines} onChanged={onChanged} onClose={() => setManageMachines(false)} />}
       <div className="sidebar-footer"><Icon name="terminal" /><div><strong>{tr("sidebar.local")}</strong><span>{tr("sidebar.footer")}</span></div></div>
 
       {showNew && (
         <ProjectFormDialog
           key="new-workspace"
+          machines={machines}
           onClose={() => setShowNew(false)}
           onSaved={() => { setShowNew(false); onChanged(); }}
         />

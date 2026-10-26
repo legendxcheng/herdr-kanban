@@ -2,19 +2,25 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
 import type {
-  Project, ProjectGitStatus, ProjectSnapshot, WorkspaceOperation, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
+  Machine, SavedMachine, Project, ProjectGitStatus, ProjectSnapshot, WorkspaceOperation, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
 } from "./types";
 
 // Projects
+export const listMachines = () => invoke<Machine[]>("list_machines");
+export const savedMachines = () => invoke<SavedMachine[]>("saved_machines");
+export const enrollMachine = (target: string, session: string) => invoke<void>("enroll_machine", { target, session });
+export const connectMachine = (profileId: string) => invoke<Machine>("connect_machine", { profileId });
+export const renameMachine = (id: string, name: string) => invoke<void>("rename_machine", { id, name });
+export const removeMachine = (id: string) => invoke<void>("remove_machine", { id });
 export const listProjects = () => invoke<Project[]>("list_projects");
-export const syncProjects = () => invoke<ProjectSnapshot>("sync_projects");
+export const syncProjects = (machineId?: string) => machineId && machineId !== "local" ? invoke<ProjectSnapshot>("sync_projects", { machineId }) : invoke<ProjectSnapshot>("sync_projects");
 export const projectGitStatuses = (projectIds: string[]) => invoke<ProjectGitStatus[]>("project_git_statuses", { projectIds });
 export const moveProject = (projectId: string, beforeProjectId: string | null) =>
   invoke<ProjectSnapshot>("move_project", { projectId, beforeProjectId });
-export const workspaceOperations = () => invoke<WorkspaceOperation[]>("workspace_operations");
-export const createProject = (name: string, rootPath: string, operationId: string) => invoke<Project>("create_project", { name, rootPath, operationId });
+export const workspaceOperations = (machineId?: string) => machineId && machineId !== "local" ? invoke<WorkspaceOperation[]>("workspace_operations", { machineId }) : invoke<WorkspaceOperation[]>("workspace_operations");
+export const createProject = (name: string, rootPath: string, operationId: string, machineId?: string) => invoke<Project>("create_project", { name, rootPath, operationId, ...(machineId && machineId !== "local" ? { machineId } : {}) });
 export const updateProject = (id: string, name: string, fallbackPath: string | null) => invoke<Project>("update_project", { id, name, fallbackPath });
-export const linkWorkspace = (projectId: string | null, workspaceId: string, fallbackPath: string | null) => invoke<Project>("link_workspace", { projectId, workspaceId, fallbackPath });
+export const linkWorkspace = (projectId: string | null, workspaceId: string, fallbackPath: string | null, machineId?: string) => invoke<Project>("link_workspace", { projectId, workspaceId, fallbackPath, ...(machineId && machineId !== "local" ? { machineId } : {}) });
 export const recoverWorkspace = (operationId: string, workspaceId: string | null = null) => invoke<Project>("recover_workspace", { operationId, workspaceId });
 export const deleteProject = (id: string) => invoke<void>("delete_project", { id });
 
@@ -59,14 +65,14 @@ export const deleteCompletedTasks = (projectId: string, taskIds: string[]) =>
   invoke<BatchTaskResult>("delete_completed_tasks", { projectId, taskIds });
 
 // Discovery
-export const searchFiles = (rootPath: string, query: string) =>
-  invoke<FileEntry[]>("search_files", { rootPath, query });
-export const searchSkills = (rootPath: string, query: string) =>
-  invoke<SkillEntry[]>("search_skills", { rootPath, query });
-export const readFileContent = (absPath: string) =>
-  invoke<string>("read_file_content", { absPath });
-export const readSkillContent = (skillMdPath: string) =>
-  invoke<string>("read_skill_content", { skillMdPath });
+export const searchFiles = (rootPath: string, query: string, projectId?: string) =>
+  invoke<FileEntry[]>("search_files", { rootPath, query, ...(projectId ? { projectId } : {}) });
+export const searchSkills = (rootPath: string, query: string, projectId?: string) =>
+  invoke<SkillEntry[]>("search_skills", { rootPath, query, ...(projectId ? { projectId } : {}) });
+export const readFileContent = (absPath: string, projectId?: string) =>
+  invoke<string>("read_file_content", { absPath, ...(projectId ? { projectId } : {}) });
+export const readSkillContent = (skillMdPath: string, projectId?: string) =>
+  invoke<string>("read_skill_content", { skillMdPath, ...(projectId ? { projectId } : {}) });
 
 // Herdr
 export const herdrListAgents = (projectId: string) =>

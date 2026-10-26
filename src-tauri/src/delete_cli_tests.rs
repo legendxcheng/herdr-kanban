@@ -59,6 +59,7 @@ $result = switch ($command) {
         .unwrap();
         if phase == "close" {
             let target = Target {
+                machine_id: crate::machines::local_id(),
                 session: "default".into(),
                 workspace_id: "w1".into(),
                 pane_id: "w1:p1".into(),
@@ -70,7 +71,7 @@ $result = switch ($command) {
                 status: "idle".into(),
             };
             conn.execute(
-                "INSERT INTO task_bindings VALUES (?1,'default','w1:p1',?2,'valid')",
+                "INSERT INTO task_bindings(task_id,session,pane_id,target_json,state) VALUES (?1,'default','w1:p1',?2,'valid')",
                 params![task.id, serde_json::to_string(&target).unwrap()],
             )
             .unwrap();
@@ -78,6 +79,7 @@ $result = switch ($command) {
         let app = Arc::new(Workflow {
             db: Arc::new(Mutex::new(conn)),
             herdr: Arc::new(Cli {
+                remote: None,
                 executable: dir.join("herdr.cmd"),
                 session: "default".into(),
             }),

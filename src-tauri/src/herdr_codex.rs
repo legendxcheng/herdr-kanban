@@ -8,6 +8,29 @@ use std::{
 };
 
 impl Cli {
+    pub(crate) fn startup_session_locks(
+        &self,
+        target: &Target,
+    ) -> Result<Option<Vec<String>>, String> {
+        if let Some(machine) = &self.remote {
+            return crate::remote_transport::request(
+                machine,
+                serde_json::json!({"method":"session_locks","target":target}),
+            );
+        }
+        self.check_target(target).map_err(|e| e.message)?;
+        #[cfg(windows)]
+        let locks = target
+            .process_id
+            .rsplit(':')
+            .next()
+            .and_then(|s| s.parse().ok())
+            .and_then(codex_process::session_locks);
+        #[cfg(not(windows))]
+        let locks = None;
+        self.check_target(target).map_err(|e| e.message)?;
+        Ok(locks)
+    }
     pub(super) fn prepare_codex_session(
         &self,
         target: &Target,
@@ -94,12 +117,7 @@ impl Cli {
                 // A running binding must retain this snapshot, never recapture it.
                 #[cfg(windows)]
                 if needs_startup_locks && live.codex_resume_locks.is_empty() {
-                    let pid = live
-                        .process_id
-                        .rsplit(':')
-                        .next()
-                        .and_then(|s| s.parse().ok());
-                    if let Some(ids) = pid.and_then(codex_process::session_locks) {
+                    if let Some(ids) = self.startup_session_locks(&live)? {
                         if ids.len() == 2 && ids.iter().any(|id| id == expected) {
                             self.check_target(&live).map_err(|e| e.message)?;
                             live.codex_resume_locks = ids;
@@ -207,6 +225,7 @@ impl Cli {
         let shell_ready = shell != 0 && shell == group;
         Ok((
             Target {
+                machine_id: self.machine_id().into(),
                 session: self.session.clone(),
                 workspace_id: workspace.into(),
                 pane_id: pane.into(),
@@ -289,6 +308,22 @@ fn codex_resume_session(doc: &Value, target: &Target) -> Result<Option<String>, 
 }
 
 fn codex_resume_command_session<'a>(argv: &[&'a str]) -> Result<Option<&'a str>, String> {
+    let argv = match argv {
+        [node, script, rest @ ..]
+            if node.rsplit(['/', '\\']).next().is_some_and(|name| {
+                matches!(name.to_ascii_lowercase().as_str(), "node" | "node.exe")
+            }) && script
+                .replace('\\', "/")
+                .to_ascii_lowercase()
+                .ends_with("/node_modules/@openai/codex/bin/codex.js") =>
+        {
+            // Validate the same exact launch arguments as the native binary.
+            let mut native = vec!["codex"];
+            native.extend_from_slice(rest);
+            return codex_resume_command_session(&native);
+        }
+        other => other,
+    };
     // Accept only launches we issue, including panes started before automatic
     // review became the default. Unknown flags must not weaken resume evidence.
     let (exe, id, cwd) = match argv {
@@ -330,6 +365,16 @@ mod tests {
                 "E:\\Project with spaces",
             ],
             vec!["codex", "--no-daemon", "resume", id, "-C", "E:/project"],
+            vec![
+                "C:/Program Files/nodejs/node.exe",
+                "C:/Users/test/npm/node_modules/@openai/codex/bin/codex.js",
+                "--no-daemon",
+                "--approve-for-me",
+                "resume",
+                id,
+                "-C",
+                "C:/remote project",
+            ],
         ] {
             assert_eq!(codex_resume_command_session(&argv).unwrap(), Some(id));
         }
@@ -341,6 +386,25 @@ mod tests {
         for argv in [
             vec!["codex", "resume", id, "-C", "E:/project"],
             vec!["other.exe", "--no-daemon", "resume", id, "-C", "E:/project"],
+            vec![
+                "node.exe",
+                "C:/other/codex.js",
+                "--no-daemon",
+                "resume",
+                id,
+                "-C",
+                "E:/project",
+            ],
+            vec![
+                "node.exe",
+                "C:/npm/node_modules/@openai/codex/bin/codex.js",
+                "--no-daemon",
+                "resume",
+                id,
+                "-C",
+                "E:/project",
+                "unexpected prompt",
+            ],
             vec!["codex", "--no-daemon", "resume", id, "-C", ""],
             vec![
                 "codex",

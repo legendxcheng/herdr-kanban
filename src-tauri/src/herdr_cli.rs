@@ -2,13 +2,7 @@
 use super::Cli;
 use crate::workflow::SendError;
 use serde_json::Value;
-use std::{
-    io::Read,
-    path::PathBuf,
-    process::{Command, Stdio},
-    thread,
-    time::{Duration, Instant},
-};
+use std::{path::PathBuf, process::Command, time::Duration};
 
 impl Cli {
     pub(crate) fn client_endpoint(&self) -> Result<std::path::PathBuf, String> {
@@ -31,6 +25,7 @@ impl Cli {
             .map(PathBuf::from)
             .map(|p| p.join("Programs/Herdr/bin/herdr.exe"));
         Self {
+            remote: None,
             executable: std::env::var_os("KANBAN_HERDR_EXECUTABLE")
                 .map(PathBuf::from)
                 .or_else(|| installed.filter(|p| p.is_file()))
@@ -40,7 +35,11 @@ impl Cli {
     }
     pub fn command(&self) -> Command {
         let mut cmd = Command::new(&self.executable);
-        cmd.args(["--session", &self.session]);
+        if let Some(machine) = &self.remote {
+            cmd.args(["--machine", machine.profile_id.as_deref().unwrap_or("")]);
+        } else {
+            cmd.args(["--session", &self.session]);
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -48,67 +47,48 @@ impl Cli {
         }
         cmd
     }
-    pub(super) fn output(&self, args: &[&str]) -> Result<Vec<u8>, SendError> {
-        let mut child = self
-            .command()
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| SendError {
-                message: format!("herdr.unavailable: {e}"),
-                uncertain: false,
+    pub(crate) fn output(&self, args: &[&str]) -> Result<Vec<u8>, SendError> {
+        if let Some(machine) = &self.remote {
+            // Execute against the frozen host/session, after its helper verifies identity.
+            // An official profile may be edited while this operation is in flight.
+            let response: crate::remote_helper::CliOutput = crate::remote_transport::request(
+                machine,
+                serde_json::json!({"method":"cli_output","args":args}),
+            )
+            .map_err(|message| SendError {
+                message,
+                uncertain: true,
             })?;
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
-        let read = |stream: Box<dyn Read + Send>| {
-            thread::spawn(move || {
-                let mut bytes = Vec::new();
-                let _ = stream.take(4 * 1024 * 1024).read_to_end(&mut bytes);
-                bytes
-            })
-        };
-        let out = read(Box::new(stdout));
-        let errors = read(Box::new(stderr));
-        let start = Instant::now();
+            return match response.error {
+                Some(message) => Err(SendError {
+                    message,
+                    uncertain: response.uncertain,
+                }),
+                None => Ok(response.stdout),
+            };
+        }
+        let mut command = self.command();
+        command.args(args);
         let timeout = if args.starts_with(&["agent", "start"]) {
             40
         } else {
             12
         };
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break Ok(status),
-                Ok(None) if start.elapsed() < Duration::from_secs(timeout) => {
-                    thread::sleep(Duration::from_millis(20))
-                }
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    break Err(());
-                }
-            }
-        };
-        let stdout = out.join().unwrap_or_default();
-        let stderr = errors.join().unwrap_or_default();
-        let status = status.map_err(|_| SendError {
-            message: "herdr.timeout".into(),
-            uncertain: true,
-        })?;
-        if !status.success() {
-            return Err(SendError {
-                message: format!(
-                    "herdr.failed: {}",
-                    String::from_utf8_lossy(&stderr)
-                        .chars()
-                        .take(1000)
-                        .collect::<String>()
-                ),
-                uncertain: true,
-            });
-        }
-        Ok(stdout)
+        crate::title_process::run_with_limit(
+            command,
+            Vec::new(),
+            &std::sync::atomic::AtomicBool::new(false),
+            Duration::from_secs(timeout),
+            4 * 1024 * 1024,
+            true,
+        )
+        .map_err(|error| {
+            let uncertain = error != "title.unavailable";
+            let message = error
+                .replacen("title.cli_failed", "herdr.failed", 1)
+                .replacen("title.", "herdr.", 1);
+            SendError { message, uncertain }
+        })
     }
     pub fn request(&self, args: &[&str]) -> Result<Value, SendError> {
         let stdout = self.output(args)?;

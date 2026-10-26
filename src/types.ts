@@ -1,7 +1,15 @@
 export type TaskStatus = "todo" | "in_progress" | "done";
 export type TaskPriority = "normal" | "high" | "urgent";
 
+export interface Machine {
+  id: string; name: string; kind: "local" | "ssh"; session: string;
+  profile_id: string | null; ssh_target: string | null; disabled: boolean;
+  platform?: string | null; helper_name?: string | null;
+}
+export interface SavedMachine { id: string; label: string; target: string; session: string; enabled: boolean }
+
 export interface Project {
+  machine_id?: string;
   id: string;
   name: string;
   root_path: string;
@@ -44,6 +52,7 @@ export interface Task {
 }
 
 export interface HerdrTarget {
+  machine_id?: string;
   session: string;
   workspace_id: string;
   pane_id: string;

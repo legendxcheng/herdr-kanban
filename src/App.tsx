@@ -11,7 +11,7 @@ import { tr, useLocale } from "./i18n";
 
 export default function App() {
   useLocale();
-  const { projects, gitStatuses, operations, syncing, error, refresh, session, reordering, move } = useProjectSync();
+  const { projects, machines, machineErrors, machineBusy, gitStatuses, operations, syncing, error, refresh, session, reordering, move } = useProjectSync();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [terminalMaximized, setTerminalMaximized] = useState(false);
   const [overviewOpen, setOverviewOpen] = useState(false);
@@ -26,6 +26,9 @@ export default function App() {
     <div className={`app${terminalMaximized ? " terminal-maximized" : ""}`}>
       <ToastContainer />
       <ProjectSidebar
+        machines={machines}
+        machineErrors={machineErrors}
+        machineBusy={machineBusy}
         inert={terminalMaximized}
         projects={projects}
         gitStatuses={gitStatuses}
@@ -43,6 +46,7 @@ export default function App() {
       <main className="board-area">
         {selectedProject ? (
           <KanbanBoard key={selectedProject.id} project={selectedProject}
+            machineName={machines.find(m => m.id === selectedProject.machine_id)?.name ?? tr("machine.local")}
             terminalMaximized={terminalMaximized} onToggleTerminalMaximized={toggleTerminalMaximized} />
         ) : (
           <div className="board-workspace">

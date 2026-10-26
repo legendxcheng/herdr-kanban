@@ -17,6 +17,7 @@ import { taskAgentStatus } from "./agentStatus";
 
 interface KanbanBoardProps {
   project: Project;
+  machineName?: string;
   onNewTaskShortcut?: () => void;
   terminalMaximized?: boolean;
   onToggleTerminalMaximized?: () => void;
@@ -28,7 +29,7 @@ const COLUMNS: { status: TaskStatus; label: string; emptyIcon: IconName; emptyTe
   { status: "done", label: "board.done", emptyIcon: "check", emptyText: "board.done_empty", hint: "board.done_hint" },
 ];
 
-export function KanbanBoard({ project, terminalMaximized = false, onToggleTerminalMaximized }: KanbanBoardProps) {
+export function KanbanBoard({ project, machineName, terminalMaximized = false, onToggleTerminalMaximized }: KanbanBoardProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [creatingTask, setCreatingTask] = useState(false);
@@ -359,7 +360,7 @@ export function KanbanBoard({ project, terminalMaximized = false, onToggleTermin
         onPointerDown={(e) => { resizing.current = true; e.currentTarget.setPointerCapture(e.pointerId); e.preventDefault(); }}
         onPointerMove={(e) => { if (resizing.current && workspaceRef.current) setWidth(workspaceRef.current.getBoundingClientRect().right - e.clientX); }}
         onPointerUp={() => { resizing.current = false; }} onLostPointerCapture={() => { resizing.current = false; }} />
-      <TerminalPanel task={selectedTask} maximized={terminalMaximized} onToggleMaximized={onToggleTerminalMaximized} onRepair={selectedTask ? () => {
+      <TerminalPanel task={selectedTask} machineName={machineName} maximized={terminalMaximized} onToggleMaximized={onToggleTerminalMaximized} onRepair={selectedTask ? () => {
         if (selectedTask.binding?.operation) setRecoveringTaskId(selectedTask.id);
         else setRepairingTaskId(selectedTask.id);
       } : undefined} />

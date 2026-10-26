@@ -95,9 +95,174 @@ fn uncertain_prompt_is_reconciled_through_existing_dispatch_evidence_without_res
         "Observed task A in pane",
     )
     .unwrap();
-    app.recover_lifecycle("a", &id).unwrap();
+    assert_eq!(
+        view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+        Some("succeeded")
+    );
     assert_eq!(status(&app, "a"), "in_progress");
     assert_eq!(fake.0.lock().unwrap().sent, vec!["A"]);
+}
+
+#[test]
+fn received_prompt_with_missing_ack_finishes_start_without_replay() {
+    let (app, fake) = fixture();
+    {
+        let mut s = fake.0.lock().unwrap();
+        s.send_error = true;
+        s.receipt_available = true;
+    }
+    app.start_task("a", "exact prompt", &op()).unwrap();
+    assert_eq!(status(&app, "a"), "in_progress");
+    assert_eq!(app.binding("a").unwrap().state, "valid");
+    assert!(saved(&app, "a").is_some());
+    assert_eq!(
+        view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+        Some("succeeded")
+    );
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["exact prompt"]);
+}
+
+#[test]
+fn delayed_receipt_after_restart_recovers_dispatch_session_and_start_together() {
+    let (app, fake) = fixture();
+    {
+        let mut s = fake.0.lock().unwrap();
+        s.send_error = true;
+        s.missing_id = true;
+    }
+    let id = op();
+    assert!(app.start_task("a", "delayed", &id).is_err());
+    assert!(saved(&app, "a").is_none());
+    crate::db::recover_interrupted(&app.db.lock().unwrap()).unwrap();
+    {
+        let mut s = fake.0.lock().unwrap();
+        s.missing_id = false;
+        s.receipt_available = true;
+    }
+    app.recover_lifecycle("a", &id).unwrap();
+    assert_eq!(status(&app, "a"), "in_progress");
+    assert!(saved(&app, "a").is_some());
+    assert!(app.binding("a").unwrap().operation.is_none());
+    assert_eq!(
+        view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+        Some("succeeded")
+    );
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["delayed"]);
+}
+
+#[test]
+fn receipt_recovery_rolls_back_all_state_when_session_persistence_fails() {
+    let (app, fake) = fixture();
+    {
+        let mut s = fake.0.lock().unwrap();
+        s.send_error = true;
+        s.missing_id = true;
+    }
+    let id = op();
+    assert!(app.start_task("a", "once", &id).is_err());
+    {
+        let mut s = fake.0.lock().unwrap();
+        s.missing_id = false;
+        s.receipt_available = true;
+    }
+    app.db.lock().unwrap().execute_batch("CREATE TRIGGER fail_receipt BEFORE INSERT ON task_sessions BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
+    assert!(app.recover_lifecycle("a", &id).is_err());
+    assert_eq!(status(&app, "a"), "todo");
+    assert_eq!(app.binding("a").unwrap().state, "unknown");
+    assert!(saved(&app, "a").is_none());
+    assert_eq!(
+        view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+        Some("unknown")
+    );
+    app.db
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER fail_receipt")
+        .unwrap();
+    app.recover_lifecycle("a", &id).unwrap();
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["once"]);
+}
+
+#[test]
+fn receipt_does_not_adopt_a_replaced_process_or_switched_session() {
+    for replace_process in [true, false] {
+        let (app, fake) = fixture();
+        fake.0.lock().unwrap().send_error = true;
+        let id = op();
+        assert!(app.start_task("a", "once", &id).is_err());
+        let original_session = saved(&app, "a");
+        {
+            let mut s = fake.0.lock().unwrap();
+            s.receipt_available = true;
+            let (target, session) = s.panes.values_mut().next().unwrap();
+            if replace_process {
+                target.process_id = "new-process".into();
+            } else {
+                *session = Some(uuid::Uuid::new_v4().to_string());
+            }
+        }
+        assert!(app.recover_lifecycle("a", &id).is_err());
+        assert_eq!(status(&app, "a"), "todo");
+        assert_eq!(saved(&app, "a"), original_session);
+        assert_eq!(fake.0.lock().unwrap().sent, vec!["once"]);
+    }
+}
+
+#[test]
+fn manual_sent_confirmation_also_captures_late_session_and_finishes_start() {
+    let (app, fake) = fixture();
+    {
+        let mut s = fake.0.lock().unwrap();
+        s.send_error = true;
+        s.missing_id = true;
+    }
+    let id = op();
+    assert!(app.start_task("a", "once", &id).is_err());
+    fake.0.lock().unwrap().missing_id = false;
+    app.resolve(
+        "a",
+        &format!("{id}:dispatch"),
+        true,
+        "User observed the exact prompt",
+    )
+    .unwrap();
+    assert!(saved(&app, "a").is_some());
+    assert_eq!(
+        view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+        Some("succeeded")
+    );
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["once"]);
+}
+
+#[test]
+#[ignore = "Read-only real Herdr queries; requires an explicit copied receipt-acceptance.db and task id"]
+fn live_receipt_recovers_copied_task_without_input() {
+    let path = std::path::PathBuf::from(
+        std::env::var_os("KANBAN_RECEIPT_SNAPSHOT").expect("snapshot required"),
+    );
+    assert_eq!(path.file_name().unwrap(), "receipt-acceptance.db");
+    let task = std::env::var("KANBAN_RECEIPT_TASK").expect("task required");
+    let db = Connection::open(&path).unwrap();
+    crate::db::init(&db).unwrap();
+    let app = Workflow {
+        db: Arc::new(Mutex::new(db)),
+        herdr: Arc::new(crate::herdr::Cli::from_env()),
+    };
+    let original = view(&app.db.lock().unwrap(), &task).unwrap();
+    assert_eq!(original.state.as_deref(), Some("unknown"));
+    app.recover_lifecycle(&task, original.operation_id.as_deref().unwrap())
+        .unwrap();
+    assert_eq!(app.binding(&task).unwrap().state, "valid");
+    assert!(app.binding(&task).unwrap().operation.is_none());
+    assert!(saved(&app, &task).is_some());
+    assert_eq!(status(&app, &task), "in_progress");
+    drop(app);
+    let reopened = Connection::open(&path).unwrap();
+    crate::db::recover_interrupted(&reopened).unwrap();
+    assert_eq!(
+        view(&reopened, &task).unwrap().state.as_deref(),
+        Some("succeeded")
+    );
 }
 
 #[test]

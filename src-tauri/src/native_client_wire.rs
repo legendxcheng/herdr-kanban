@@ -87,9 +87,11 @@ pub fn control(payload: &[u8]) -> Result<Option<(&str, Value)>, String> {
         serde_json::from_str(data).map_err(|_| INVALID)?,
     )))
 }
-pub fn focus(boot: &str, id: &str, pane: &str) -> Vec<u8> {
+pub fn zoom(boot: &str, id: &str, pane: &str) -> Vec<u8> {
+    // Explicit On is idempotent and also focuses the requested pane in Herdr.
     let request =
-        json!({"id": id, "method": "pane.focus", "params": {"pane_id": pane}}).to_string();
+        json!({"id": id, "method": "pane.zoom", "params": {"pane_id": pane, "mode": "on"}})
+            .to_string();
     let mut payload = vec![15];
     string(&mut payload, boot);
     string(&mut payload, &request);
@@ -137,7 +139,7 @@ pub struct Position {
 impl Position {
     pub fn new(pane: String) -> Self {
         Self {
-            id: format!("kanban-focus-{}", uuid::Uuid::new_v4()),
+            id: String::new(),
             pane,
             boot: None,
             welcome: false,
@@ -147,7 +149,34 @@ impl Position {
             ready: false,
         }
     }
-    // Return a one-time upstream request and whether to forward the server frame.
+    fn request(&mut self) -> Vec<u8> {
+        self.id = format!("kanban-zoom-{}", uuid::Uuid::new_v4());
+        self.reply.clear();
+        self.acknowledged = false;
+        self.ready = false;
+        zoom(self.boot.as_ref().unwrap(), &self.id, &self.pane)
+    }
+
+    // All panes (including hidden panes) are present in shell snapshots.
+    fn visible_alone(&self, doc: &Value) -> Result<bool, String> {
+        let panes = doc["panes"].as_array().ok_or(INVALID)?;
+        let target = panes
+            .iter()
+            .find(|p| p["pane_id"] == self.pane)
+            .ok_or("terminal.client_focus")?;
+        let tab_id = target["tab_id"].as_str().ok_or(INVALID)?;
+        let tab = doc["tabs"]
+            .as_array()
+            .ok_or(INVALID)?
+            .iter()
+            .find(|t| t["tab_id"] == tab_id)
+            .ok_or(INVALID)?;
+        let zoomed = tab["zoomed"].as_bool().ok_or(INVALID)?;
+        let single = panes.iter().filter(|p| p["tab_id"] == tab_id).count() == 1;
+        Ok(doc["focused_pane_id"] == self.pane && (zoomed || single))
+    }
+
+    // Return a serialized upstream request and whether to forward the server frame.
     pub fn receive(&mut self, payload: &[u8]) -> Result<(Option<Vec<u8>>, bool), String> {
         if let Some((kind, doc)) = control(payload)? {
             if kind == "endpoint.welcome.v1" {
@@ -155,7 +184,7 @@ impl Position {
                     || !doc["error"].is_null()
                     || !doc["methods"]
                         .as_array()
-                        .is_some_and(|m| m.iter().any(|s| s == "pane.focus"))
+                        .is_some_and(|m| m.iter().any(|s| s == "pane.zoom"))
                 {
                     return Err(INVALID.into());
                 }
@@ -169,15 +198,23 @@ impl Position {
                 if !self.welcome {
                     return Err(INVALID.into());
                 }
-                self.target_visible = doc["focused_pane_id"] == self.pane;
+                self.target_visible = self.visible_alone(&doc)?;
                 if let Some(expected) = &self.boot {
                     if expected != boot {
                         return Err(INVALID.into());
                     }
-                    self.ready = self.acknowledged && self.target_visible;
+                    if self.ready {
+                        // A no-focus split clears zoom. Restore it while this task
+                        // remains selected, without undoing manual Herdr navigation.
+                        if doc["focused_pane_id"] == self.pane && !self.target_visible {
+                            return Ok((Some(self.request()), true));
+                        }
+                    } else {
+                        self.ready = self.acknowledged && self.target_visible;
+                    }
                 } else {
                     self.boot = Some(boot.into());
-                    return Ok((Some(focus(boot, &self.id, &self.pane)), true));
+                    return Ok((Some(self.request()), true));
                 }
             }
         }
@@ -189,10 +226,18 @@ impl Position {
                 self.reply.extend(data);
                 if last {
                     let doc: Value = serde_json::from_slice(&self.reply).map_err(|_| INVALID)?;
+                    let result = &doc["result"]["zoom"];
+                    let layout = &result["layout"];
+                    let single = result["reason"] == "single_pane"
+                        && layout["panes"].as_array().is_some_and(|panes| {
+                            panes.len() == 1 && panes[0]["pane_id"] == self.pane
+                        });
                     if doc["id"] != self.id
                         || !doc["error"].is_null()
-                        || doc["result"]["pane"]["pane_id"] != self.pane
-                        || doc["result"]["pane"]["focused"] != true
+                        || result["pane_id"] != self.pane
+                        || result["focused_pane_id"] != self.pane
+                        || layout["focused_pane_id"] != self.pane
+                        || !(single || (result["zoomed"] == true && layout["zoomed"] == true))
                     {
                         return Err("terminal.client_focus".into());
                     }
@@ -215,26 +260,61 @@ mod tests {
         string(&mut v, &doc.to_string());
         v
     }
-    #[test]
-    fn requires_own_successful_reply_and_target_snapshot() {
+    fn snapshot(pane: &str, zoomed: bool, count: usize) -> Vec<u8> {
+        control_frame(
+            "shell.snapshot.v1",
+            json!({
+                "boot_id":"boot", "focused_pane_id":pane,
+                "tabs":[{"tab_id":"w2:t1","zoomed":zoomed}],
+                "panes": (0..count).map(|i| json!({"pane_id":format!("w2:p{}", i+3),"tab_id":"w2:t1"})).collect::<Vec<_>>()
+            }),
+        )
+    }
+    fn reply_doc(position: &Position, single: bool) -> Value {
+        json!({"id":position.id,"result":{"zoom":{
+            "pane_id":position.pane,"focused_pane_id":position.pane,
+            "zoomed":!single,"reason":if single { "single_pane" } else { "already_zoomed" },
+            "layout":{"focused_pane_id":position.pane,"zoomed":!single,
+                "panes":[{"pane_id":position.pane}]}
+        }}})
+    }
+    fn reply(position: &Position, doc: Value) -> Vec<u8> {
+        let mut payload = vec![18];
+        string(&mut payload, "boot");
+        string(&mut payload, &position.id);
+        payload.push(1);
+        string(&mut payload, &doc.to_string());
+        payload
+    }
+    fn position() -> Position {
         let mut position = Position::new("w2:p3".into());
         position
             .receive(&control_frame(
                 "endpoint.welcome.v1",
-                json!({"generation":1,"methods":["pane.focus"]}),
+                json!({"generation":1,"methods":["pane.zoom"]}),
             ))
             .unwrap();
-        let snapshot = |pane| {
-            control_frame(
-                "shell.snapshot.v1",
-                json!({"boot_id":"boot","focused_pane_id":pane}),
-            )
-        };
-        assert!(position.receive(&snapshot("w1:p1")).unwrap().0.is_some());
-        position.receive(&snapshot("w2:p3")).unwrap();
+        position
+    }
+    #[test]
+    fn requires_own_successful_reply_and_target_snapshot() {
+        let mut position = position();
+        let request = position
+            .receive(&snapshot("w1:p1", false, 2))
+            .unwrap()
+            .0
+            .unwrap();
+        let mut buffer = request;
+        let payload = next_frame(&mut buffer).unwrap().unwrap();
+        assert_eq!(payload[0], 15);
+        let mut bytes = &payload[1..];
+        assert_eq!(take_string(&mut bytes).unwrap(), "boot");
+        let request: Value = serde_json::from_str(take_string(&mut bytes).unwrap()).unwrap();
+        assert_eq!(request["method"], "pane.zoom");
+        assert_eq!(request["params"], json!({"pane_id":"w2:p3", "mode":"on"}));
+        position.receive(&snapshot("w2:p3", true, 2)).unwrap();
         assert!(!position.ready);
-        let reply = json!({"id":position.id,"result":{"pane":{"pane_id":"w2:p3","focused":true}}})
-            .to_string();
+        let reply = reply_doc(&position, false).to_string();
         for (last, part) in [(false, &reply[..20]), (true, &reply[20..])] {
             let mut payload = vec![18];
             string(&mut payload, "boot");
@@ -243,9 +323,6 @@ mod tests {
             string(&mut payload, part);
             assert!(!position.receive(&payload).unwrap().1);
         }
-        position.receive(&snapshot("w1:p1")).unwrap();
-        assert!(!position.ready);
-        position.receive(&snapshot("w2:p3")).unwrap();
         assert!(position.ready);
         assert!(
             position
@@ -277,30 +354,15 @@ mod tests {
     #[test]
     fn initial_target_needs_no_redundant_snapshot_but_requires_success() {
         for success in [true, false] {
-            let mut position = Position::new("w1:p1".into());
-            position
-                .receive(&control_frame(
-                    "endpoint.welcome.v1",
-                    json!({"generation":1,"methods":["pane.focus"]}),
-                ))
-                .unwrap();
-            position
-                .receive(&control_frame(
-                    "shell.snapshot.v1",
-                    json!({"boot_id":"boot","focused_pane_id":"w1:p1"}),
-                ))
-                .unwrap();
+            let mut position = position();
+            position.receive(&snapshot("w2:p3", true, 2)).unwrap();
             assert!(!position.ready);
             let doc = if success {
-                json!({"id":position.id,"result":{"pane":{"pane_id":"w1:p1","focused":true}}})
+                reply_doc(&position, false)
             } else {
                 json!({"id":position.id,"error":{"code":"pane_not_found"}})
             };
-            let mut payload = vec![18];
-            string(&mut payload, "boot");
-            string(&mut payload, &position.id);
-            payload.push(1);
-            string(&mut payload, &doc.to_string());
+            let payload = reply(&position, doc);
             assert_eq!(position.receive(&payload).is_ok(), success);
             assert_eq!(position.ready, success);
         }
@@ -309,7 +371,7 @@ mod tests {
             position
                 .receive(&control_frame(
                     "endpoint.welcome.v1",
-                    json!({"generation":2,"methods":["pane.focus"]})
+                    json!({"generation":2,"methods":["pane.zoom"]})
                 ))
                 .is_err()
         );
@@ -317,9 +379,99 @@ mod tests {
             position
                 .receive(&control_frame(
                     "endpoint.welcome.v1",
-                    json!({"generation":1,"methods":[]})
+                    json!({"generation":1,"methods":["pane.focus"]})
                 ))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn focus_without_zoom_is_not_ready_and_reply_cannot_replace_snapshot() {
+        let mut position = position();
+        position.receive(&snapshot("w2:p3", false, 2)).unwrap();
+        position
+            .receive(&reply(&position, reply_doc(&position, false)))
+            .unwrap();
+        assert!(!position.ready);
+        position.receive(&snapshot("w2:p3", false, 2)).unwrap();
+        assert!(!position.ready);
+        position.receive(&snapshot("w2:p4", true, 2)).unwrap();
+        assert!(!position.ready);
+        position.receive(&snapshot("w2:p3", true, 2)).unwrap();
+        assert!(position.ready);
+    }
+
+    #[test]
+    fn single_pane_then_background_split_rezooms_once_with_a_new_request() {
+        let mut position = position();
+        position.receive(&snapshot("w2:p3", false, 1)).unwrap();
+        let old_reply = reply(&position, reply_doc(&position, true));
+        position.receive(&old_reply).unwrap();
+        assert!(position.ready);
+        assert!(
+            position
+                .receive(&snapshot("w2:p3", false, 1))
+                .unwrap()
+                .0
+                .is_none()
+        );
+        assert!(
+            position
+                .receive(&snapshot("w2:p3", false, 2))
+                .unwrap()
+                .0
+                .is_some()
+        );
+        assert!(!position.ready);
+        assert!(
+            position
+                .receive(&snapshot("w2:p3", false, 2))
+                .unwrap()
+                .0
+                .is_none()
+        );
+        position.receive(&old_reply).unwrap();
+        position.receive(&snapshot("w2:p3", true, 2)).unwrap();
+        assert!(!position.ready); // An old acknowledgement cannot finish this request.
+        position
+            .receive(&reply(&position, reply_doc(&position, false)))
+            .unwrap();
+        assert!(position.ready);
+        assert!(
+            position
+                .receive(&snapshot("w2:p3", true, 3))
+                .unwrap()
+                .0
+                .is_none()
+        );
+        // Native navigation remains available after initial task positioning.
+        assert!(
+            position
+                .receive(&snapshot("w2:p4", false, 3))
+                .unwrap()
+                .0
+                .is_none()
+        );
+        assert!(position.ready);
+    }
+
+    #[test]
+    fn rejects_zoom_failures_wrong_target_and_false_single_pane_success() {
+        for case in 0..4 {
+            let mut position = position();
+            position.receive(&snapshot("w2:p3", false, 2)).unwrap();
+            let mut doc = reply_doc(&position, false);
+            match case {
+                0 => doc["result"]["zoom"]["zoomed"] = json!(false),
+                1 => doc["result"]["zoom"]["focused_pane_id"] = json!("w2:p4"),
+                2 => doc["result"]["zoom"]["layout"]["zoomed"] = json!(false),
+                _ => {
+                    doc = reply_doc(&position, true);
+                    doc["result"]["zoom"]["layout"]["panes"] = json!([]);
+                }
+            }
+            assert!(position.receive(&reply(&position, doc)).is_err());
+            assert!(!position.ready);
+        }
     }
 }

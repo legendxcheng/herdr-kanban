@@ -12,6 +12,7 @@ pub async fn start_task(
 ) -> Result<crate::lifecycle::Flow, String> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let app = app.for_task(&task_id)?;
         app.submit_start(
             &task_id,
             &operation_id,
@@ -32,9 +33,12 @@ pub async fn complete_task(
 ) -> Result<crate::lifecycle::Outcome, String> {
     let app = app.inner().clone();
     manager.close_task(&task_id);
-    tauri::async_runtime::spawn_blocking(move || app.complete_task(&task_id, &operation_id))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        app.for_task(&task_id)?
+            .complete_task(&task_id, &operation_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 pub async fn recover_lifecycle(
@@ -43,9 +47,12 @@ pub async fn recover_lifecycle(
     operation_id: String,
 ) -> Result<(), String> {
     let app = app.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || app.recover_lifecycle(&task_id, &operation_id))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        app.for_task(&task_id)?
+            .recover_lifecycle(&task_id, &operation_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -54,9 +61,11 @@ pub async fn herdr_list_agents(
     project_id: String,
 ) -> Result<Vec<crate::agent_status::AgentChoice>, String> {
     let app = app.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || app.list_agents(&project_id))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        app.for_project(&project_id)?.list_agents(&project_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -70,6 +79,7 @@ pub async fn dispatch_to_herdr(
 ) -> Result<DispatchRecord, String> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let app = app.for_task(&task_id)?;
         let saved: String = app
             .db
             .lock()
@@ -102,7 +112,8 @@ pub async fn resolve_dispatch(
 ) -> Result<(), String> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        app.resolve(&task_id, &operation_id, sent, &evidence)
+        app.for_task(&task_id)?
+            .resolve(&task_id, &operation_id, sent, &evidence)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -118,7 +129,7 @@ pub async fn repair_binding(
     let app = app.inner().clone();
     let manager = manager.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        app.repair(&task_id, &pane_id)?;
+        app.for_task(&task_id)?.repair(&task_id, &pane_id)?;
         manager.close_task(&task_id);
         Ok(())
     })
@@ -147,7 +158,7 @@ pub async fn terminal_open(
         }),
     )?;
     tauri::async_runtime::spawn_blocking(move || {
-        crate::native_terminal::open(view, app, hwnd)?;
+        crate::native_terminal::open(view, app.for_task(&task_id)?, hwnd)?;
         Ok(connection_id)
     })
     .await

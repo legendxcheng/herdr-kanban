@@ -119,10 +119,22 @@ fn closing_a_task_cancels_its_pending_attachment_before_spawning() {
     let (app, _) = fixture();
     app.dispatch("a", "w1:p1", "A", "op").unwrap();
     let manager = crate::native_terminal::NativeTerminalManager::default();
-    let view = manager.select("late".into(), "a".into(), crate::native_terminal::Bounds {
-        x: 0.0, y: 0.0, width: 800.0, height: 600.0,
-        viewport_width: 800.0, viewport_height: 600.0, visible: true,
-    }, Arc::new(|_| {})).unwrap();
+    let view = manager
+        .select(
+            "late".into(),
+            "a".into(),
+            crate::native_terminal::Bounds {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+                viewport_width: 800.0,
+                viewport_height: 600.0,
+                visible: true,
+            },
+            Arc::new(|_| {}),
+        )
+        .unwrap();
     manager.close_task("a");
     assert_eq!(
         crate::native_terminal::open(view, Arc::new(app), 0).unwrap_err(),

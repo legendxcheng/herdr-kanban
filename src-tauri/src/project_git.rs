@@ -1,5 +1,5 @@
 //! Read-only Git labels for workspace navigation. Never hold the database lock here.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ffi::OsStr,
@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GitState {
     Branch,
@@ -19,7 +19,7 @@ pub enum GitState {
     Unavailable,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GitStatus {
     pub state: GitState,
     pub head: Option<String>,
@@ -34,7 +34,7 @@ impl GitStatus {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ProjectGitStatus {
     pub project_id: String,
     pub root_path: String,

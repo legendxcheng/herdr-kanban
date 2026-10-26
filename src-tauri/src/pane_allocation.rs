@@ -6,15 +6,23 @@ use std::{
     sync::{Arc, Mutex, OnceLock, Weak},
 };
 
-pub(super) fn workspace_lock(session: &str, workspace: &str) -> Result<Arc<Mutex<()>>, String> {
-    type Locks = HashMap<(String, String), Weak<Mutex<()>>>;
+pub(super) fn workspace_lock(
+    machine: &str,
+    session: &str,
+    workspace: &str,
+) -> Result<Arc<Mutex<()>>, String> {
+    type Locks = HashMap<(String, String, String), Weak<Mutex<()>>>;
     static LOCKS: OnceLock<Mutex<Locks>> = OnceLock::new();
     let mut locks = LOCKS
         .get_or_init(Default::default)
         .lock()
         .map_err(|e| e.to_string())?;
     locks.retain(|_, lock| lock.strong_count() > 0);
-    let key = (session.to_string(), workspace.to_string());
+    let key = (
+        machine.to_string(),
+        session.to_string(),
+        workspace.to_string(),
+    );
     if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
         return Ok(lock);
     }
@@ -35,8 +43,8 @@ impl Workflow {
         };
         let db = self.db.lock().map_err(|e| e.to_string())?;
         super::ensure_operation(&db, task, op)?;
-        db.execute("INSERT INTO pane_allocations(operation_id,session,workspace,before_json) VALUES (?1,?2,?3,?4)",
-            params![op, self.herdr.session(), workspace, serde_json::to_string(&before).map_err(|e| e.to_string())?]).map_err(|e| e.to_string())?;
+        db.execute("INSERT INTO pane_allocations(operation_id,session,workspace,before_json,machine_id) VALUES (?1,?2,?3,?4,?5)",
+            params![op, self.herdr.session(), workspace, serde_json::to_string(&before).map_err(|e| e.to_string())?,self.herdr.machine_id()]).map_err(|e| e.to_string())?;
         Ok(())
     }
 
@@ -61,11 +69,12 @@ impl Workflow {
 
     pub(super) fn allocation_quarantines(&self, target: &Target) -> Result<bool, String> {
         let db = self.db.lock().map_err(|e| e.to_string())?;
-        let mut stmt = db.prepare("SELECT before_json,target_json FROM pane_allocations WHERE session=?1 AND workspace=?2 AND resolved=0").map_err(|e| e.to_string())?;
+        let mut stmt = db.prepare("SELECT before_json,target_json FROM pane_allocations WHERE session=?1 AND workspace=?2 AND machine_id=?3 AND resolved=0").map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map(params![target.session, target.workspace_id], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
-            })
+            .query_map(
+                params![target.session, target.workspace_id, target.machine_id],
+                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
             .map_err(|e| e.to_string())?;
         for row in rows {
             let (before, created) = row.map_err(|e| e.to_string())?;
@@ -91,12 +100,12 @@ impl Workflow {
         workspace: &str,
         op: &str,
     ) -> Result<Option<bool>, String> {
-        let lock = workspace_lock(self.herdr.session(), workspace)?;
+        let lock = workspace_lock(self.herdr.machine_id(), self.herdr.session(), workspace)?;
         let _guard = lock.lock().map_err(|e| e.to_string())?;
         let record = {
             let db = self.db.lock().map_err(|e| e.to_string())?;
-            db.query_row("SELECT before_json,target_json FROM pane_allocations WHERE operation_id=?1 AND session=?2 AND workspace=?3",
-                params![op,self.herdr.session(),workspace], |r| Ok((r.get::<_,String>(0)?,r.get::<_,Option<String>>(1)?))).optional().map_err(|e| e.to_string())?
+            db.query_row("SELECT before_json,target_json FROM pane_allocations WHERE operation_id=?1 AND session=?2 AND workspace=?3 AND machine_id=?4",
+                params![op,self.herdr.session(),workspace,self.herdr.machine_id()], |r| Ok((r.get::<_,String>(0)?,r.get::<_,Option<String>>(1)?))).optional().map_err(|e| e.to_string())?
         };
         let Some((before, created)) = record else {
             return Ok(None);
@@ -113,9 +122,12 @@ impl Workflow {
         }
         let before: Vec<PaneIdentity> = serde_json::from_str(&before).map_err(|e| e.to_string())?;
         let db = self.db.lock().map_err(|e| e.to_string())?;
-        let mut stmt = db.prepare("SELECT target_json FROM pane_allocations WHERE session=?1 AND operation_id<>?2 AND target_json IS NOT NULL").map_err(|e| e.to_string())?;
+        let mut stmt = db.prepare("SELECT target_json FROM pane_allocations WHERE session=?1 AND operation_id<>?2 AND machine_id=?3 AND target_json IS NOT NULL").map_err(|e| e.to_string())?;
         let known = stmt
-            .query_map(params![self.herdr.session(), op], |r| r.get::<_, String>(0))
+            .query_map(
+                params![self.herdr.session(), op, self.herdr.machine_id()],
+                |r| r.get::<_, String>(0),
+            )
             .map_err(|e| e.to_string())?
             .map(|r| {
                 r.map_err(|e| e.to_string())
