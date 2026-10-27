@@ -5,6 +5,8 @@ $resultError='machine.enrollment_failed'
 try {
  $config=Get-Content -LiteralPath $Settings -Raw | ConvertFrom-Json
  if ($config.target -notmatch '^[A-Za-z0-9][A-Za-z0-9_.@:-]*$') { throw 'Invalid SSH alias' }
+ $targetParts=$config.target.Split('@')
+ if ($targetParts.Count -gt 2 -or $targetParts[-1] -notmatch '^[A-Za-z0-9][A-Za-z0-9_.:-]*$') { throw 'Invalid SSH target' }
  if ($config.session -notmatch '^[A-Za-z0-9_.-]+$') { throw 'Invalid Herdr session' }
  $sshDir=Join-Path $env:USERPROFILE '.ssh'
  $resultError='machine.key_setup_failed'
@@ -44,10 +46,32 @@ if(-not $exists -and $isAdmin){
  $configFile=Join-Path $sshDir 'config'
  $previous=if(Test-Path -LiteralPath $configFile){[IO.File]::ReadAllText($configFile)}else{''}
  $marker='# Herdr Kanban '+$config.key_id
- if(-not $previous.Contains($marker)){
-  $keyPath=$keyFile.Replace('\','/')
-  [IO.File]::AppendAllText($configFile,"`r`n$marker`r`nHost $($config.target)`r`n    IdentityFile `"$keyPath`"`r`n",[Text.UTF8Encoding]::new($false))
+ $keyPath=$keyFile.Replace('\','/')
+ # OpenSSH matches Host against the host portion, never user@host. Use
+ # originalhost to preserve alias matching, and scope explicit users separately.
+ $selector=if($targetParts.Count -eq 2){"Match originalhost $($targetParts[1]) user $($targetParts[0])"}else{"Host $($config.target)"}
+ $block="$marker ssh-config-v2`r`n$selector`r`n    IdentityFile `"$keyPath`"`r`n"
+ if(-not $previous.Contains($block)){
+  # Repair only the exact stanza emitted by older enrollment (including the
+  # documented manual Host correction). Preserve all surrounding user content.
+  $oldHosts=@($config.target,$targetParts[-1]) | Select-Object -Unique
+  $hostPattern=($oldHosts | ForEach-Object { [regex]::Escape($_) }) -join '|'
+  $legacyPattern='(?m)^'+[regex]::Escape($marker)+'\r?\nHost (?:'+$hostPattern+')\r?\n    IdentityFile "'+[regex]::Escape($keyPath)+'"(?:\r?\n|$)'
+  $legacy=[regex]::new($legacyPattern)
+  if($legacy.IsMatch($previous)){
+   $updated=$legacy.Replace($previous,[System.Text.RegularExpressions.MatchEvaluator]{param($match) $block})
+  }elseif($previous -match ('(?m)^'+[regex]::Escape($marker)+'(?: ssh-config-v2)?\r?$')){
+   throw 'The existing Kanban SSH entry was edited. Check its Host/Match and IdentityFile before retrying.'
+  }else{
+   $updated=$previous+"`r`n"+$block
+  }
+  [IO.File]::WriteAllText($configFile,$updated,[Text.UTF8Encoding]::new($false))
  }
+ # Herdr and subsequent background requests do not pass -i. Verify that exact
+ # authentication path before registration instead of asking for another password.
+ $resultError='machine.key_verification_failed'
+ & ssh -o BatchMode=yes -o ConnectTimeout=15 -- $config.target hostname
+ if($LASTEXITCODE -ne 0){throw 'SSH configuration verification failed; Herdr registration was not started'}
  $resultError='machine.profile_setup_failed'
  & $config.herdr machine add $config.target --remote-session $config.session --label $config.target
  if($LASTEXITCODE -ne 0){throw 'Herdr machine setup did not complete'}

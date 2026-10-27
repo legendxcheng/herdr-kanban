@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-27。修复 SSH 接入目标为 `用户名@主机` 时专用密钥未自动匹配、Herdr 再次要求密码的问题；按原始主机及用户限定配置，重试时修复旧生成条目，注册前验证不带 `-i` 的免密连接。实现和验证边界见第 12 节及 [SSH 接入配置回归](docs/verification/2026-10-27-ssh-enrollment-config.md)。
+
 更新日期：2026-10-27。任务自动分配始终新建 `kanban` Tab 内的 pane；单 Workspace 的 NewTask 旁提供“关闭空闲会话”，经二次确认和逐项复核后清理。InProgress 绑定、未决操作及 pause 子进程受保护；未知关闭持久化且不重放。实现见 6.6.5，验证边界见[空闲会话清理验收](docs/verification/2026-10-27-idle-cleanup.md)。
 
 更新日期：2026-10-27。失败及待核实 Workspace 创建记录增加“移除记录”和应用内二次确认。移除仅持久化本地标记，保留已有项目、任务、Herdr 资源及原始创建证据；离线及停用电脑可用，拒绝已移除操作的重试/核实。实现与验证边界见 6.1.4 及[创建记录移除验收](docs/verification/2026-10-27-workspace-dismissal.md)。
@@ -1014,7 +1016,7 @@ Herdr 对外仍使用 `Cli` 与 `Herdr`。内部 `herdr_cli` 承担进程执行�
 
 共享工作区的验证结果、提交快照与真实桌面验收分别记录在[首批重构验收记录](docs/verification/2026-10-24-kanban-first-refactor.md)。本次变更只整理内部职责，不将其他未提交功能纳入重构提交。
 
-## 12. SSH 执行电脑（2026-10-26 更新）
+## 12. SSH 执行电脑（2026-10-27 更新）
 
 一个看板使用一份本地 SQLite，不共享数据库。`machines.rs` 的 schema 12 将旧数据统一归属 `local`；Project 以 machine/session/workspace 唯一，绑定以 machine/session/pane 唯一，执行目标 JSON、派发/生命周期操作、启动快照、工作目录、会话和分配记录均保留 machine_id。名称可改，已有任务的项目不可换电脑。停用机器不删除历史。
 
@@ -1037,6 +1039,8 @@ Herdr 对外仍使用 `Cli` 与 `Herdr`。内部 `herdr_cli` 承担进程执行�
 新增 IPC：`list_machines`、`saved_machines`、`enroll_machine`、`connect_machine`、`rename_machine`、`remove_machine`、`machine_status`。`sync_projects` / `workspace_operations` / `create_project` / 新建关联接受可选 machineId；已有 Project/Task 操作从本地记录推导归属，不信任前端指定目标机器。文件/技能搜索和读取接受可选 projectId；旧本机调用继续可用。
 
 `enroll_machine` 打开本机交互 PowerShell并返回授权操作 ID；`enrollment_status(operationId)` 只读当前操作结果，密码不进入 WebView。脚本只传公钥并保留已有授权，私钥留在本机。等待阶段可退出界面，后台观测器等待原生进程结束并清理本操作临时文件；重新打开界面可从已保存 profile 继续。成功结果按 target/session 精确选择唯一 profile，随后连接检查远端平台、Herdr 会话和 Codex，并安装本版本辅助程序；歧义要求在已保存列表明确选择。接入记录在检查期间保持 disabled，只有全部检查通过才启用；失败保留配置供重试。当前仅支持 Windows x64。
+
+2026-10-27 接入配置修正：`enroll-windows-machine.ps1` 对 `user@host` 写入 `Match originalhost host user user`，普通 SSH 别名沿用 `Host alias`，避免把整个目标作为 Host 模式。按 key ID 精确识别旧生成条目，支持 CRLF/LF 及已手动去除用户名的 Host 条目；只替换对应条目，保留周围配置与原密钥。检测到无法识别的人工编辑条目时报配置错误，不覆盖。配置生效后增加不带 `-i` 的 `BatchMode=yes` 检查，通过后才调用 `herdr machine add`；检查失败归入 `machine.key_verification_failed`。原始 target、profile/session 和机器身份不变，无数据库迁移。新增 Windows PowerShell 回归脚本，通过真实 `ssh -G` 检验配置选择，已接入 `machine_enrollment` 的 Rust 测试；9 类场景及真实桌面/远端验收边界见 [SSH 接入配置回归](docs/verification/2026-10-27-ssh-enrollment-config.md)。
 
 自动启动冻结机器、工作目录和文档后交给后台线程。`images::FrozenDocument` 在数据库锁内提取图片元数据和已校验内容，释放锁后序列化文件相对路径并上传图片；文件引用不读取正文，图片仍使用远端绝对路径。手动图文派发在解析成功并复核任务后，将图片引用与操作快照同事务保存再发送，失败准备不遗留附件引用。传输失败阻止缺图提示词派发；精确恢复沿用原会话，不重放正文。远端图片以内容摘要存储，保留缓存，不在停用连接时清理。
 

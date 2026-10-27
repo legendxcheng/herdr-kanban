@@ -124,6 +124,30 @@ mod tests {
         }
     }
     #[test]
+    fn enrollment_config_selects_keys_for_ssh_targets() {
+        let output = std::process::Command::new("powershell")
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../scripts/test-enroll-windows-machine.ps1"
+            ))
+            .creation_flags(0x08000000)
+            .output()
+            .expect("Windows PowerShell must be available for enrollment tests");
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    #[test]
     fn exited_terminal_requires_an_exact_operation_result() {
         assert_eq!(finished(None).state, "cancelled");
         assert_eq!(
