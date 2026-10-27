@@ -131,7 +131,7 @@ impl Herdr for Fake {
         &self,
         w: &str,
     ) -> Result<Option<Vec<crate::workflow::PaneIdentity>>, String> {
-        Ok(Some(
+        let inventory = Some(
             self.targets(w)?
                 .into_iter()
                 .map(|t| crate::workflow::PaneIdentity {
@@ -139,7 +139,9 @@ impl Herdr for Fake {
                     terminal_id: t.terminal_id,
                 })
                 .collect(),
-        ))
+        );
+        self.observe("inventory");
+        Ok(inventory)
     }
     fn create_pane(
         &self,

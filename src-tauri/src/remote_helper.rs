@@ -261,6 +261,20 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
             _ => false,
         })),
         "workspaces" => serde_json::to_value(cli.workspaces()?).map_err(|e| e.to_string()),
+        "idle_cleanup_panes" => {
+            serde_json::to_value(cli.idle_panes(text("workspace")?)?).map_err(|e| e.to_string())
+        }
+        "idle_cleanup_close" => {
+            let mut pane: crate::idle_cleanup::IdlePane =
+                serde_json::from_value(request["pane"].clone())
+                    .map_err(|_| "machine.invalid_request")?;
+            pane.target.machine_id = crate::machines::local_id();
+            let result = cli.close_idle_pane(&pane, &|| Ok(()));
+            Ok(match result {
+                Ok(()) => json!({"error":null,"uncertain":false}),
+                Err(e) => json!({"error":e.message,"uncertain":e.uncertain}),
+            })
+        }
         "available_targets" => {
             serde_json::to_value(cli.available(text("workspace")?, text("cwd")?)?)
                 .map_err(|e| e.to_string())

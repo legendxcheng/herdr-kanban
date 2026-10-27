@@ -296,7 +296,7 @@ fn invalid_content_fails_locally_and_next_valid_request_can_start() {
 #[test]
 fn deletion_during_external_start_steps_prevents_later_work_and_resurrection() {
     for phase in [
-        "available",
+        "inventory",
         "created",
         "preparing",
         "prepared",
@@ -320,12 +320,12 @@ fn deletion_during_external_start_steps_prevents_later_work_and_resurrection() {
         let s = fake.0.lock().unwrap();
         assert_eq!(
             s.created,
-            if phase == "available" { 0 } else { 1 },
+            if phase == "inventory" { 0 } else { 1 },
             "{phase}"
         );
         assert_eq!(
             s.prepared.len(),
-            if ["available", "created", "preparing"].contains(&phase) {
+            if ["inventory", "created", "preparing"].contains(&phase) {
                 0
             } else {
                 1

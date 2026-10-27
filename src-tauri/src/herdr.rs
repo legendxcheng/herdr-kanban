@@ -27,6 +27,8 @@ mod codex_receipt;
 #[cfg(any(windows, test))]
 #[path = "herdr_codex_submit.rs"]
 mod codex_submit;
+#[path = "herdr_idle_cleanup.rs"]
+mod idle_cleanup;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -277,6 +279,30 @@ impl Herdr for Cli {
             (a.agent.as_str(), a.pane_id.as_str()).cmp(&(b.agent.as_str(), b.pane_id.as_str()))
         });
         Ok(targets)
+    }
+    fn idle_panes(&self, workspace: &str) -> Result<Vec<crate::idle_cleanup::IdlePane>, String> {
+        self.cleanup_panes(workspace)
+    }
+    fn cleanup_target_absent(&self, target: &Target) -> Result<bool, String> {
+        // Scan the whole session: moving a pane to another Workspace is not closure.
+        let doc = self.json(&["pane", "list"])?;
+        let panes = doc
+            .pointer("/result/panes")
+            .and_then(Value::as_array)
+            .ok_or("herdr.invalid_response")?;
+        for pane in panes {
+            if field(pane, "terminal_id")? == target.terminal_id {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    fn close_idle_pane(
+        &self,
+        pane: &crate::idle_cleanup::IdlePane,
+        check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), SendError> {
+        self.cleanup_close(pane, check)
     }
     fn pane_inventory(
         &self,

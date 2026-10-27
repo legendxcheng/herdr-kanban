@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex, OnceLock, Weak},
 };
 
-pub(super) fn workspace_lock(
+pub(crate) fn workspace_lock(
     machine: &str,
     session: &str,
     workspace: &str,
@@ -67,33 +67,6 @@ impl Workflow {
         Ok(())
     }
 
-    pub(super) fn allocation_quarantines(&self, target: &Target) -> Result<bool, String> {
-        let db = self.db.lock().map_err(|e| e.to_string())?;
-        let mut stmt = db.prepare("SELECT before_json,target_json FROM pane_allocations WHERE session=?1 AND workspace=?2 AND machine_id=?3 AND resolved=0").map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map(
-                params![target.session, target.workspace_id, target.machine_id],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
-            )
-            .map_err(|e| e.to_string())?;
-        for row in rows {
-            let (before, created) = row.map_err(|e| e.to_string())?;
-            if let Some(created) = created {
-                let created: Target = serde_json::from_str(&created).map_err(|e| e.to_string())?;
-                if created.terminal_id == target.terminal_id {
-                    return Ok(true);
-                }
-            } else {
-                let before: Vec<PaneIdentity> =
-                    serde_json::from_str(&before).map_err(|e| e.to_string())?;
-                if !before.iter().any(|p| p.terminal_id == target.terminal_id) {
-                    return Ok(true);
-                }
-            }
-        }
-        Ok(false)
-    }
-
     /// None means a legacy operation. Ambiguous new panes are never adopted or sent a prompt.
     pub(super) fn allocation_absent(
         &self,
@@ -139,4 +112,30 @@ impl Workflow {
                 || known.iter().any(|k| k.terminal_id == p.terminal_id)
         })))
     }
+}
+
+pub(crate) fn quarantines(db: &rusqlite::Connection, target: &Target) -> Result<bool, String> {
+    let mut stmt = db.prepare("SELECT before_json,target_json FROM pane_allocations WHERE session=?1 AND workspace=?2 AND machine_id=?3 AND resolved=0").map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(
+            params![target.session, target.workspace_id, target.machine_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .map_err(|e| e.to_string())?;
+    for row in rows {
+        let (before, created) = row.map_err(|e| e.to_string())?;
+        if let Some(created) = created {
+            let created: Target = serde_json::from_str(&created).map_err(|e| e.to_string())?;
+            if created.terminal_id == target.terminal_id {
+                return Ok(true);
+            }
+        } else {
+            let before: Vec<PaneIdentity> =
+                serde_json::from_str(&before).map_err(|e| e.to_string())?;
+            if !before.iter().any(|p| p.terminal_id == target.terminal_id) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }

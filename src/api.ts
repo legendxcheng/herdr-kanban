@@ -110,3 +110,11 @@ export const setTerminalBounds = (connectionId: string, bounds: TerminalBounds) 
 
 // Native folder picker (returns null if cancelled)
 export const pickFolder = () => invoke<string | null>("pick_folder", { title: tr("folder.title") });
+export interface IdleCleanupPreview { id: string; count: number; unresolved: string[] }
+export interface IdleCleanupReport {
+  id: string; closed: number; skipped: number; failed: number;
+  items: { pane_id: string; state: string; error: string }[];
+}
+export const previewIdleCleanup = (projectId: string) => invoke<IdleCleanupPreview>("preview_idle_cleanup", { projectId });
+export const executeIdleCleanup = (projectId: string, previewId: string) => invoke<IdleCleanupReport>("execute_idle_cleanup", { projectId, previewId });
+export const idleCleanupResult = (projectId: string, previewId: string) => invoke<IdleCleanupReport>("idle_cleanup_result", { projectId, previewId });

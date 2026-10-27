@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-27。任务自动分配始终新建 `kanban` Tab 内的 pane；单 Workspace 的 NewTask 旁提供“关闭空闲会话”，经二次确认和逐项复核后清理。InProgress 绑定、未决操作及 pause 子进程受保护；未知关闭持久化且不重放。实现见 6.6.5，验证边界见[空闲会话清理验收](docs/verification/2026-10-27-idle-cleanup.md)。
+
 更新日期：2026-10-27。失败及待核实 Workspace 创建记录增加“移除记录”和应用内二次确认。移除仅持久化本地标记，保留已有项目、任务、Herdr 资源及原始创建证据；离线及停用电脑可用，拒绝已移除操作的重试/核实。实现与验证边界见 6.1.4 及[创建记录移除验收](docs/verification/2026-10-27-workspace-dismissal.md)。
 
 更新日期：2026-10-27。任务级 Codex 启动配置（GitHub #35–#40）：新建及可编辑 Todo 可选择模型/思考强度，最近一次成功创建的整组设置跨 Workspace 持久化；后台启动冻结配置，通过独立 CLI 参数应用，精确恢复不重发提示词。目录由实际执行电脑提供，支持缓存、刷新及失败提示。真实桌面、本机与 SSH 验证及安装边界见[模型设置验收记录](docs/verification/2026-10-27-task-model-settings.md)，实现见 6.2.7。
@@ -196,6 +198,9 @@ herdr-kanban/
 │     ├─ agent_status.rs           只读 Agent 发现、完整身份匹配及有效任务归属
 │     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
 │     ├─ lifecycle.rs              自动分配、会话记录、完成清理与启动核实
+│     ├─ idle_cleanup.rs / idle_cleanup_tests.rs  清理预览、确认、逐项日志、任务保护及恢复
+│     ├─ herdr_idle_cleanup.rs     执行电脑上的 Tab、进程、空闲核验及关闭
+│     ├─ idle_cleanup_acceptance.rs  隔离本机/SSH Workspace 的显式真实验收
 │     ├─ lifecycle_tests/          共用 fixture 与分配、后台启动、完成清理、恢复场景
 │     ├─ agent_start_tests.rs      实际 CLI 适配器的启动拒绝/有界重试进程替身，以及隔离 Herdr/Codex 复用验收
 │     ├─ start.rs                  持久化受理、后台提示词序列化及启动通知
@@ -462,6 +467,9 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `update_task_status` | id、status | todo 直接更新；done 兼容入口转完整完成工作流；拒绝直接 in_progress |
 | `start_task` | taskId、operationId | 短事务持久化受理后返回 Flow；后台序列化已保存提示词、预占/创建 pane 并启动或恢复；同一操作 ID 不重复执行 |
 | `complete_task` | taskId、operationId | 标记完成、保存会话、关闭 pane；返回可为空的 warning |
+| `preview_idle_cleanup` | projectId | 固定候选快照，返回 id/count/unresolved；不发送关闭 |
+| `execute_idle_cleanup` | projectId、previewId | 确认批次，仅处理快照内仍符合条件的 pane；返回逐项结果和关闭/跳过/失败数量 |
+| `idle_cleanup_result` | projectId、previewId | 读取日志并只读核实未知关闭；不重复发送关闭 |
 | `recover_lifecycle` | taskId、operationId | 只核实未知启动，不发送/启动/关闭；确认已派发或精确恢复，或确认启动 pane 已不存在后释放 |
 | `delete_task` | id | 本地事务删除卡片，允许未决操作；级联释放绑定/会话/目录，保留操作事实，关闭本应用查看连接 |
 | `archive_task` | id | 仅 done 且无未决操作/清理时归档；事务释放独占绑定，保留历史，关闭本应用查看连接 |
@@ -809,9 +817,9 @@ Herdr 侧栏默认收起且完全隐藏，保留原生快捷键主动展开。�
 
 `KanbanBoard → api → work_commands → lifecycle.rs` 复用 Workflow、SQLite 和 Herdr trait，外部请求不持有数据库 Mutex。
 
-- 首次启动先写 pending 生命周期意图。按 session + 稳定 workspace ID 查找唯一、名称精确为 `kanban` 的 Tab，仅在其中选择目录一致、未被任何卡片占用且未被未知创建隔离的空闲 shell 或交互就绪的 idle/done Codex；跳过 working/blocked/unknown Agent。不存在该 Tab 时创建一个；已有 Tab 但无可用候选时，在面积最大的 pane 旁分屏，按宽高选择右分屏或下分屏。创建及分屏都显式指定目录、使用 `--no-focus`。多个同名 Tab 时提示处理歧义，不任意选取。
-- 自动分配的候选查询、创建及唯一预占按 session + workspace 在进程内串行；外部调用不持 SQLite Mutex，Agent 准备与发送在释放分配锁后继续。不同 workspace 独立分配。旧任务保留原 Tab 中的有效绑定；成功完成关闭后再次启动时才按新规则进入共用 Tab。手动派发与修复仍使用用户明确选择的目标。
-- 复用已有 Codex 时先核验身份，通过 `/quit` 退出旧会话，再等待 shell 就绪。首次启动新会话；新建与恢复均显式使用 `--no-daemon --approve-for-me`，恢复通过命令行 `codex --no-daemon --approve-for-me resume <UUID> -C <目录>` 执行。模式保留 workspace-write 沙箱，审批策略为 on-request，审核者为 auto_review；不修改全局 Codex/Herdr 配置。保留原有效任务绑定时直接连接，沿用该进程当前权限，不创建或发送。
+- 首次启动先写 pending 生命周期意图。按电脑、session + 稳定 workspace ID 查找唯一、名称精确为 `kanban` 的 Tab，每次自动分配都创建新 pane，不选择旧空闲 shell/Codex。不存在该 Tab 时创建一个；已有 Tab 时，在面积最大的 pane 旁按宽高选择右分屏或下分屏。创建及分屏显式指定目录并使用 `--no-focus`；同名 Tab 歧义拒绝创建。
+- 创建前清单、创建回执及唯一预占按电脑/session/workspace 在进程内串行，并与确认清理共用分配锁；外部调用不持 SQLite Mutex，Agent 准备与发送在释放分配锁后继续。不同 workspace 独立分配。旧任务保留原 Tab 中的有效绑定；关闭后再次启动时使用新 pane。手动派发与修复仍使用用户明确选择的目标，并拒绝清理占用或待核实的 pane。
+- 首次启动新会话；新建与恢复均显式使用 `--no-daemon --approve-for-me`，恢复通过命令行 `codex --no-daemon --approve-for-me resume <UUID> -C <目录>` 执行。模式保留 workspace-write 沙箱，审批策略为 on-request，审核者为 auto_review；不修改全局 Codex/Herdr 配置。保留原有效任务绑定时直接连接，沿用该进程当前权限，不创建或发送。旧 Codex 退出准备能力仍供显式调用使用，自动分配不再进入旧 pane。
 - 会话优先接受当前目标身份下 `agent_session.agent=codex`、`kind=id` 且 value 是合法 UUID 的上报；上报缺失的精确 CLI resume 可通过下述当前进程 argv 与 Windows 启动写锁证据核验取得 ID，不猜最近会话或从屏幕提取 ID。首次启动允许暂缺 ID；完成前必须重新从当前目标读取并落库，拿不到时保留 pane。
 - 完成先提交 done，再保存会话、复核目标进程身份、关闭任务 pane，并用成功的 pane 列表确认其已消失后释放绑定。警告与卡片状态分开返回；重试关闭不会对已不存在的 pane 再发关闭请求。已发送关闭但结果不确定时保留 unknown，先核实关闭再允许重新开发，避免迟到关闭影响继续工作。不会关闭 workspace 或其他任务的 pane。
 - 成功完成后的任务返回 dormant，恢复时不解析历史提示词、不发送原 prompt，精确确认恢复的 ID 后进入开发中。旧会话 ID 不会被一次错误 resume 的 ID 覆盖。
@@ -870,6 +878,18 @@ Windows 进程查询可能先观察到 shell，而 Herdr 的 Agent 注册状态�
 旧 Codex 退出时，`pane get` 与随后 `agent get` 可能跨越注册清理：前者仍有 agent=codex，后者已无 agent 字段。`inspect_pane` 先要求两份回复的 workspace/pane/terminal 一致，再按新回复确认是否仍有 Agent；字段缺失/null/空串可进入 shell 候选，但只有进程查询证明非零 foreground group 等于 shell PID 才视为就绪。字段类型错误、目标身份变化和无效回复仍拒绝，不泛化为忽略解析错误或重试写入。
 
 验证：211 项 Rust 常规测试通过、20 项默认忽略；正式构建在隔离数据库、真实远端项目目录与专用 Workspace 连续 8 次启动成功（首次新建、7 次复用同 pane/terminal），每次一条 sent 派发并连接原生视图，11.608–16.965 秒。测试资源已清理，未处理用户原失败卡片；安装包与完整边界见[启动就绪修正](docs/verification/2026-10-26-start-readiness.md)。
+
+### 6.6.5 新建 pane 与确认清理（GitHub #41）
+
+`IdleCleanupButton.tsx` 只在单 Workspace 的 NewTask 旁出现。弹窗显示电脑、Workspace、kanban 范围、候选数量及 InProgress 保护说明，默认聚焦取消；取消/Escape 不执行。确认期间禁止重复提交，切换 Workspace 卸载弹窗并丢弃迟到反馈。清理不操作提示词草稿。
+
+`idle_cleanup.rs` 复用 Workflow、真实 SQLite 和 Herdr 边界，新增幂等建表 `idle_cleanup_batches`（项目/电脑/session/workspace、创建时间、批次状态）及 `idle_cleanup_items`（固定候选完整身份、绑定快照、逐项状态/错误）。预览有效期十分钟；确认只遍历预览中已列出的对象，不加入后来新建的 pane。后端在短事务中核验当前任务及绑定、未决启动/派发/分配和清理占用。任何 InProgress 绑定（包括 idle/done 等待输入）、reserved 或不确定操作都受保护。非 InProgress 的有效历史绑定必须先核验并保存精确会话及目录；确认目标消失后才解除仍匹配的旧绑定，不改变任务状态。
+
+`herdr_idle_cleanup.rs` 在实际执行电脑读取唯一 `kanban` Tab，并临近关闭再次检查 Tab、terminal、Codex 进程身份及实时状态。Codex 必须 idle/done、interactive_ready 且非 launch_pending。当前 Herdr 不提供可靠的普通 shell 命令完成证据；foreground group 等于 shell PID、没有子进程仍不能排除 Start-Sleep、Read-Host 等进程内命令，因此普通 shell 全部保留，不靠屏幕文字推断。单个失效 pane 跳过，仍要求 Workspace/Tab 可重新读取；断线及 Tab 歧义返回错误。SSH 通过 `idle_cleanup_panes` / `idle_cleanup_close` helper 执行相同逻辑，IPC worker 使用独立操作级控制连接；本机不推断远端 PID。
+
+逐项持久化 ready → claimed → closing，再发关闭。只有成功查询整个 Herdr session 后确认原 terminal 消失才记 closed；目标移至其他 Workspace 不算关闭。关闭回执丢失保留 unknown，不重放、不提前解除绑定。重启将 closing 转 unknown，claimed/未执行项终止；重开弹窗可只读核实历史未决批次。启动、派发和修复绑定都拒绝 claimed/closing/unknown 的清理目标。此协调保护应用内写入；外部 Herdr 操作仍存在最后复核与关闭之间的竞态，不宣称跨进程原子关闭。
+
+真实本机/SSH、模拟 IPC、测试与构建证据分开记录于[验收文档](docs/verification/2026-10-27-idle-cleanup.md)。安装版与当前业务 Workspace 未用于清理验证。
 
 ## 7. 当前实现的关键边界与维护风险
 

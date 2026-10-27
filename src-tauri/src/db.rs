@@ -186,6 +186,7 @@ pub(crate) fn init_before_machines(conn: &Connection) -> Result<()> {
     }
     crate::task_titles::init(conn)?;
     crate::codex_settings::init(conn)?;
+    crate::idle_cleanup::init(conn)?;
     // Keep the original creation outcome and identity as evidence after dismissal.
     conn.execute_batch("CREATE TABLE IF NOT EXISTS workspace_operation_dismissals (
         operation_id TEXT PRIMARY KEY REFERENCES workspace_operations(id),
@@ -196,6 +197,7 @@ pub(crate) fn init_before_machines(conn: &Connection) -> Result<()> {
 
 /// Only called once when opening the application, never during a live command.
 pub fn recover_interrupted(conn: &Connection) -> Result<()> {
+    crate::idle_cleanup::recover(conn)?;
     conn.execute("UPDATE task_title_requests SET state='interrupted',error='title.interrupted' WHERE state IN ('pending','running')", [])?;
     conn.execute("DELETE FROM image_drafts", [])?;
     let _ = crate::images::release_abandoned_preparations(conn, true);

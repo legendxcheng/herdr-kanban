@@ -17,6 +17,7 @@ import { taskAgentStatus } from "./agentStatus";
 import { machineLabel } from "./WorkspaceAddDialog";
 import "./taskSummary.css";
 import { CreateTaskDialog } from "./CreateTaskDialog";
+import { IdleCleanupButton } from "./IdleCleanupButton";
 
 interface KanbanBoardProps {
   project: Project;
@@ -392,6 +393,8 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
             <div className="board-toolbar-actions">
               <span className="board-summary">{tr("board.summary", { done: tasks.filter(task => taskColumn(task) === "done").length, total: tasks.length })}</span>
               <button className="btn-primary" onClick={() => void createTask()}><Icon name="plus" />{tr("task.create")}<kbd>N</kbd></button>
+              {project && <IdleCleanupButton key={project.id} projectId={project.id} workspace={project.name}
+                machine={machineName ?? machineLabel(project.machine_id ?? "local", undefined)} onChanged={() => void load()} />}
             </div>
           </div>
           {(hasLoaded || !summary) && <div className="kanban-columns">

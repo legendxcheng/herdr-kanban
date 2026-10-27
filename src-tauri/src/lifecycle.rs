@@ -2,7 +2,7 @@
 use crate::workflow::{Target, Workflow, binding, pane_owner};
 use rusqlite::{Connection, OptionalExtension, params};
 #[path = "pane_allocation.rs"]
-mod pane_allocation;
+pub(crate) mod pane_allocation;
 
 #[cfg(all(test, windows))]
 #[path = "delete_cli_tests.rs"]
@@ -37,6 +37,7 @@ fn now() -> String {
 
 pub fn ensure_idle(db: &Connection, task: &str, own: Option<&str>) -> Result<(), String> {
     crate::tasks::ensure_active(db, task)?;
+    crate::idle_cleanup::ensure_task_unclaimed(db, task)?;
     let active: Option<String> = db.query_row(
         "SELECT id FROM lifecycle_operations WHERE task_id=?1 AND state IN ('pending','unknown')",
         [task], |r| r.get(0)).optional().map_err(err)?;
@@ -309,7 +310,7 @@ impl Workflow {
     ) -> Result<Outcome, String> {
         let mut touched = false;
         let mut start_rejected = false;
-        let result = (|| {
+        let result: Result<Outcome, String> = (|| {
             self.check_flow(task, op)?;
             let (workspace, cwd) = match context {
                 Some(context) => context,
@@ -359,38 +360,18 @@ impl Workflow {
             )?;
             let allocation_guard = allocation_lock.lock().map_err(err)?;
             self.check_flow(task, op)?;
-            let mut selected = None;
-            for candidate in self.herdr.available(&workspace, &cwd)? {
-                if self.allocation_quarantines(&candidate)? {
-                    continue;
-                }
-                match self.reserve_target(task, op, &candidate) {
-                    Ok(()) => {
-                        selected = Some(candidate);
-                        break;
-                    }
-                    Err(e) if e == "binding.occupied" => continue,
-                    Err(e) => return Err(e),
-                }
-            }
-            let target = match selected {
-                Some(target) => target,
-                None => {
-                    // Persist the inventory before creation; shared tabs cannot identify a task.
-                    self.check_flow(task, op)?;
-                    self.record_allocation_intent(task, op, &workspace)?;
-                    touched = true;
-                    let target = self.herdr.create_pane(
-                        &workspace,
-                        &cwd,
-                        &format!("kanban-{op}"),
-                        &|| self.check_flow(task, op),
-                    )?;
-                    self.record_allocation_target(task, op, &target)?;
-                    self.reserve_target(task, op, &target)?;
-                    target
-                }
-            };
+            // Always create a fresh pane; an old shell can still own a paused command.
+            // Retain the inventory/receipt journal for uncertain creation outcomes.
+            self.record_allocation_intent(task, op, &workspace)?;
+            touched = true;
+            let target = self.herdr.create_pane(
+                &workspace,
+                &cwd,
+                &format!("kanban-{op}"),
+                &|| self.check_flow(task, op),
+            )?;
+            self.record_allocation_target(task, op, &target)?;
+            self.reserve_target(task, op, &target)?;
             drop(allocation_guard);
             touched = true;
             progress("starting_agent")?;

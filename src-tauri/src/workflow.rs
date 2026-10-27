@@ -52,6 +52,26 @@ pub(crate) fn ensure_project_target(
 }
 
 pub trait Herdr: Send + Sync {
+    fn idle_panes(&self, _workspace: &str) -> Result<Vec<crate::idle_cleanup::IdlePane>, String> {
+        Err("flow.unsupported".into())
+    }
+    fn close_idle_pane(
+        &self,
+        _pane: &crate::idle_cleanup::IdlePane,
+        _check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), SendError> {
+        Err(SendError {
+            message: "flow.unsupported".into(),
+            uncertain: false,
+        })
+    }
+    fn cleanup_target_absent(&self, target: &Target) -> Result<bool, String> {
+        Ok(!self
+            .pane_inventory(&target.workspace_id)?
+            .ok_or("herdr.invalid_response")?
+            .iter()
+            .any(|pane| pane.terminal_id == target.terminal_id))
+    }
     fn codex_catalog(&self, _cwd: &str) -> Result<crate::codex_catalog::Catalog, String> {
         Err("model.catalog_unavailable".into())
     }
@@ -310,6 +330,7 @@ pub fn pane_owner(conn: &Connection, target: &Target) -> Result<Option<String>, 
     .map_err(err)
 }
 fn ensure_available(conn: &Connection, target: &Target, task: &str) -> Result<(), String> {
+    crate::idle_cleanup::ensure_unclaimed(conn, target, None)?;
     if pane_owner(conn, target)?
         .as_deref()
         .is_some_and(|owner| owner != task)

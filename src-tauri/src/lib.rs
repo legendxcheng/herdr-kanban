@@ -7,6 +7,9 @@ mod execution;
 mod file_search;
 mod herdr;
 mod image_commands;
+mod idle_cleanup;
+#[cfg(test)]
+mod idle_cleanup_acceptance;
 mod images;
 mod lifecycle;
 mod machine_commands;
@@ -117,6 +120,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            idle_cleanup::preview_idle_cleanup,
+            idle_cleanup::execute_idle_cleanup,
+            idle_cleanup::idle_cleanup_result,
             machine_commands::list_machines,
             machine_commands::enroll_machine,
             machine_commands::enrollment_status,

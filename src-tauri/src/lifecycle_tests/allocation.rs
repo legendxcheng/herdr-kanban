@@ -67,7 +67,7 @@ fn creation_receipt_commit_failure_preserves_inventory_and_does_not_adopt_an_orp
 }
 
 #[test]
-fn reuses_unoccupied_idle_pane_with_fresh_session_but_skips_busy_targets() {
+fn new_tasks_always_create_distinct_panes_and_leave_idle_and_busy_targets_alone() {
     let (app, fake) = fixture();
     let idle = target("idle");
     let mut busy = target("busy");
@@ -79,10 +79,12 @@ fn reuses_unoccupied_idle_pane_with_fresh_session_but_skips_busy_targets() {
     app.start_task("a", "A", &op()).unwrap();
     app.start_task("b", "B", &op()).unwrap();
     let s = fake.0.lock().unwrap();
-    assert_eq!(s.created, 1);
+    assert_eq!(s.created, 2);
     assert_eq!(s.prepared, vec![None, None]);
-    assert_eq!(app.binding("a").unwrap().target.unwrap().pane_id, "idle");
+    assert_ne!(app.binding("a").unwrap().target.unwrap().pane_id, "idle");
     assert_ne!(app.binding("b").unwrap().target.unwrap().pane_id, "idle");
+    assert!(s.panes.contains_key("idle"));
+    assert!(s.panes.contains_key("busy"));
 }
 
 #[test]

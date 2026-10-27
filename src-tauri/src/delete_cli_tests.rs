@@ -25,7 +25,7 @@ $counter = Join-Path $PSScriptRoot ($command.Replace(' ','-') + '.count')
 $n = 1
 if (Test-Path -LiteralPath $counter) { $n = [int](Get-Content -LiteralPath $counter) + 1 }
 Set-Content -LiteralPath $counter -Value $n
-if (($phase -eq 'create' -and $command -eq 'workspace list' -and $n -eq 2) -or ($phase -eq 'close' -and $command -eq 'pane process-info' -and $n -eq 4)) {
+if (($phase -eq 'create' -and $command -eq 'workspace list' -and $n -eq 1) -or ($phase -eq 'close' -and $command -eq 'pane process-info' -and $n -eq 4)) {
     Set-Content -LiteralPath "$PSScriptRoot/waiting" -Value 'ready'
     $deadline = [DateTime]::UtcNow.AddSeconds(8)
     while (!(Test-Path -LiteralPath "$PSScriptRoot/release")) {
