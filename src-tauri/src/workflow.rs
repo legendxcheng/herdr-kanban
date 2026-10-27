@@ -426,11 +426,36 @@ impl Workflow {
             let mut conn = self.db.lock().map_err(err)?;
             let tx = conn.transaction().map_err(err)?;
             crate::lifecycle::ensure_idle(&tx, task, lifecycle)?;
-            if lifecycle.is_none() && crate::codex_settings::read(&tx, task)?.explicit() {
-                return Err("model.automatic_start_required".into());
-            }
             ensure_project_target(&tx, task, &target, self.herdr.session())?;
             let b = binding(&tx, task)?;
+            if lifecycle.is_none() && crate::codex_settings::read(&tx, task)?.explicit() {
+                // Only a process previously started by this task can already
+                // carry its configuration. A manual binding repair is not proof.
+                let started: Option<String> = tx
+                    .query_row(
+                        "SELECT target_json FROM lifecycle_operations WHERE task_id=?1
+                     AND kind='start' AND state='succeeded' AND target_json IS NOT NULL
+                     ORDER BY rowid DESC LIMIT 1",
+                        [task],
+                        |r| r.get(0),
+                    )
+                    .optional()
+                    .map_err(err)?;
+                let started: Option<Target> = started
+                    .map(|json| serde_json::from_str(&json))
+                    .transpose()
+                    .map_err(err)?;
+                if !b
+                    .target
+                    .as_ref()
+                    .is_some_and(|old| old.same_identity(&target))
+                    || !started
+                        .as_ref()
+                        .is_some_and(|old| old.same_identity(&target))
+                {
+                    return Err("model.automatic_start_required".into());
+                }
+            }
             if b.operation.is_some() {
                 return Err("dispatch.verify_required".into());
             }

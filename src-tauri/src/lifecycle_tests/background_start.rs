@@ -138,6 +138,38 @@ fn explicit_configuration_cannot_be_dispatched_to_an_existing_agent() {
 }
 
 #[test]
+fn configured_task_can_continue_in_its_retained_process_but_not_a_repaired_external_agent() {
+    let (app, fake) = fixture();
+    let selected = crate::codex_settings::Settings {
+        model: Some("test-model".into()),
+        effort: Some("high".into()),
+    };
+    crate::codex_settings::save(&app.db.lock().unwrap(), "a", &selected, false).unwrap();
+    app.start_task("a", "first", &op()).unwrap();
+    let pane = app.binding("a").unwrap().target.unwrap().pane_id;
+    app.db
+        .lock()
+        .unwrap()
+        .execute("UPDATE tasks SET status='todo' WHERE id='a'", [])
+        .unwrap();
+    app.dispatch("a", &pane, "follow up", &op()).unwrap();
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["first", "follow up"]);
+    app.complete_task("a", &op()).unwrap();
+    fake.0
+        .lock()
+        .unwrap()
+        .panes
+        .insert("external".into(), (target("external"), None));
+    app.repair("a", "external").unwrap();
+    assert_eq!(
+        app.dispatch("a", "external", "do not send", &op())
+            .unwrap_err(),
+        "model.automatic_start_required"
+    );
+    assert_eq!(fake.0.lock().unwrap().sent.len(), 2);
+}
+
+#[test]
 fn accepts_and_persists_start_without_waiting_for_herdr() {
     let (app, fake) = fixture();
     let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));

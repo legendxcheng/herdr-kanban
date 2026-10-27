@@ -644,7 +644,7 @@ Todo 面板与 TerminalPanel 条件互斥。切到 Todo 卸载 TerminalPanel，�
 
 `TaskTitles::create_configured` 在既有正文/图片/标题事务中保存 `task_codex_settings` 并更新 `last_codex_settings`。取消、失败、编辑、启动、后台标题更新、归档和删除不改最近偏好。schema 15 对旧任务及没有历史的数据库返回双默认；标题生成仍独立使用既有低成本模型配置。
 
-`submit_start` 在受理事务中写入 `start_codex_settings`；worker 读取同一 operation_id 的冻结配置，`checking_model` 阶段通过后由 `prepare_codex_configured` 追加独立 `--model` 与 `-c model_reasoning_effort="…"` argv。双默认不追加参数，不修改全局配置或提示词。精确 resume 带原会话 ID 和任务显式配置，严格进程证据识别只增加受控后缀布局，保持旧/native/npm 路径兼容及不重发规则；保留进程只重连，不覆盖用户在聊天中的手动切换。显式配置任务的手动已有 Agent 派发被阻止并提示自动启动。
+`submit_start` 在受理事务中写入 `start_codex_settings`；worker 读取同一 operation_id 的冻结配置，`checking_model` 阶段通过后由 `prepare_codex_configured` 追加独立 `--model` 与 `-c model_reasoning_effort="…"` argv。双默认不追加参数，不修改全局配置或提示词。精确 resume 带原会话 ID 和任务显式配置，严格进程证据识别只增加受控后缀布局，保持旧/native/npm 路径兼容及不重发规则；保留进程只重连，不覆盖用户在聊天中的手动切换。显式配置任务向未证明配置的新 Agent 手动派发被阻止并提示自动启动；仅保留绑定与最近成功启动目标身份均一致的原进程允许继续派发。
 
 ### 6.3 @ 文件与 $ 技能引用
 
