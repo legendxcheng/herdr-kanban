@@ -16,7 +16,7 @@ import { WorkspaceAddDialog, machineLabel } from "./WorkspaceAddDialog";
 
 export default function App() {
   useLocale();
-  const { projects, navigation, hide, machines, machineErrors, machineBusy, gitStatuses, operations, syncing, error, refresh, session, reordering, move } = useProjectSync();
+  const { projects, navigation, hide, machines, machineErrors, machineBusy, gitStatuses, operations, dismissOperation, syncing, error, refresh, session, reordering, move } = useProjectSync();
   const inProgressCounts = useProjectTaskCounts(projects);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
@@ -71,6 +71,7 @@ export default function App() {
         recoveryProjects={navigation.recovery_projects}
         onRecovery={id => { void selectProject(id, true); }}
         onChanged={refresh}
+        onDismissOperation={dismissOperation}
         operations={operations}
         syncing={syncing}
         syncError={error}

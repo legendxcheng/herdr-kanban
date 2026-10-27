@@ -68,7 +68,9 @@ pub fn visible_list(conn: &Connection) -> Result<Vec<Project>, String> {
     let selected = crate::project_visibility::selected(conn)?;
     Ok(list(conn)?
         .into_iter()
-        .filter(|p| selected.contains(&p.id) && (p.workspace_id.is_none() || p.sync_status != "missing"))
+        .filter(|p| {
+            selected.contains(&p.id) && (p.workspace_id.is_none() || p.sync_status != "missing")
+        })
         .collect())
 }
 impl ProjectService {
@@ -94,19 +96,22 @@ impl ProjectService {
     }
     pub fn for_machine(&self, id: &str) -> Result<Self, String> {
         let herdr = crate::machine_routing::adapter(&self.db, &self.herdr, id)?;
-        let gate = self
-            .gates
-            .lock()
-            .map_err(err)?
-            .entry(id.into())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone();
+        let gate = self.machine_gate(id)?;
         Ok(Self {
             db: self.db.clone(),
             herdr,
             gate,
             gates: self.gates.clone(),
         })
+    }
+    fn machine_gate(&self, id: &str) -> Result<Arc<Mutex<()>>, String> {
+        Ok(self
+            .gates
+            .lock()
+            .map_err(err)?
+            .entry(id.into())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone())
     }
     pub fn for_project(&self, id: &str) -> Result<Self, String> {
         let machine = {
@@ -415,6 +420,7 @@ impl ProjectService {
     }
     pub fn create(&self, id: &str, name: &str, cwd: &str) -> Result<Project, String> {
         let _gate = self.gate.lock().map_err(err)?;
+        self.ensure_operation_active(id)?;
         uuid::Uuid::parse_str(id).map_err(|_| "workspace.invalid_operation")?;
         if let Some(op) = self.operation(id)? {
             if op.state != "failed" && (op.name != name.trim() || op.cwd != cwd) {
@@ -466,9 +472,61 @@ impl ProjectService {
     }
     pub fn recover(&self, id: &str, workspace_id: Option<&str>) -> Result<Project, String> {
         let _gate = self.gate.lock().map_err(err)?;
+        self.ensure_operation_active(id)?;
         let op = self.operation(id)?.ok_or("workspace.operation_missing")?;
         self.recover_inner(op, workspace_id)
     }
+    fn ensure_operation_active(&self, id: &str) -> Result<(), String> {
+        let dismissed: bool = self
+            .db
+            .lock()
+            .map_err(err)?
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM workspace_operation_dismissals WHERE operation_id=?1)",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        if dismissed {
+            return Err("workspace.operation_dismissed".into());
+        }
+        Ok(())
+    }
+
+    /// Local-only: resolve the machine from the record without opening an adapter.
+    /// Share the creation/recovery gate, then recheck the outcome under the DB lock.
+    pub fn dismiss_operation(&self, id: &str) -> Result<(), String> {
+        let machine: String = self
+            .db
+            .lock()
+            .map_err(err)?
+            .query_row(
+                "SELECT machine_id FROM workspace_operations WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(err)?
+            .ok_or("workspace.operation_missing")?;
+        let gate = self.machine_gate(&machine)?;
+        let _gate = gate.lock().map_err(err)?;
+        let mut db = self.db.lock().map_err(err)?;
+        let tx = db.transaction().map_err(err)?;
+        let state: String = tx
+            .query_row(
+                "SELECT state FROM workspace_operations WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        if !matches!(state.as_str(), "failed" | "unknown") {
+            return Err("workspace.dismiss_unavailable".into());
+        }
+        tx.execute("INSERT OR IGNORE INTO workspace_operation_dismissals(operation_id,dismissed_at) VALUES(?1,?2)",
+            params![id, chrono::Utc::now().to_rfc3339()]).map_err(err)?;
+        tx.commit().map_err(err)
+    }
+
     fn operation(&self, id: &str) -> Result<Option<CreateOperation>, String> {
         let db = self.db.lock().map_err(err)?;
         db.query_row("SELECT id,session,name,cwd,workspace_id,project_id,state,error,machine_id FROM workspace_operations WHERE id=?1 AND session=?2 AND machine_id=?3",params![id,self.herdr.session(),self.herdr.machine_id()],operation_row).optional().map_err(err)
@@ -658,7 +716,7 @@ pub(crate) fn operations(
     machine: &str,
     session: &str,
 ) -> Result<Vec<CreateOperation>, String> {
-    let mut stmt=db.prepare("SELECT id,session,name,cwd,workspace_id,project_id,state,error,machine_id FROM workspace_operations WHERE session=?1 AND machine_id=?2 AND state<>'succeeded' ORDER BY created_at").map_err(err)?;
+    let mut stmt=db.prepare("SELECT id,session,name,cwd,workspace_id,project_id,state,error,machine_id FROM workspace_operations WHERE session=?1 AND machine_id=?2 AND state<>'succeeded' AND NOT EXISTS(SELECT 1 FROM workspace_operation_dismissals d WHERE d.operation_id=workspace_operations.id) ORDER BY created_at").map_err(err)?;
     let rows = stmt
         .query_map(params![session, machine], operation_row)
         .map_err(err)?;

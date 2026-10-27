@@ -142,6 +142,7 @@ pub fn run() {
             project_commands::move_project,
             project_commands::workspace_operations,
             project_commands::recover_workspace,
+            project_commands::dismiss_workspace_operation,
             project_commands::link_workspace,
             commands::list_tasks,
             commands::task_summary,

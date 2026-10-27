@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { tr, useLocale } from "./i18n";
 
 export function WorkspaceActionDialog({ action, name, machine, opener, onCancel, onConfirm }: {
-  action: "hide" | "delete";
+  action: "hide" | "delete" | "dismiss";
   name: string;
   machine: string;
   opener: HTMLElement;
@@ -25,7 +25,11 @@ export function WorkspaceActionDialog({ action, name, machine, opener, onCancel,
   }, [opener]);
 
   return createPortal(<div className="dialog-overlay" onMouseDown={event => {
-    if (event.target === event.currentTarget) onCancel();
+    if (event.target === event.currentTarget) {
+      // The backdrop's default mousedown focus would undo opener.focus() on close.
+      event.preventDefault();
+      onCancel();
+    }
   }}>
     <section className="dialog workspace-action-dialog" role="dialog" aria-modal="true"
       aria-labelledby={`${id}-title`} aria-describedby={`${id}-target ${id}-message`}
@@ -43,7 +47,7 @@ export function WorkspaceActionDialog({ action, name, machine, opener, onCancel,
       <p id={`${id}-message`}>{tr(`workspace.${action}_message`)}</p>
       <div className="dialog-actions">
         <button ref={cancel} className="btn-secondary" onClick={onCancel}>{tr("common.cancel")}</button>
-        <button className={action === "delete" ? "btn-primary workspace-action-delete" : "btn-primary"}
+        <button className={action !== "hide" ? "btn-primary workspace-action-delete" : "btn-primary"}
           onClick={onConfirm}>{tr(`workspace.${action}_confirm`)}</button>
       </div>
     </section>

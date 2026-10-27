@@ -160,6 +160,15 @@ pub async fn create_project(
     .await
 }
 #[tauri::command]
+pub async fn dismiss_workspace_operation(
+    service: State<'_, Arc<ProjectService>>,
+    operation_id: String,
+) -> Result<(), String> {
+    let service = service.inner().clone();
+    run(move || service.dismiss_operation(&operation_id)).await
+}
+
+#[tauri::command]
 pub async fn recover_workspace(
     service: State<'_, Arc<ProjectService>>,
     operation_id: String,

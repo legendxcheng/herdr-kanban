@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-27。失败及待核实 Workspace 创建记录增加“移除记录”和应用内二次确认。移除仅持久化本地标记，保留已有项目、任务、Herdr 资源及原始创建证据；离线及停用电脑可用，拒绝已移除操作的重试/核实。实现与验证边界见 6.1.4 及[创建记录移除验收](docs/verification/2026-10-27-workspace-dismissal.md)。
+
 更新日期：2026-10-27。任务级 Codex 启动配置（GitHub #35–#40）：新建及可编辑 Todo 可选择模型/思考强度，最近一次成功创建的整组设置跨 Workspace 持久化；后台启动冻结配置，通过独立 CLI 参数应用，精确恢复不重发提示词。目录由实际执行电脑提供，支持缓存、刷新及失败提示。真实桌面、本机与 SSH 验证及安装边界见[模型设置验收记录](docs/verification/2026-10-27-task-model-settings.md)，实现见 6.2.7。
 
 更新日期：2026-10-27。修正点击 Kanban 后原生终端被主窗口遮挡：主窗口持有系统前台时，先将终端排到其紧下方，待实际相邻后再将主窗口排到终端下方；保持焦点，不把整个应用降到其他窗口后面。新增真实前台切换回归在上一轮实现上失败、本轮通过；12 轮终端/宿主/外部窗口前台循环及 Rust 常规 213 项通过。00:25 构建的新 NSIS 包已更新到固定交付目录并核对校验和；实际 release 鼠标点击脚本尚未完整通过，未覆盖安装。上一轮仅有后台遮挡注入的验收不足，证据和当前边界见[前台切换验收记录](docs/verification/2026-10-27-native-window-activation.md)。
@@ -403,9 +405,10 @@ flowchart TD
 | `lifecycle_operations` | 启动/完成操作 UUID、pending/unknown/succeeded/failed、目标、错误和核实依据；每任务最多一条未决记录 |
 | `pane_allocations` | 创建操作 ID、session/workspace、创建前 pane/terminal 清单、返回的目标及 resolved 标记；保留创建证据，任务删除不级联清除 |
 | `workspace_operations` | 创建操作 ID、session、请求、已知 workspace ID、Project ID、pending/unknown/succeeded/failed 与错误；重启 pending 转 unknown |
+| `workspace_operation_dismissals` | schema 17：创建操作 ID 外键及移除时间；保留原状态和身份，阻止旧操作重试/核实，列表排除已移除记录 |
 | `workspace_exclusions` | 用户本地删除后的 session + workspace ID；防止自动重新导入 |
 | `task_working_directories` | 按任务保存首次启动/派发目录；同步项目目录不覆盖历史上下文 |
-| `schema_migrations` | 当前 15；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用，10 加完成时间与生命周期索引，11 加标题请求与失效触发器，12 加执行电脑身份和隔离约束，13 加显示偏好，14 补机器连接元数据，15 加任务配置、最近偏好、配置快照及目录缓存；初始化可重复执行 |
+| `schema_migrations` | 当前 17；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用，10 加完成时间与生命周期索引，11 加标题请求与失效触发器，12 加执行电脑身份和隔离约束，13 加显示偏好，14 补机器连接元数据，15 加任务配置、最近偏好、配置快照及目录缓存，17 加 Workspace 创建记录移除标记；初始化可重复执行 |
 | `task_title_requests` | task_id 主键并级联删除，唯一请求 UUID、最多 2000 字符输入快照、created_ms、edit_version、状态及稳定错误码；pending/running 与开发生命周期独立，重启转 interrupted，不重试 |
 | `prompt_images`、`image_drafts` | 图片 ID、项目归属、名称、MIME、字节数、尺寸及内容摘要；草稿按项目/可选任务独立持有，重启释放未保存草稿 |
 | `draft_image_refs`、`task_image_refs`、`operation_image_refs` | 分别保护可撤销的草稿、已保存正文和已受理操作；归档保留引用，删除不抹除已有启动/派发证据 |
@@ -440,6 +443,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `project_git_statuses` | projectIds | 后端解析可见项目当前目录，在释放数据库锁后只读查询 Git，返回 ProjectGitStatus[]；不依赖 Herdr 在线 |
 | `move_project` | projectId、可空 beforeProjectId | 验证 session/在线身份，调用 Herdr 原子移动单个 Workspace；按权威结果更新原顺序缓存并返回 Snapshot |
 | `workspace_operations` | 无 | 当前 session 未决创建记录 |
+| `dismiss_workspace_operation` | operationId | 仅本地持久化移除标记；允许 failed/unknown，重复调用幂等；不构造电脑执行适配器，不删除 Project 或调用 Herdr |
 | `create_project` | name、rootPath、operationId | 先记录意图，再创建 Herdr workspace、核实并关联 Project |
 | `recover_workspace` | operationId、可选 workspaceId | 只核实/认领实际创建结果，不重新创建 |
 | `link_workspace` | 可选 projectId、workspaceId、可选 fallbackPath | 显式添加或修复关联 |
@@ -537,6 +541,14 @@ schema 13 的 `project_visibility(project_id, visible)` 保存明确显示/隐�
 `ProjectSidebar.confirmAction` 固定 Project ID，复核目标仍在列表，先同步关闭弹窗并释放 inert，再调用原有 `onHide → App.requestLeave → useProjectSync.hide` 或 `api.deleteProject`；隐藏当前项目的草稿确认与操作确认顺序出现。执行期间统一禁用隐藏/删除入口，并以同步引用防止重复提交；失败沿用通知并恢复操作入口。后端、IPC 和迁移不变，删除仍经 `ProjectService.remove` 删除本地项目及任务后释放查看连接，不删除外部 Herdr Workspace。验收范围见 [Workspace 操作确认记录](docs/verification/2026-10-26-workspace-action-confirmation.md)。
 
 新建复用 `ProjectFormDialog` 与正式创建服务；本地目录选择、远端手填目录均保留。`WorkspaceRecovery` 的失败重试及候选查询明确传递原 machine_id，修正原先漏传导致回落 Local 的问题。来源标签在侧栏、看板、空终端及最大化终端中保留。
+
+### 6.1.4 失败及待核实创建记录移除（2026-10-27）
+
+`WorkspaceRecovery → WorkspaceActionDialog → useProjectSync.dismissOperation → dismiss_workspace_operation → ProjectService::dismiss_operation`。failed 和 unknown 条目提供“移除记录”，复用确认框的取消优先、焦点管理及背景 inert；确认文案显示电脑和 Workspace 名称，明确保留已有工作区、任务及 Herdr 进程。确认期间禁用重复移除/核实，失败保留条目与错误。
+
+后端仅依据操作 ID 查询本地记录所属电脑，使用与创建/恢复相同的机器级锁，锁内重新检查状态后写入 schema 17 的移除标记；pending 或已成功拒绝，重复移除幂等。无需构造机器适配器，离线及机器停用不影响操作。原始创建状态、错误和身份保留；create/recover 在持锁后检查标记，拒绝旧操作 ID。候选及同步使用排除已移除记录的投影，释放恢复占用，但不删除或隐藏已有关联项目，不写 Workspace 排除记录，不调用外部创建、改名或关闭。
+
+前端在成功后持有已移除 ID 集合，立即过滤本机/远端合并列表，即使旧快照迟到也不恢复条目；重启依据数据库投影。共用确认框的遮罩 mousedown 阻止默认聚焦，避免取消后的焦点被浏览器移走。隔离副本的 238 项前端及 228 项 Rust 测试通过（23 项环境相关测试跳过）；焦点修正后相关 22 项及生产构建再次通过。独立 Windows Tauri/WebView2 与真实本机 Herdr 验证绑定冲突移除、取消/焦点、数据保留、离线与进程重启；停用远端记录也能本地移除，未执行真实 SSH 或安装升级。证据与边界见[创建记录移除验收](docs/verification/2026-10-27-workspace-dismissal.md)。
 
 ### 6.2 创建、编辑和移动卡片
 

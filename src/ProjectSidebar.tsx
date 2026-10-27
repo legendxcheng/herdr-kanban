@@ -31,6 +31,7 @@ interface ProjectSidebarProps {
   summarySelected?: boolean;
   onSummary?: () => void;
   operations?: WorkspaceOperation[];
+  onDismissOperation?: (id: string) => Promise<void>;
   syncing?: boolean;
   syncError?: string;
   session?: string | null;
@@ -38,7 +39,7 @@ interface ProjectSidebarProps {
   onMove?: (projectId: string, beforeProjectId: string | null) => Promise<void>;
 }
 
-export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy = {}, inert = false, projects, gitStatuses = {}, inProgressCounts = {}, selectedId, onSelect, onHide, recoveryProjects = [], onRecovery, onChanged, onOverview, summarySelected = false, onSummary, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
+export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy = {}, inert = false, projects, gitStatuses = {}, inProgressCounts = {}, selectedId, onSelect, onHide, recoveryProjects = [], onRecovery, onChanged, onOverview, summarySelected = false, onSummary, operations = [], onDismissOperation, syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
   useLocale();
   const [showNew, setShowNew] = useState(false);
   const [manageMachines, setManageMachines] = useState(false);
@@ -172,7 +173,9 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
         {reordering && <p role="status">{tr("workspace.reordering")}</p>}
         {syncError && <p className="error" role="alert">{syncError}</p>}
       </div>
-      {operations.length > 0 && <div className="workspace-pending"><strong>{tr("workspace.pending_title")}</strong>{operations.map((op) => <WorkspaceRecovery key={op.id} operation={op} onChanged={onChanged} />)}</div>}
+      {operations.length > 0 && <div className="workspace-pending"><strong>{tr("workspace.pending_title")}</strong>{operations.map((op) => <WorkspaceRecovery key={op.id} operation={op}
+        machine={machineLabel(op.machine_id ?? "local", machines.find(m => m.id === op.machine_id)?.name)}
+        onDismiss={onDismissOperation} onChanged={onChanged} />)}</div>}
       {recoveryProjects.length > 0 && <div className="workspace-pending"><strong>{tr("workspace.hidden_recovery")}</strong>{recoveryProjects.map(p => <button key={p.id} className="btn-ghost" onClick={() => onRecovery?.(p.id)}>{machineLabel(p.machine_id ?? "local", machines.find(m => m.id === p.machine_id)?.name)} · {p.name}</button>)}</div>}
       <button className="sidebar-create btn-secondary" onClick={() => setShowNew(true)}><Icon name="plus" />{tr("workspace.add")}</button>
       <LanguageSelect />

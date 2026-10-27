@@ -151,7 +151,7 @@ it("hides the current workspace immediately and does not let a stale sync restor
 
 it("routes failed remote creation retry and candidate recovery to the original machine", async () => {
   vi.mocked(invoke).mockImplementation(async command=>{if(command==="create_project") throw new Error("herdr.timeout"); return {workspaces:[],operations:[]};});
-  render(<WorkspaceRecovery operation={{id:"op",machine_id:"remote",session:"development",name:"Created",cwd:"D:/Remote",workspace_id:null,project_id:"p",state:"failed",error:""}} onChanged={()=>{}} />);
+  render(<WorkspaceRecovery machine="Remote" operation={{id:"op",machine_id:"remote",session:"development",name:"Created",cwd:"D:/Remote",workspace_id:null,project_id:"p",state:"failed",error:""}} onChanged={()=>{}} />);
   fireEvent.click(screen.getByRole("button",{name:"重新创建"}));
   await screen.findByRole("alert");
   expect(invoke).toHaveBeenCalledWith("create_project",{name:"Created",rootPath:"D:/Remote",operationId:"op",machineId:"remote"});

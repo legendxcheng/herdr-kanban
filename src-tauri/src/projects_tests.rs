@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 mod reorder;
 #[path = "project_visibility_tests.rs"]
 mod visibility;
+#[path = "project_dismissal_tests.rs"]
+mod dismissal;
 
 // Existing synchronization/reordering tests start with an explicit user selection.
 fn select_discovered(service: &ProjectService) -> Snapshot {

@@ -2,13 +2,25 @@ import { useRef, useState } from "react";
 import type { HerdrWorkspace, WorkspaceOperation } from "./types";
 import * as api from "./api";
 import { tr, useLocalizedMessage } from "./i18n";
+import { WorkspaceActionDialog } from "./WorkspaceActionDialog";
 
-export function WorkspaceRecovery({ operation, onChanged }: { operation: WorkspaceOperation; onChanged: () => void }) {
+export function WorkspaceRecovery({ operation, machine, onChanged, onDismiss = api.dismissWorkspaceOperation }: {
+  operation: WorkspaceOperation; machine: string; onChanged: () => void;
+  onDismiss?: (id: string) => Promise<void>;
+}) {
   const [busy, setBusy] = useState(false);
   const locked = useRef(false);
   const [error, setError] = useLocalizedMessage();
   const [choices, setChoices] = useState<HerdrWorkspace[]>([]);
   const [selected, setSelected] = useState("");
+  const [opener, setOpener] = useState<HTMLElement | null>(null);
+  async function dismiss() {
+    if (locked.current) return;
+    locked.current = true; setBusy(true); setOpener(null); setError("");
+    try { await onDismiss(operation.id); onChanged(); }
+    catch (e) { setError(String(e)); }
+    finally { locked.current = false; setBusy(false); }
+  }
   async function recover() {
     if (locked.current) return;
     locked.current = true; setBusy(true); setError("");
@@ -32,6 +44,9 @@ export function WorkspaceRecovery({ operation, onChanged }: { operation: Workspa
       {choices.map((w) => <option value={w.id} key={w.id}>{w.name} · {w.id}</option>)}
     </select>}
     <button className="btn-secondary" disabled={busy} onClick={recover}>{tr(operation.state === "failed" ? "workspace.retry_failed" : "workspace.recover")}</button>
+    {(operation.state === "failed" || operation.state === "unknown") && <button className="btn-secondary" disabled={busy} onClick={event => setOpener(event.currentTarget)}>{tr("workspace.dismiss")}</button>}
     {error && <p className="error" role="alert">{error}</p>}
+    {opener && <WorkspaceActionDialog action="dismiss" name={operation.name} machine={machine}
+      opener={opener} onCancel={() => setOpener(null)} onConfirm={() => { void dismiss(); }} />}
   </section>;
 }

@@ -24,6 +24,7 @@ export const projectGitStatuses = (projectIds: string[]) => invoke<ProjectGitSta
 export const moveProject = (projectId: string, beforeProjectId: string | null) =>
   invoke<ProjectSnapshot>("move_project", { projectId, beforeProjectId });
 export const workspaceOperations = (machineId?: string) => machineId && machineId !== "local" ? invoke<WorkspaceOperation[]>("workspace_operations", { machineId }) : invoke<WorkspaceOperation[]>("workspace_operations");
+export const dismissWorkspaceOperation = (operationId: string) => invoke<void>("dismiss_workspace_operation", { operationId });
 export const createProject = (name: string, rootPath: string, operationId: string, machineId?: string) => invoke<Project>("create_project", { name, rootPath, operationId, ...(machineId && machineId !== "local" ? { machineId } : {}) });
 export const updateProject = (id: string, name: string, fallbackPath: string | null) => invoke<Project>("update_project", { id, name, fallbackPath });
 export const linkWorkspace = (projectId: string | null, workspaceId: string, fallbackPath: string | null, machineId?: string) => invoke<Project>("link_workspace", { projectId, workspaceId, fallbackPath, ...(machineId && machineId !== "local" ? { machineId } : {}) });

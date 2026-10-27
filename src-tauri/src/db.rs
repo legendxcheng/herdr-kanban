@@ -186,6 +186,11 @@ pub(crate) fn init_before_machines(conn: &Connection) -> Result<()> {
     }
     crate::task_titles::init(conn)?;
     crate::codex_settings::init(conn)?;
+    // Keep the original creation outcome and identity as evidence after dismissal.
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS workspace_operation_dismissals (
+        operation_id TEXT PRIMARY KEY REFERENCES workspace_operations(id),
+        dismissed_at TEXT NOT NULL);
+        INSERT OR IGNORE INTO schema_migrations(version) VALUES(17);")?;
     Ok(())
 }
 

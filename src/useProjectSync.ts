@@ -15,6 +15,13 @@ export function useProjectSync() {
   const allProjects = [...projects, ...remote.projects];
   const gitStatuses = useProjectGitStatus(allProjects, gitRefresh);
   const [operations, setOperations] = useState<WorkspaceOperation[]>([]);
+  // Operation IDs cannot be reused after dismissal. Filter all snapshots, including
+  // requests already in flight on an offline/slow machine, for this app lifetime.
+  const [dismissedOperations, setDismissedOperations] = useState<Set<string>>(() => new Set());
+  const dismissOperation = async (id: string) => {
+    await api.dismissWorkspaceOperation(id);
+    setDismissedOperations(previous => new Set(previous).add(id));
+  };
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useLocalizedMessage();
   const [session, setSession] = useState<string | null>(null);
@@ -108,5 +115,5 @@ export function useProjectSync() {
     remote.forget(id);
     void refresh();
   };
-  return { projects: allProjects, navigation, hide, machines: remote.machines, machineErrors: remote.errors, machineBusy: remote.busy, gitStatuses, operations: [...operations, ...remote.operations], syncing, error, refresh, session, reordering, move: moveOnMachine };
+  return { projects: allProjects, navigation, hide, machines: remote.machines, machineErrors: remote.errors, machineBusy: remote.busy, gitStatuses, operations: [...operations, ...remote.operations].filter(op => !dismissedOperations.has(op.id)), dismissOperation, syncing, error, refresh, session, reordering, move: moveOnMachine };
 }
