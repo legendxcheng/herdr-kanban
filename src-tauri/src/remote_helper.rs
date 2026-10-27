@@ -242,6 +242,7 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
         "hello" => Ok(
             json!({"platform":std::env::consts::OS,"architecture":std::env::consts::ARCH,"host":std::env::var("COMPUTERNAME").unwrap_or_default(),"version":1}),
         ),
+        "codex_catalog" => Ok(json!(crate::codex_catalog::local(text("cwd")?)?)),
         "preflight" => {
             cli.workspaces()?;
             let mut codex = std::process::Command::new("cmd");

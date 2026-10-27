@@ -52,6 +52,23 @@ pub(crate) fn ensure_project_target(
 }
 
 pub trait Herdr: Send + Sync {
+    fn codex_catalog(&self, _cwd: &str) -> Result<crate::codex_catalog::Catalog, String> {
+        Err("model.catalog_unavailable".into())
+    }
+    fn prepare_codex_configured(
+        &self,
+        target: &Target,
+        cwd: &str,
+        resume: Option<&str>,
+        name: &str,
+        settings: &crate::codex_settings::Settings,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Target, String> {
+        if settings.explicit() {
+            return Err("model.catalog_unavailable".into());
+        }
+        self.prepare_codex(target, cwd, resume, name, check_current)
+    }
     fn machine_id(&self) -> &str {
         crate::machines::LOCAL_ID
     }
@@ -409,6 +426,9 @@ impl Workflow {
             let mut conn = self.db.lock().map_err(err)?;
             let tx = conn.transaction().map_err(err)?;
             crate::lifecycle::ensure_idle(&tx, task, lifecycle)?;
+            if lifecycle.is_none() && crate::codex_settings::read(&tx, task)?.explicit() {
+                return Err("model.automatic_start_required".into());
+            }
             ensure_project_target(&tx, task, &target, self.herdr.session())?;
             let b = binding(&tx, task)?;
             if b.operation.is_some() {

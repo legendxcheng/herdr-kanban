@@ -7,6 +7,12 @@ struct Gate {
     started: mpsc::Sender<String>,
     answer: Mutex<mpsc::Receiver<Result<String, String>>>,
 }
+struct NoTitle;
+impl TitleGenerator for NoTitle {
+    fn generate(&self, _: &str, _: &AtomicBool) -> Result<String, String> {
+        Err("unused".into())
+    }
+}
 impl TitleGenerator for Gate {
     fn generate(&self, input: &str, stop: &AtomicBool) -> Result<String, String> {
         self.started.send(input.into()).unwrap();
@@ -99,6 +105,152 @@ fn new_task(text: &str) -> NewTask {
         draft_id: None,
         locale: "zh-CN".into(),
     }
+}
+
+#[test]
+fn task_creation_remembers_execution_settings_without_editing_existing_tasks() {
+    let db = database();
+    let service = TaskTitles::new(db.clone(), Arc::new(NoTitle), Arc::new(|_| {}));
+    let selected = crate::codex_settings::Settings {
+        model: Some("test-model".into()),
+        effort: Some("high".into()),
+    };
+    let task = service
+        .create_configured(new_task("first"), selected.clone())
+        .unwrap();
+    assert_eq!(
+        tasks::list(&db.lock().unwrap(), "p").unwrap()[0].codex_settings,
+        selected
+    );
+    assert_eq!(service.last_codex_settings().unwrap(), selected);
+    service
+        .update(
+            &task.id,
+            Some("renamed"),
+            &task.prompt_json,
+            TaskPriority::Normal,
+            None,
+        )
+        .unwrap();
+    assert_eq!(service.last_codex_settings().unwrap(), selected);
+    let mut invalid = new_task("failed");
+    invalid.project_id = "missing".into();
+    assert!(
+        service
+            .create_configured(invalid, Default::default())
+            .is_err()
+    );
+    assert_eq!(service.last_codex_settings().unwrap(), selected);
+    service
+        .create_configured(new_task("default"), Default::default())
+        .unwrap();
+    assert_eq!(service.last_codex_settings().unwrap(), Default::default());
+    assert_eq!(
+        tasks::list(&db.lock().unwrap(), "p")
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == task.id)
+            .unwrap()
+            .codex_settings,
+        selected
+    );
+}
+
+#[test]
+fn model_preferences_survive_database_reopen_and_transaction_failure() {
+    let file = std::env::temp_dir().join(format!("kanban-model-{}.db", uuid::Uuid::new_v4()));
+    let selected = crate::codex_settings::Settings {
+        model: Some("test-model".into()),
+        effort: Some("high".into()),
+    };
+    let task_id;
+    {
+        let conn = Connection::open(&file).unwrap();
+        db::init(&conn).unwrap();
+        conn.execute("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) VALUES('p','P','.','fixture','now')", []).unwrap();
+        let db = Arc::new(Mutex::new(conn));
+        let service = TaskTitles::new(db.clone(), Arc::new(NoTitle), Arc::new(|_| {}));
+        let mut input = new_task("saved");
+        input.name = Some("saved".into());
+        task_id = service
+            .create_configured(input, selected.clone())
+            .unwrap()
+            .id;
+        db.lock().unwrap().execute_batch("CREATE TRIGGER reject_preference BEFORE UPDATE ON last_codex_settings BEGIN SELECT RAISE(ABORT,'test rollback'); END;").unwrap();
+        assert!(
+            service
+                .create_configured(new_task("rolled back"), Default::default())
+                .is_err()
+        );
+        assert_eq!(tasks::list(&db.lock().unwrap(), "p").unwrap().len(), 1);
+        assert_eq!(service.last_codex_settings().unwrap(), selected);
+    }
+    {
+        let conn = Connection::open(&file).unwrap();
+        db::init(&conn).unwrap();
+        let db = Arc::new(Mutex::new(conn));
+        let service = TaskTitles::new(db.clone(), Arc::new(NoTitle), Arc::new(|_| {}));
+        assert_eq!(service.last_codex_settings().unwrap(), selected);
+        assert_eq!(
+            tasks::list(&db.lock().unwrap(), "p").unwrap()[0].codex_settings,
+            selected
+        );
+        tasks::delete(&mut db.lock().unwrap(), &task_id).unwrap();
+        assert_eq!(service.last_codex_settings().unwrap(), selected);
+    }
+    std::fs::remove_file(file).unwrap();
+}
+
+#[test]
+fn task_model_edits_respect_execution_guard_and_preserve_preference() {
+    let db = database();
+    let service = TaskTitles::new(db.clone(), Arc::new(NoTitle), Arc::new(|_| {}));
+    let selected = crate::codex_settings::Settings {
+        model: Some("test-model".into()),
+        effort: Some("high".into()),
+    };
+    let task = service
+        .create_configured(new_task("edit me"), selected.clone())
+        .unwrap();
+    service
+        .update_configured(
+            &task.id,
+            None,
+            &task.prompt_json,
+            TaskPriority::Normal,
+            None,
+            Some(&Default::default()),
+        )
+        .unwrap();
+    assert_eq!(service.last_codex_settings().unwrap(), selected);
+    assert_eq!(
+        tasks::list(&db.lock().unwrap(), "p").unwrap()[0].codex_settings,
+        Default::default()
+    );
+    db.lock().unwrap().execute("INSERT INTO task_sessions(task_id,codex_session_id,cwd,updated_at) VALUES(?1,'original','.','now')",[&task.id]).unwrap();
+    assert_eq!(
+        service
+            .update_configured(
+                &task.id,
+                None,
+                &task.prompt_json,
+                TaskPriority::Normal,
+                None,
+                Some(&selected)
+            )
+            .unwrap_err(),
+        "model.settings_locked"
+    );
+    service
+        .update(
+            &task.id,
+            Some("rename only"),
+            &task.prompt_json,
+            TaskPriority::Normal,
+            None,
+        )
+        .unwrap();
+    assert!(!tasks::list(&db.lock().unwrap(), "p").unwrap()[0].codex_settings_editable);
 }
 fn wait_name(db: &Arc<Mutex<Connection>>, id: &str, expected: &str) {
     let deadline = Instant::now() + Duration::from_secs(3);

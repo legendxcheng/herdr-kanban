@@ -365,7 +365,34 @@ impl Herdr for Cli {
         name: &str,
         check_current: &dyn Fn() -> Result<(), String>,
     ) -> Result<Target, String> {
-        self.prepare_codex_session(target, cwd, resume, name, check_current)
+        self.prepare_codex_session(
+            target,
+            cwd,
+            resume,
+            name,
+            &Default::default(),
+            check_current,
+        )
+    }
+    fn prepare_codex_configured(
+        &self,
+        target: &Target,
+        cwd: &str,
+        resume: Option<&str>,
+        name: &str,
+        settings: &crate::codex_settings::Settings,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Target, String> {
+        self.prepare_codex_session(target, cwd, resume, name, settings, check_current)
+    }
+    fn codex_catalog(&self, cwd: &str) -> Result<crate::codex_catalog::Catalog, String> {
+        if let Some(machine) = &self.remote {
+            return crate::remote_transport::request(
+                machine,
+                serde_json::json!({"method":"codex_catalog","cwd":cwd}),
+            );
+        }
+        crate::codex_catalog::local(cwd)
     }
     fn session_id(&self, target: &Target) -> Result<Option<String>, String> {
         if let Some(machine) = &self.remote {

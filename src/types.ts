@@ -47,6 +47,8 @@ export interface WorkspaceOperation { machine_id?: string; id: string; session: 
 export interface ProjectSnapshot { session: string; projects: Project[]; workspaces: HerdrWorkspace[]; operations: WorkspaceOperation[] }
 
 export interface Task {
+  codex_settings?: CodexSettings;
+  codex_settings_editable?: boolean;
   priority: TaskPriority;
   archived_at: string | null;
   cleanup_required: boolean;
@@ -62,6 +64,14 @@ export interface Task {
   dispatched_to: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface CodexSettings { model: string | null; effort: string | null }
+export interface CodexCatalog {
+  models: { id: string; name: string; efforts: string[] }[];
+  source: string;
+  cached: boolean;
+  error: string | null;
 }
 
 export interface HerdrTarget {

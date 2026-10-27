@@ -1,6 +1,143 @@
 use super::*;
 
 #[test]
+fn catalog_cache_is_directory_scoped_and_offline_choices_cannot_start_unvalidated() {
+    let (app, fake) = fixture();
+    app.db
+        .lock()
+        .unwrap()
+        .execute("UPDATE projects SET root_path='other' WHERE id='p2'", [])
+        .unwrap();
+    assert!(!app.model_catalog("p1", false).unwrap().cached);
+    fake.0.lock().unwrap().catalog_error = true;
+    assert!(app.model_catalog("p1", false).unwrap().cached);
+    let offline = app.model_catalog("p1", true).unwrap();
+    assert!(offline.cached);
+    assert_eq!(offline.error.as_deref(), Some("model.catalog_unavailable"));
+    assert!(app.model_catalog("p2", false).is_err());
+    assert_eq!(
+        fake.0.lock().unwrap().catalog_directories,
+        vec![".", ".", "other"]
+    );
+    let selected = crate::codex_settings::Settings {
+        model: Some("test-model".into()),
+        effort: Some("high".into()),
+    };
+    crate::codex_settings::save(&app.db.lock().unwrap(), "a", &selected, false).unwrap();
+    assert_eq!(
+        app.start_task("a", "do not send", &op()).unwrap_err(),
+        "model.catalog_unavailable"
+    );
+    assert_eq!(fake.0.lock().unwrap().created, 0);
+    assert!(fake.0.lock().unwrap().sent.is_empty());
+    // A known invalid pair is rejected even when the directory is cached.
+    let invalid = crate::codex_settings::Settings {
+        effort: Some("ultra".into()),
+        ..selected
+    };
+    assert_eq!(
+        crate::codex_settings::save(&app.db.lock().unwrap(), "a", &invalid, false).unwrap_err(),
+        "model.effort_unavailable"
+    );
+}
+
+#[test]
+fn configured_task_starts_and_resumes_with_same_settings_without_resending() {
+    let (app, fake) = fixture();
+    let settings = crate::codex_settings::Settings {
+        model: Some("test-model".into()),
+        effort: Some("high".into()),
+    };
+    crate::codex_settings::save(&app.db.lock().unwrap(), "a", &settings, false).unwrap();
+    app.start_task("a", "first prompt", &op()).unwrap();
+    assert_eq!(fake.0.lock().unwrap().settings, vec![settings.clone()]);
+    let session = saved(&app, "a");
+    app.complete_task("a", &op()).unwrap();
+    app.start_task("a", "must not resend", &op()).unwrap();
+    assert_eq!(saved(&app, "a"), session);
+    assert_eq!(
+        fake.0.lock().unwrap().settings,
+        vec![settings.clone(), settings]
+    );
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["first prompt"]);
+}
+
+#[test]
+fn invalid_model_fails_before_pane_allocation_and_can_be_corrected() {
+    let (app, fake) = fixture();
+    let invalid = crate::codex_settings::Settings {
+        model: Some("missing-model".into()),
+        effort: None,
+    };
+    crate::codex_settings::save(&app.db.lock().unwrap(), "a", &invalid, false).unwrap();
+    assert_eq!(
+        app.start_task("a", "first", &op()).unwrap_err(),
+        "model.unavailable"
+    );
+    assert_eq!(fake.0.lock().unwrap().created, 0);
+    assert!(fake.0.lock().unwrap().sent.is_empty());
+    assert!(crate::tasks::list(&app.db.lock().unwrap(), "p1").unwrap()[0].codex_settings_editable);
+    crate::codex_settings::save(&app.db.lock().unwrap(), "a", &Default::default(), false).unwrap();
+    app.start_task("a", "first", &op()).unwrap();
+}
+
+#[test]
+fn accepted_configuration_is_frozen_and_unresolved_start_cannot_be_edited() {
+    let (app, fake) = fixture();
+    let app = Arc::new(app);
+    set_prompt(&app, "a", "once");
+    let selected = crate::codex_settings::Settings {
+        model: Some("test-model".into()),
+        effort: Some("high".into()),
+    };
+    crate::codex_settings::save(&app.db.lock().unwrap(), "a", &selected, false).unwrap();
+    let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+    fake.0.lock().unwrap().prepare_gate = Some(gate.clone());
+    let operation = op();
+    app.submit_start("a", &operation, Arc::new(|_| {})).unwrap();
+    assert_eq!(
+        crate::codex_settings::save(&app.db.lock().unwrap(), "a", &Default::default(), false)
+            .unwrap_err(),
+        "model.settings_locked"
+    );
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE task_codex_settings SET effort='low' WHERE task_id='a'",
+            [],
+        )
+        .unwrap();
+    *gate.0.lock().unwrap() = true;
+    gate.1.notify_all();
+    assert_eq!(await_start(&app, "a").state.as_deref(), Some("succeeded"));
+    assert_eq!(fake.0.lock().unwrap().settings, vec![selected]);
+    app.submit_start("a", &operation, Arc::new(|_| {})).unwrap();
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["once"]);
+}
+
+#[test]
+fn explicit_configuration_cannot_be_dispatched_to_an_existing_agent() {
+    let (app, fake) = fixture();
+    fake.0
+        .lock()
+        .unwrap()
+        .panes
+        .insert("existing".into(), (target("existing"), None));
+    let selected = crate::codex_settings::Settings {
+        model: Some("test-model".into()),
+        effort: None,
+    };
+    crate::codex_settings::save(&app.db.lock().unwrap(), "a", &selected, false).unwrap();
+    assert_eq!(
+        app.dispatch("a", "existing", "must not send", &op())
+            .unwrap_err(),
+        "model.automatic_start_required"
+    );
+    assert!(fake.0.lock().unwrap().sent.is_empty());
+}
+
+#[test]
 fn accepts_and_persists_start_without_waiting_for_herdr() {
     let (app, fake) = fixture();
     let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));

@@ -95,6 +95,18 @@ impl TaskTitles {
     }
 
     pub fn create(&self, input: NewTask) -> Result<Task, String> {
+        self.create_configured(input, Default::default())
+    }
+
+    pub fn last_codex_settings(&self) -> Result<crate::codex_settings::Settings, String> {
+        crate::codex_settings::last(&*self.db.lock().map_err(err)?)
+    }
+
+    pub fn create_configured(
+        &self,
+        input: NewTask,
+        settings: crate::codex_settings::Settings,
+    ) -> Result<Task, String> {
         let supplied = input
             .name
             .as_deref()
@@ -111,7 +123,7 @@ impl TaskTitles {
         let name = supplied.unwrap_or_else(|| &summary.as_ref().unwrap().fallback);
         let db = self.db.lock().map_err(err)?;
         let tx = db.unchecked_transaction().map_err(err)?;
-        let task = images::save_task_in(
+        let mut task = images::save_task_in(
             &tx,
             None,
             &input.project_id,
@@ -120,6 +132,8 @@ impl TaskTitles {
             input.priority,
             input.draft_id.as_deref(),
         )?;
+        crate::codex_settings::save(&tx, &task.id, &settings, true)?;
+        task.codex_settings = settings;
         if let Some(summary) = summary.filter(|s| !s.input.is_empty()) {
             let active = !self.stop.load(Ordering::Acquire) && self.available;
             tx.execute("INSERT INTO task_title_requests(task_id,id,input,state,created_ms) VALUES(?1,?2,?3,?4,?5)",
@@ -149,6 +163,18 @@ impl TaskTitles {
         priority: TaskPriority,
         draft: Option<&str>,
     ) -> Result<(), String> {
+        self.update_configured(id, name, json, priority, draft, None)
+    }
+
+    pub fn update_configured(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        json: &str,
+        priority: TaskPriority,
+        draft: Option<&str>,
+        settings: Option<&crate::codex_settings::Settings>,
+    ) -> Result<(), String> {
         let db = self.db.lock().map_err(err)?;
         let tx = db.unchecked_transaction().map_err(err)?;
         let (project, current): (String, String) = tx
@@ -158,6 +184,9 @@ impl TaskTitles {
             .map_err(|_| "task.missing")?;
         if name.is_some_and(|name| name.trim().is_empty()) {
             return Err("task.title_required".into());
+        }
+        if let Some(settings) = settings {
+            crate::codex_settings::save(&tx, id, settings, false)?;
         }
         // An explicit rename also invalidates when its value equals the temporary name.
         if name.is_some() {

@@ -37,9 +37,11 @@ impl Cli {
         cwd: &str,
         resume: Option<&str>,
         name: &str,
+        settings: &crate::codex_settings::Settings,
         check_current: &dyn Fn() -> Result<(), String>,
     ) -> Result<Target, String> {
         check_current()?;
+        settings.validate()?;
         if let Some(id) = resume {
             uuid::Uuid::parse_str(id).map_err(|_| "flow.session_invalid")?;
         }
@@ -83,6 +85,8 @@ impl Cli {
             args.extend(["resume", id]);
         }
         args.extend(["-C", cwd]);
+        let model_args = settings.args();
+        args.extend(model_args.iter().map(String::as_str));
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut ready_shell: Option<Target> = None;
         let mut rejection = None;
@@ -420,7 +424,7 @@ fn codex_resume_command_session<'a>(argv: &[&'a str]) -> Result<Option<&'a str>,
     };
     // Accept only launches we issue, including panes started before automatic
     // review became the default. Unknown flags must not weaken resume evidence.
-    let (exe, id, cwd) = match argv {
+    let (exe, id, cwd, rest) = match argv {
         [
             exe,
             "--no-daemon",
@@ -429,10 +433,37 @@ fn codex_resume_command_session<'a>(argv: &[&'a str]) -> Result<Option<&'a str>,
             id,
             "-C",
             cwd,
+            rest @ ..,
         ]
-        | [exe, "--no-daemon", "resume", id, "-C", cwd] => (*exe, *id, *cwd),
+        | [exe, "--no-daemon", "resume", id, "-C", cwd, rest @ ..] => (*exe, *id, *cwd, rest),
         _ => return Ok(None),
     };
+    let (model, effort) = match rest {
+        [] => (None, None),
+        ["--model", model] => (Some(*model), None),
+        ["-c", effort] => (None, Some(*effort)),
+        ["--model", model, "-c", effort] => (Some(*model), Some(*effort)),
+        _ => return Ok(None),
+    };
+    let effort = match effort {
+        Some(value) => match value
+            .strip_prefix("model_reasoning_effort=\"")
+            .and_then(|v| v.strip_suffix('"'))
+        {
+            Some(effort) => Some(effort.to_string()),
+            None => return Ok(None),
+        },
+        None => None,
+    };
+    if (crate::codex_settings::Settings {
+        model: model.map(str::to_string),
+        effort,
+    })
+    .validate()
+    .is_err()
+    {
+        return Ok(None);
+    }
     let name = exe.rsplit(['/', '\\']).next().unwrap_or("");
     if !matches!(name.to_ascii_lowercase().as_str(), "codex" | "codex.exe") || cwd.is_empty() {
         return Ok(None);
@@ -449,6 +480,19 @@ mod tests {
     fn resume_evidence_accepts_automatic_review_and_existing_legacy_panes() {
         let id = "22222222-2222-4222-8222-222222222222";
         for argv in [
+            vec![
+                "codex",
+                "--no-daemon",
+                "--approve-for-me",
+                "resume",
+                id,
+                "-C",
+                "E:/project",
+                "--model",
+                "test-model",
+                "-c",
+                "model_reasoning_effort=\"high\"",
+            ],
             vec![
                 "C:\\Program Files\\Codex\\codex.exe",
                 "--no-daemon",

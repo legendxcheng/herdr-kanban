@@ -76,15 +76,19 @@ pub fn create_task(
     prompt_json: Option<String>,
     draft_id: Option<String>,
     locale: Option<String>,
+    codex_settings: Option<crate::codex_settings::Settings>,
 ) -> Result<Task, String> {
-    titles.create(crate::task_titles::NewTask {
-        project_id,
-        name,
-        priority,
-        prompt_json: prompt_json.unwrap_or_else(|| "{}".into()),
-        draft_id,
-        locale: locale.unwrap_or_else(|| "zh-CN".into()),
-    })
+    titles.create_configured(
+        crate::task_titles::NewTask {
+            project_id,
+            name,
+            priority,
+            prompt_json: prompt_json.unwrap_or_else(|| "{}".into()),
+            draft_id,
+            locale: locale.unwrap_or_else(|| "zh-CN".into()),
+        },
+        codex_settings.unwrap_or_default(),
+    )
 }
 
 #[tauri::command]
@@ -95,14 +99,37 @@ pub fn update_task(
     prompt_json: String,
     priority: TaskPriority,
     draft_id: Option<String>,
+    codex_settings: Option<crate::codex_settings::Settings>,
 ) -> Result<(), String> {
-    titles.update(
+    titles.update_configured(
         &id,
         name.as_deref(),
         &prompt_json,
         priority,
         draft_id.as_deref(),
+        codex_settings.as_ref(),
     )
+}
+
+#[tauri::command]
+pub fn last_codex_settings(
+    titles: State<crate::task_titles::TaskTitles>,
+) -> Result<crate::codex_settings::Settings, String> {
+    titles.last_codex_settings()
+}
+
+#[tauri::command]
+pub async fn codex_model_catalog(
+    app: State<'_, Arc<crate::workflow::Workflow>>,
+    project_id: String,
+    refresh: Option<bool>,
+) -> Result<crate::codex_catalog::Catalog, String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.model_catalog(&project_id, refresh.unwrap_or(false))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

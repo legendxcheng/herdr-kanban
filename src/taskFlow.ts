@@ -20,6 +20,7 @@ export function preparationLabel(task: Task): string | null {
   switch (task.flow.stage) {
     case "reading_prompt": return "flow.reading_prompt";
     case "starting_agent": return "flow.starting_agent";
+    case "checking_model": return "flow.checking_model";
     case "dispatching": return "flow.dispatching";
     default: return "flow.preparing";
   }

@@ -706,3 +706,8 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 .machine-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 .machine-entry > strong { min-width: 90px; }
 .machine-entry > span { flex: 1; min-width: 150px; color: var(--text-muted); font-size: 12px; }
+/* Task-owned Codex startup choices share the existing task form. */
+.codex-settings-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.codex-catalog-status { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; opacity: .8; }
+.codex-settings .field-hint { font-size: 12px; opacity: .75; margin: 6px 0; }
+.task-model { margin: 6px 0 0; font-size: 11px; opacity: .7; overflow-wrap: anywhere; }

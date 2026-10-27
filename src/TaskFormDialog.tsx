@@ -1,6 +1,7 @@
 import { useEffect, useId, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { createPortal } from "react-dom";
-import type { Project, Task, TaskPriority } from "./types";
+import type { Project, Task, TaskPriority, CodexSettings } from "./types";
+import { CodexSettingsSelect, defaultCodexSettings, sameCodexSettings } from "./CodexSettingsSelect";
 import { PromptEditor } from "./PromptEditor";
 import { PrioritySelect } from "./PrioritySelect";
 import * as api from "./api";
@@ -37,6 +38,12 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, u
   const [name, setName] = useState(task?.name ?? "");
   const [promptJson, setPromptJson] = useState(task?.prompt_json ?? emptyPrompt);
   const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? "normal");
+  const [codexSettings, setCodexSettings] = useState<CodexSettings>(task?.codex_settings ?? defaultCodexSettings);
+  const [savedSettings, setSavedSettings] = useState(codexSettings);
+  const [settingsLoading, setSettingsLoading] = useState(!task);
+  const [settingsValid, setSettingsValid] = useState(true);
+  const settingsEdited = useRef(false);
+  const settingsLocked = !!task && !(task.codex_settings_editable ?? (task.status === "todo" && !task.flow?.session_id && !task.binding?.target && !["pending", "unknown"].includes(task.flow?.state ?? "") && !task.binding?.operation));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useLocalizedMessage();
   const [imageBusy, setImageBusy] = useState(false);
@@ -47,13 +54,23 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, u
   const form = useRef<HTMLFormElement>(null);
   const initialName = useRef(task?.name ?? "");
   const [saved, setSaved] = useState({ name: task?.name ?? "", promptJson: task?.prompt_json ?? emptyPrompt, priority: task?.priority ?? "normal" });
-  const dirty = name.trim() !== saved.name.trim() || promptJson !== saved.promptJson || priority !== saved.priority;
+  const dirty = name.trim() !== saved.name.trim() || promptJson !== saved.promptJson || priority !== saved.priority || !sameCodexSettings(codexSettings, savedSettings);
   const [leaving, setLeaving] = useState(false);
   const leaveResolver = useRef<((allow: boolean) => void) | null>(null);
   const leaveDialog = useRef<HTMLDivElement>(null);
-  const canSubmit = !unavailable && (task ? !!name.trim() : hasTaskContent(promptJson));
+  const canSubmit = !unavailable && !settingsLoading && settingsValid && (task ? !!name.trim() : hasTaskContent(promptJson));
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
   const id = useId();
+
+  useEffect(() => {
+    if (task) return;
+    let active = true;
+    api.lastCodexSettings().then(settings => {
+      if (active && !settingsEdited.current && settings) { setCodexSettings(settings); setSavedSettings(settings); }
+    }).catch(reason => { if (active) setError(String(reason)); })
+      .finally(() => { if (active) setSettingsLoading(false); });
+    return () => { active = false; };
+  }, [task?.id]);
 
   useEffect(() => {
     if (panel) return;
@@ -111,10 +128,11 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, u
     try {
       const ready = draft.existingId();
       const draftId = ready ? await ready : undefined;
-      if (task) await api.updateTask(task.id, name.trim() === initialName.current.trim() ? undefined : name.trim(), promptJson, priority, draftId);
-      else await api.createTask(project.id, priority, promptJson, draftId);
+      if (task) await api.updateTask(task.id, name.trim() === initialName.current.trim() ? undefined : name.trim(), promptJson, priority, draftId, sameCodexSettings(codexSettings, savedSettings) ? undefined : codexSettings);
+      else await api.createTask(project.id, priority, promptJson, draftId, codexSettings);
       initialName.current = name.trim();
       setSaved({ name: name.trim(), promptJson, priority });
+      setSavedSettings(codexSettings);
     } catch (reason) {
       setError(String(reason));
       return false;
@@ -165,6 +183,8 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, u
           <PrioritySelect id={`${id}-priority`} label={tr("priority.label")} value={priority} onChange={setPriority} disabled={saving} />
         </div>
         {unavailable && <p role="alert" className="error">{tr("summary.project_unavailable")}</p>}
+        <CodexSettingsSelect projectId={project.id} value={codexSettings} disabled={saving || settingsLoading} locked={settingsLocked}
+          onChange={settings => { settingsEdited.current = true; setCodexSettings(settings); }} onValid={setSettingsValid} />
         {error && <p role="alert" className="error">{error}</p>}
       </div>
       <div className="task-form-footer">

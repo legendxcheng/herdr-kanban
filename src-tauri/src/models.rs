@@ -64,6 +64,8 @@ impl TaskPriority {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Task {
+    pub codex_settings: crate::codex_settings::Settings,
+    pub codex_settings_editable: bool,
     pub priority: TaskPriority,
     pub archived_at: Option<String>,
     pub cleanup_required: bool,

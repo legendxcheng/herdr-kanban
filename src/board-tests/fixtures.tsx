@@ -49,6 +49,8 @@ beforeEach(() => {
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     const input = args as Record<string, string>;
     switch (command) {
+      case "last_codex_settings": return { model: null, effort: null };
+      case "codex_model_catalog": return { models: [], source: "cli_catalog", cached: false, error: null };
       case "list_projects": return [];
       case "project_git_statuses": return (args as { projectIds: string[] }).projectIds.map(project_id => ({ project_id, root_path: project.root_path, state: "branch", head: "feature/fixture" }));
       case "task_overview": return (args as { projectIds: string[] }).projectIds.map(project_id => ({

@@ -27,6 +27,8 @@ fn list_scope(db: &Connection, scope: &str, visible_only: bool) -> Result<Vec<Ta
         .query_map(params![scope, visible_only], |row| {
             let priority: String = row.get(10)?;
             Ok(Task {
+                codex_settings: Default::default(),
+                codex_settings_editable: false,
                 id: row.get(0)?,
                 project_id: row.get(1)?,
                 name: row.get(2)?,
@@ -51,6 +53,8 @@ fn list_scope(db: &Connection, scope: &str, visible_only: bool) -> Result<Vec<Ta
         .map_err(err)?;
     let mut tasks = rows.collect::<Result<Vec<_>, _>>().map_err(err)?;
     for task in &mut tasks {
+        task.codex_settings = crate::codex_settings::read(db, &task.id)?;
+        task.codex_settings_editable = crate::codex_settings::editable(db, &task.id)?;
         task.binding = Some(crate::workflow::binding(db, &task.id)?);
         task.flow = Some(crate::lifecycle::view(db, &task.id)?);
         task.cleanup_required = cleanup_required(db, &task.id)?;
@@ -67,6 +71,8 @@ pub fn create(
 ) -> Result<Task, String> {
     let now = chrono::Utc::now().to_rfc3339();
     let task = Task {
+        codex_settings: Default::default(),
+        codex_settings_editable: true,
         id: uuid::Uuid::new_v4().to_string(),
         project_id: project.into(),
         name: name.into(),

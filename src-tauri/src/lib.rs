@@ -1,4 +1,6 @@
 mod agent_status;
+mod codex_catalog;
+mod codex_settings;
 mod commands;
 mod db;
 mod execution;
@@ -12,6 +14,8 @@ mod machine_enrollment;
 mod machine_routing;
 mod machines;
 mod mention_search;
+#[cfg(test)]
+mod model_acceptance;
 #[cfg(test)]
 mod remote_acceptance;
 mod remote_control;
@@ -144,6 +148,8 @@ pub fn run() {
             commands::board_tasks,
             commands::task_overview,
             commands::create_task,
+            commands::last_codex_settings,
+            commands::codex_model_catalog,
             commands::update_task,
             commands::update_task_status,
             commands::delete_task,

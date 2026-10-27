@@ -185,6 +185,7 @@ pub(crate) fn init_before_machines(conn: &Connection) -> Result<()> {
         tx.commit()?;
     }
     crate::task_titles::init(conn)?;
+    crate::codex_settings::init(conn)?;
     Ok(())
 }
 

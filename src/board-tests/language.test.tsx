@@ -37,6 +37,7 @@ it("updates an open editor and existing error while retaining the draft, priorit
   expect(prompt.querySelector("p")?.getAttribute("data-placeholder")).toBe(tr("task.prompt_placeholder"));
   fireEvent.paste(prompt, { clipboardData: { files: [], getData: (type: string) => type === "text/plain" ? "中文 draft $literal" : "" } });
   fireEvent.change(within(dialog).getByRole("combobox", { name: "Priority" }), { target: { value: "urgent" } });
+  await waitFor(() => expect((within(dialog).getByRole("button", { name: "Add task" }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(within(dialog).getByRole("button", { name: "Add task" }));
   await screen.findByRole("alert");
   expect(screen.getByRole("alert").textContent).toContain("Unable to read or write");
@@ -44,7 +45,7 @@ it("updates an open editor and existing error while retaining the draft, priorit
   expect(screen.getByRole("dialog", { name: "新建任务" })).toBe(dialog);
   expect(within(dialog).getByRole("textbox", { name: "提示词" })).toBe(prompt);
   expect(prompt.textContent).toBe("中文 draft $literal");
-  expect((within(dialog).getByRole("combobox") as HTMLSelectElement).value).toBe("urgent");
+  expect((within(dialog).getByRole("combobox", { name: "优先级" }) as HTMLSelectElement).value).toBe("urgent");
   expect(screen.getByRole("alert").textContent).toBe("图片读写失败，请重试: diagnostic");
   fireEvent.keyDown(prompt, { key: "z", code: "KeyZ", ctrlKey: true });
   await waitFor(() => expect(prompt.textContent).toBe(""));

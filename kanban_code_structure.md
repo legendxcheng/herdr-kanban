@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-27。任务级 Codex 启动配置（GitHub #35–#40）：新建及可编辑 Todo 可选择模型/思考强度，最近一次成功创建的整组设置跨 Workspace 持久化；后台启动冻结配置，通过独立 CLI 参数应用，精确恢复不重发提示词。目录由实际执行电脑提供，支持缓存、刷新及失败提示。真实桌面、本机与 SSH 验证及安装边界见[模型设置验收记录](docs/verification/2026-10-27-task-model-settings.md)，实现见 6.2.7。
+
 更新日期：2026-10-27。修正点击 Kanban 后原生终端被主窗口遮挡：主窗口持有系统前台时，先将终端排到其紧下方，待实际相邻后再将主窗口排到终端下方；保持焦点，不把整个应用降到其他窗口后面。新增真实前台切换回归在上一轮实现上失败、本轮通过；12 轮终端/宿主/外部窗口前台循环及 Rust 常规 213 项通过。00:25 构建的新 NSIS 包已更新到固定交付目录并核对校验和；实际 release 鼠标点击脚本尚未完整通过，未覆盖安装。上一轮仅有后台遮挡注入的验收不足，证据和当前边界见[前台切换验收记录](docs/verification/2026-10-27-native-window-activation.md)。
 
 更新日期：2026-10-27。原生 Herdr 窗口层级修复：排序识别可见窗口及 owner 关系，避开隐藏 IME/TSF 和终端自身附属窗口；异步调整后持续核验，限频重试并记录失败，保持焦点和普通窗口层级。前端 229 项、Rust 213 项及单独执行的两项原生窗口回归通过；实际 release Kanban/Herdr 的任务切换、12 次遮挡恢复、弹窗和最小化恢复通过。release/NSIS 已构建；诊断证据、安装包和未覆盖边界见[窗口层级验收记录](docs/verification/2026-10-26-native-window-stacking.md)。当前安装实例未替换。
@@ -144,6 +146,7 @@ herdr-kanban/
 │  ├─ agentStatus.tsx              实时身份匹配、状态语义及卡片状态圆点
 │  ├─ useAgentStatus.ts            前台 3 秒查询、焦点刷新、合并请求及迟到结果隔离
 │  ├─ PrioritySelect.tsx           创建与编辑共用的三档优先级选择
+│  ├─ CodexSettingsSelect.tsx       按 Project 查询模型目录、保留无效选择、刷新与迟到响应隔离
 │  ├─ TaskFormDialog.tsx           共用 TaskForm：新建/其他状态编辑弹窗、Todo 右侧 TaskEditPanel、未保存修改确认
 │  ├─ PromptEditor.tsx             Tiptap 初始化与 JSON 输出
 │  ├─ imagePaste.ts               图片 paste、导入占位与异步图文顺序
@@ -179,6 +182,9 @@ herdr-kanban/
 │     ├─ skill_discovery_tests.rs  项目/用户技能发现、优先级、去重与截取回归
 │     ├─ tasks.rs                  任务存储、优先级排序、归档事务、已完成批量处理及活跃任务守卫
 │     ├─ task_titles.rs            原子任务保存、标题请求与双 worker 调度、编辑保护和退出清理
+│     ├─ codex_settings.rs         任务配置、最近新建偏好、编辑守卫、启动快照与 argv
+│     ├─ codex_catalog.rs          执行环境目录查询、机器/目录缓存与配置能力校验
+│     ├─ model_acceptance.rs       显式 opt-in 的本机/SSH 真实模型启动与精确恢复验收
 │     ├─ title_prompt.rs           正文/引用名称摘要、输入限长及纯图片兜底
 │     ├─ title_cli.rs / title_process.rs  最小 Codex 配置、结构化结果、有界进程及后代清理
 │     ├─ title_tests.rs / title_process_tests.rs  真实 SQLite、可控生成器/进程及显式 CLI live 验收
@@ -377,6 +383,7 @@ flowchart TD
 | `prompt_snapshot` | 最近一次成功派发时实际发送的文本，可为空；历史快照不重写 |
 | `dispatched_at`、`dispatched_to` | 最近一次派发时间与 `workspace/pane_id`，可为空 |
 | `priority` | normal / high / urgent，显示一般 / 优先 / 紧急；默认 normal，SQL CHECK 与 IPC 枚举拒绝非法值 |
+| `codex_settings`、`codex_settings_editable` | 任务启动模型/思考强度（各自可空）及后端派生可编辑性；旧任务双默认，列表读取独立配置表 |
 | `archived_at` | 可空归档时间；非空任务不在看板及三列状态计数中出现，仍保留 done 状态及历史；今日已完成单独包含归档任务 |
 | `completed_at`（仅 SQLite） | 迁移 10 新增的可空 UTC RFC3339 完成时间；进入 done 时与状态同条 SQL 写入，已 done 的关闭重试保留原值；进入 todo 或成功进入 in_progress 时清空，编辑/归档不修改；旧记录不从 updated_at 推测回填 |
 | `created_at`、`updated_at` | 创建及最后修改时间；列表按优先级降序、创建时间升序、ID 稳定排序 |
@@ -390,12 +397,15 @@ flowchart TD
 | `dispatch_operations` | 操作 ID 主键；pending/unknown/sent/not_sent；保存目标、实际 prompt、时间与人工核实依据；部分唯一索引限制每任务一个未决操作 |
 | `task_sessions` | 按 task_id 保存 Codex 会话 UUID、目录和更新时间；与活跃 pane 独立 |
 | `start_requests` | 启动操作快照：项目/workspace、目录、提示词文档、是否需要首次派发、原状态及阶段；按操作 ID 关联生命周期记录 |
+| `task_codex_settings`、`last_codex_settings` | 任务独立配置和数据库范围的最近成功创建整组偏好；创建事务原子提交两者，任务删除不清空偏好 |
+| `start_codex_settings` | 按生命周期 operation_id 冻结模型与思考强度；受理启动同事务保存，保留核实证据 |
+| `codex_catalog_cache` | 以 machine_id + cwd 为键持久化目录；目录不代表账户授权，启动前仍重新校验 |
 | `lifecycle_operations` | 启动/完成操作 UUID、pending/unknown/succeeded/failed、目标、错误和核实依据；每任务最多一条未决记录 |
 | `pane_allocations` | 创建操作 ID、session/workspace、创建前 pane/terminal 清单、返回的目标及 resolved 标记；保留创建证据，任务删除不级联清除 |
 | `workspace_operations` | 创建操作 ID、session、请求、已知 workspace ID、Project ID、pending/unknown/succeeded/failed 与错误；重启 pending 转 unknown |
 | `workspace_exclusions` | 用户本地删除后的 session + workspace ID；防止自动重新导入 |
 | `task_working_directories` | 按任务保存首次启动/派发目录；同步项目目录不覆盖历史上下文 |
-| `schema_migrations` | 当前 12；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用，10 加完成时间与生命周期索引，11 加标题请求与失效触发器，12 加执行电脑身份和隔离约束；初始化可重复执行 |
+| `schema_migrations` | 当前 15；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用，10 加完成时间与生命周期索引，11 加标题请求与失效触发器，12 加执行电脑身份和隔离约束，13 加显示偏好，14 补机器连接元数据，15 加任务配置、最近偏好、配置快照及目录缓存；初始化可重复执行 |
 | `task_title_requests` | task_id 主键并级联删除，唯一请求 UUID、最多 2000 字符输入快照、created_ms、edit_version、状态及稳定错误码；pending/running 与开发生命周期独立，重启转 interrupted，不重试 |
 | `prompt_images`、`image_drafts` | 图片 ID、项目归属、名称、MIME、字节数、尺寸及内容摘要；草稿按项目/可选任务独立持有，重启释放未保存草稿 |
 | `draft_image_refs`、`task_image_refs`、`operation_image_refs` | 分别保护可撤销的草稿、已保存正文和已受理操作；归档保留引用，删除不抹除已有启动/派发证据 |
@@ -420,6 +430,8 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | 命令 | 主要输入 | 返回/副作用 |
 | --- | --- | --- |
 | `list_projects` | 无 | 缓存导航 `Project[]`；只返回已选择显示且未确认 missing 的项目，按持久化 workspace 顺序排序 |
+| `last_codex_settings` | 无 | 本数据库最近成功新建的模型/强度；没有历史时双默认 |
+| `codex_model_catalog` | projectId、refresh? | 从 Project 解析执行机器/目录，有界查询或返回缓存及失败提示；不信任前端指定执行机器 |
 | `navigation_state` | 无 | 返回是否已配置显示选择、未显示项目中含 pending/unknown 任务操作的恢复入口；只读本地数据库 |
 | `workspace_choices` | machineId | 查询指定电脑/session 的完整在线候选，包含 Project 关联、shown 与未决创建 blocked 标记 |
 | `add_existing_workspaces` | machineId、session、workspaceIds | 在线验证全部身份后，在本地事务复用/关联 Project、解除显式选中的旧排除并设置显示；不创建 Herdr Workspace |
@@ -437,8 +449,8 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `board_tasks` | projectIds | 后台线程在同一数据库锁内读取当前可见范围的完整 Task；复用普通列表正文、绑定、生命周期与清理状态组装，按全局优先级排序；不查询 Herdr |
 | `task_summary` | projectIds | 后台线程一次本地 SQL，范围与当前可见 Project 取交集；返回 id / project_id / name / status（投影列）/ priority / created_at，跨项目按优先级、创建时间、ID 排序，不读取正文、绑定或查询 Herdr |
 | `task_overview` | projectIds、dayStart、dayEnd | 后台线程持数据库锁执行单次聚合；返回各 project_id 的 todo / in_progress / done / today_done；日期参数为本地当天起止转换的 RFC3339 时间，区间左闭右开；不读取提示词或查询 Herdr |
-| `create_task` | projectId、priority、可选 name/promptJson/draftId/locale | 新 UI 不传 name；事务保存摘要标题、正文/图片及生成意图，立即返回 todo Task；旧调用显式 name 保留原名且不生成，允许省略正文 |
-| `update_task` | id、promptJson、priority、可选 name/draftId | name 省略则保留库内最新标题；显式改名或正文变更使旧生成失效；同一事务更新正文和图片引用，失败保留原数据 |
+| `create_task` | projectId、priority、可选 name/promptJson/draftId/locale/codexSettings | 新 UI 不传 name；事务保存摘要标题、正文/图片、生成意图、任务模型及最近配置，立即返回 todo Task；旧调用省略配置为双默认，显式 name 保留原名且不生成 |
+| `update_task` | id、promptJson、priority、可选 name/draftId/codexSettings | name 省略则保留库内最新标题；配置省略保留原值，修改需通过任务编辑守卫；同一事务更新正文、图片和配置，失败保留原数据，编辑不更新最近新建偏好 |
 | `open_image_draft` | projectId、可选 taskId | 返回草稿 UUID；编辑时保护原任务图片，支持取消和撤销 |
 | `import_prompt_image` | draftId、name、mime、base64 data | 校验 PNG/JPEG/WebP，返回稳定图片元数据；解码和文件写入不持应用数据库 Mutex |
 | `preview_prompt_image` | draftId、imageId | 校验草稿引用及文件摘要，返回临时预览 data URL |
@@ -623,6 +635,16 @@ Todo 面板与 TerminalPanel 条件互斥。切到 Todo 卸载 TerminalPanel，�
 实时 Agent 查询按项目隔离，前台 3 秒与焦点刷新；本机最多 2 个、远端最多 3 个在途读取，远端慢请求不占用本机容量。跨 StrictMode／导航合并同项目请求，卸载后忽略旧结果并清理订阅；只查询状态，不打开全部原生终端。
 
 验证在 App／Tauri IPC 交互边界及真实 SQLite 查询边界进行；继承普通看板回归并新增汇总交互用例，包含保存前旧轮询、点击期间刷新、旧范围批次完成、远端查询占满和迟到派发准备。真实桌面、本机／SSH Herdr 结果及未覆盖项独立记录于[本次验收记录](docs/verification/2026-10-26-all-tasks-interactions.md)，不能沿用 #22 只读跳转的历史通过结果。
+
+### 6.2.7 任务模型与思考强度（2026-10-27，GitHub #35–#40）
+
+`TaskForm` 统一承载普通看板、All Tasks 新建及 Todo 编辑。新建初始化从 `last_codex_settings` 读取整组偏好，完成前禁用提交；已有任务加载自身配置。模型/强度参与 dirty 基线及离开保护，保存成功后才允许后续启动。只有无会话、无绑定、无 pending/unknown 启动或派发且从未成功派发的 Todo 可修改，后端同事务校验。已启动任务展示只读“启动配置”，不声称是原生会话的实时设置。
+
+`codex_catalog` 通过 Project 解析执行机器和 cwd，调用目标环境 `codex debug models`（15 秒、8 MiB 上限）；SSH 沿用已验证 helper 协议及部署检查。目录按机器/目录缓存，刷新失败保留缓存并显示错误。列表及强度来自目录；默认模型能力无法确定时不提供单独显式强度，切换模型或跨机继承不兼容时保留选择并阻止保存。缓存目录不保证账户有调用权限，显式配置启动前再次查询实际环境；失败不降级、不分配新 pane 或发送提示词。
+
+`TaskTitles::create_configured` 在既有正文/图片/标题事务中保存 `task_codex_settings` 并更新 `last_codex_settings`。取消、失败、编辑、启动、后台标题更新、归档和删除不改最近偏好。schema 15 对旧任务及没有历史的数据库返回双默认；标题生成仍独立使用既有低成本模型配置。
+
+`submit_start` 在受理事务中写入 `start_codex_settings`；worker 读取同一 operation_id 的冻结配置，`checking_model` 阶段通过后由 `prepare_codex_configured` 追加独立 `--model` 与 `-c model_reasoning_effort="…"` argv。双默认不追加参数，不修改全局配置或提示词。精确 resume 带原会话 ID 和任务显式配置，严格进程证据识别只增加受控后缀布局，保持旧/native/npm 路径兼容及不重发规则；保留进程只重连，不覆盖用户在聊天中的手动切换。显式配置任务的手动已有 Agent 派发被阻止并提示自动启动。
 
 ### 6.3 @ 文件与 $ 技能引用
 

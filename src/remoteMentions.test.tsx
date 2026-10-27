@@ -74,7 +74,7 @@ it("shows remote wait and failure, retries without losing the draft, then saves 
 });
 
 it.each(["@", "$"])("shows empty results for %s and Escape dismisses the popover without closing the form", async trigger => {
-  vi.mocked(invoke).mockResolvedValue([]);
+  vi.mocked(invoke).mockImplementation(async command => command.startsWith("search_") ? [] : undefined);
   render(form()); paste(trigger + "missing");
   expect(await screen.findByText(trigger === "@" ? "没有匹配的文件" : "没有匹配的技能")).toBeTruthy();
   fireEvent.keyDown(screen.getByRole("textbox", { name: "提示词" }), { key: "Escape" });
@@ -107,21 +107,21 @@ it("prewarms on opening and lets current input finish before a stale query", asy
 
 it("isolates same-path projects and does not let a stalled remote search block local lookup", async () => {
   const old = deferred<unknown[]>();
-  vi.mocked(invoke).mockImplementation(async (_command, args) => (args as { projectId?: string }).projectId === project.id ? old.promise : [skill]);
+  vi.mocked(invoke).mockImplementation(async (command, args) => command === "search_skills" ? ((args as { projectId?: string }).projectId === project.id ? old.promise : [skill]) : undefined);
   const ui = render(form()); paste("$remote");
-  await waitFor(() => expect(invoke).toHaveBeenCalled());
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("search_skills", { rootPath: project.root_path, query: "remote", projectId: project.id }));
   ui.rerender(form({ ...project, id: "second-remote" }));
   await screen.findByText("remote-skill");
   ui.rerender(form({ ...project, id: "local-project", machine_id: "local" }));
   await screen.findByText("remote-skill");
-  expect(invoke).toHaveBeenLastCalledWith("search_skills", { rootPath: project.root_path, query: "remote" });
+  expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "search_skills").slice(-1)[0]?.slice(0, 2)).toEqual(["search_skills", { rootPath: project.root_path, query: "remote" }]);
   await act(async () => old.reject("old failure"));
   expect(screen.queryByRole("alert")).toBeNull();
 });
 
 it("explains a missing file-search directory and ignores results after closing", async () => {
   const pending = deferred<unknown[]>();
-  vi.mocked(invoke).mockReturnValue(pending.promise);
+  vi.mocked(invoke).mockImplementation(async command => command === "search_files" ? pending.promise : undefined);
   const ui = render(form({ ...project, root_path: "" })); paste("@file");
   expect(await screen.findByText("请先设置项目工作目录")).toBeTruthy();
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "search_files")).toBe(false);

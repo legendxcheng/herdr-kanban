@@ -61,6 +61,7 @@ impl Workflow {
                 self.herdr.session(),
             )?;
             lifecycle::begin_flow_in(&tx, task, op, "start")?;
+            crate::codex_settings::freeze(&tx, task, op)?;
             let (project_id, cwd, prompt_json, original_status, saved): (String, String, String, String, bool) = tx.query_row(
                 "SELECT t.project_id,COALESCE(s.cwd,d.cwd,p.root_path),t.prompt_json,t.status,s.codex_session_id IS NOT NULL
                  FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN task_sessions s ON s.task_id=t.id

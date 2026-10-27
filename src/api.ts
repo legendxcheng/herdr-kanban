@@ -2,6 +2,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
 import type {
+  CodexSettings, CodexCatalog,
   Machine, SavedMachine, EnrollmentStatus, WorkspaceChoices, NavigationState, Project, ProjectGitStatus, ProjectSnapshot, WorkspaceOperation, Task, TaskSummary, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
 } from "./types";
 
@@ -36,10 +37,12 @@ export const taskOverview = (projectIds: string[], dayStart: string, dayEnd: str
 export const listTasks = (projectId: string) => invoke<Task[]>("list_tasks", { projectId });
 export const boardTasks = (projectIds: string[]) => invoke<Task[]>("board_tasks", { projectIds });
 export const taskSummary = (projectIds: string[]) => invoke<TaskSummary[]>("task_summary", { projectIds });
-export const createTask = (projectId: string, priority: TaskPriority, promptJson: string, draftId?: string) =>
-  invoke<Task>("create_task", { projectId, priority, promptJson, draftId, locale: document.documentElement.lang });
-export const updateTask = (id: string, name: string | undefined, promptJson: string, priority: TaskPriority, draftId?: string) =>
-  invoke<void>("update_task", { id, name, promptJson, priority, draftId });
+export const createTask = (projectId: string, priority: TaskPriority, promptJson: string, draftId?: string, codexSettings?: CodexSettings) =>
+  invoke<Task>("create_task", { projectId, priority, promptJson, draftId, locale: document.documentElement.lang, ...(codexSettings ? { codexSettings } : {}) });
+export const updateTask = (id: string, name: string | undefined, promptJson: string, priority: TaskPriority, draftId?: string, codexSettings?: CodexSettings) =>
+  invoke<void>("update_task", { id, name, promptJson, priority, draftId, ...(codexSettings ? { codexSettings } : {}) });
+export const lastCodexSettings = () => invoke<CodexSettings>("last_codex_settings");
+export const codexModelCatalog = (projectId: string, refresh = false) => invoke<CodexCatalog>("codex_model_catalog", { projectId, refresh });
 export interface PromptImage { id: string; name: string; mime: string; bytes: number; width: number; height: number }
 export const openImageDraft = (projectId: string, taskId?: string) => invoke<string>("open_image_draft", { projectId, taskId });
 export const importPromptImage = (draftId: string, name: string, mime: string, data: string) => invoke<PromptImage>("import_prompt_image", { draftId, name, mime, data });

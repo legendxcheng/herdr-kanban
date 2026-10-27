@@ -30,7 +30,7 @@ it("旧编辑表单只改优先级时保留后台新标题，主动改名则显�
   await act(async () => { for (const callback of flowEvents) callback({ payload: {
     project_id: project.id, task_id: board.storedTask.id, operation_id: "title-result",
   } }); });
-  fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "urgent" } });
+  fireEvent.change(within(dialog).getByRole("combobox", { name: "优先级" }), { target: { value: "urgent" } });
   fireEvent.click(within(dialog).getByRole("button", { name: "保存" }));
   await waitFor(() => expect(within(dialog).getByRole("status").textContent).toBe("已保存"));
   expect(await screen.findByText("后台生成的新标题")).toBeTruthy();

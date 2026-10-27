@@ -346,6 +346,12 @@ impl Workflow {
             if saved.is_none() && prompt.trim().is_empty() {
                 return Err("dispatch.empty".into());
             }
+            let settings = crate::codex_settings::freeze(&*self.db.lock().map_err(err)?, task, op)?;
+            if settings.explicit() {
+                progress("checking_model")?;
+                self.herdr.codex_catalog(&cwd)?.validate(&settings)?;
+                self.check_flow(task, op)?;
+            }
             let allocation_lock = pane_allocation::workspace_lock(
                 self.herdr.machine_id(),
                 self.herdr.session(),
@@ -391,11 +397,12 @@ impl Workflow {
             self.check_flow(task, op)?;
             let live = self
                 .herdr
-                .prepare_codex(
+                .prepare_codex_configured(
                     &target,
                     &cwd,
                     saved.as_deref(),
                     &format!("kb-{}", &op.replace('-', "")[..24]),
+                    &settings,
                     &|| self.check_flow(task, op),
                 )
                 .map_err(|error| {

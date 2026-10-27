@@ -10,6 +10,7 @@ impl Fixture {
         std::fs::write(dir.join("herdr.cmd"), "@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%~dp0probe.ps1\" %*\r\n").unwrap();
         std::fs::write(dir.join("probe.ps1"), r#"
 $command = "$($args[2]) $($args[3])"
+if ($command -eq 'agent start') { ConvertTo-Json -InputObject @($args) -Compress | Set-Content -LiteralPath "$PSScriptRoot/argv.json" }
 $mode = Get-Content -LiteralPath "$PSScriptRoot/mode"
 $n = 0
 if (Test-Path "$PSScriptRoot/starts") { $n = [int](Get-Content "$PSScriptRoot/starts") }
@@ -56,6 +57,9 @@ $result = switch ($command) {
         Self(dir)
     }
     fn run(&self) -> Result<Target, String> {
+        self.configured(&Default::default())
+    }
+    fn configured(&self, settings: &crate::codex_settings::Settings) -> Result<Target, String> {
         let cli = Cli {
             executable: self.0.join("herdr.cmd"),
             session: "default".into(),
@@ -73,7 +77,7 @@ $result = switch ($command) {
             title: String::new(),
             status: "idle".into(),
         };
-        cli.prepare_codex(&target, ".", None, "test", &|| Ok(()))
+        cli.prepare_codex_configured(&target, ".", None, "test", settings, &|| Ok(()))
     }
     fn starts(&self) -> usize {
         std::fs::read_to_string(self.0.join("starts"))
@@ -82,6 +86,29 @@ $result = switch ($command) {
             .parse()
             .unwrap()
     }
+}
+
+#[test]
+fn selected_model_and_effort_reach_the_real_cli_adapter_as_arguments() {
+    let fixture = Fixture::new("stderr");
+    let settings = crate::codex_settings::Settings {
+        model: Some("test-model".into()),
+        effort: Some("high".into()),
+    };
+    fixture.configured(&settings).unwrap();
+    let bytes = std::fs::read_to_string(fixture.0.join("argv.json")).unwrap();
+    let argv: Vec<String> = serde_json::from_str(bytes.trim_start_matches('\u{feff}')).unwrap();
+    assert!(argv.windows(2).any(|w| w == ["--model", "test-model"]));
+    // PowerShell's Windows native argv marshalling may remove TOML quotes;
+    // Codex accepts the unquoted string fallback as well.
+    assert!(argv.windows(2).any(|w| {
+        w[0] == "-c"
+            && [
+                "model_reasoning_effort=\"high\"",
+                "model_reasoning_effort=high",
+            ]
+            .contains(&w[1].as_str())
+    }));
 }
 impl Drop for Fixture {
     fn drop(&mut self) {

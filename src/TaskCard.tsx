@@ -105,6 +105,7 @@ export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEd
           <button disabled={deleting || archiving || removing} onClick={handleDelete} className="btn-icon btn-danger" aria-label={tr("task.delete")} title={tr("task.delete")}><Icon name="trash" /></button>
         </div>
       </div>
+      {(task.codex_settings?.model || task.codex_settings?.effort) && <p className="task-model" title={tr("model.startup")}>{task.codex_settings.model ?? tr("model.default")} · {task.codex_settings.effort ?? tr("model.default")}</p>}
       {(preparation || busy) && <p role="status" className="task-notice">{tr(preparation ?? "flow.busy")}</p>}
       {task.flow?.error && <p className="error task-notice">{errorText(task.flow.error)}</p>}
       {taskColumn(task) === "done" && archiveReason && <p className="task-notice">{tr(archiveReason)}</p>}

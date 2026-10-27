@@ -9,6 +9,9 @@ struct State {
     panes: BTreeMap<String, (Target, Option<String>)>,
     created: usize,
     prepared: Vec<Option<String>>,
+    settings: Vec<crate::codex_settings::Settings>,
+    catalog_error: bool,
+    catalog_directories: Vec<String>,
     directories: Vec<String>,
     sent: Vec<String>,
     closed: Vec<String>,
@@ -52,6 +55,35 @@ fn target(id: &str) -> Target {
     }
 }
 impl Herdr for Fake {
+    fn codex_catalog(&self, cwd: &str) -> Result<crate::codex_catalog::Catalog, String> {
+        let mut state = self.0.lock().unwrap();
+        state.catalog_directories.push(cwd.into());
+        if state.catalog_error {
+            return Err("model.catalog_unavailable".into());
+        }
+        Ok(crate::codex_catalog::Catalog {
+            models: vec![crate::codex_catalog::Model {
+                id: "test-model".into(),
+                name: "Test".into(),
+                efforts: vec!["high".into(), "low".into()],
+            }],
+            source: "cli".into(),
+            cached: false,
+            error: None,
+        })
+    }
+    fn prepare_codex_configured(
+        &self,
+        t: &Target,
+        cwd: &str,
+        resume: Option<&str>,
+        name: &str,
+        settings: &crate::codex_settings::Settings,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Target, String> {
+        self.0.lock().unwrap().settings.push(settings.clone());
+        self.prepare_codex(t, cwd, resume, name, check_current)
+    }
     fn resources(&self) -> &dyn crate::execution::Resources {
         self.1.as_deref().unwrap_or(&crate::execution::LOCAL)
     }
