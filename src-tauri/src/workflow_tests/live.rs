@@ -1,6 +1,99 @@
 use super::*;
 
 #[test]
+#[ignore = "requires an explicit kanban-acceptance workspace and real Herdr/Codex"]
+fn live_multiline_start_has_exact_receipt_and_one_submission() {
+    let name = std::env::var("KANBAN_LIVE_WORKSPACE").unwrap();
+    assert!(name.starts_with("kanban-acceptance-"));
+    let cwd = std::env::var("KANBAN_LIVE_CWD").unwrap();
+    let cli = crate::herdr::Cli::from_env();
+    let spaces = cli.workspaces().unwrap();
+    let matches: Vec<_> = spaces.iter().filter(|w| w.name == name).collect();
+    assert_eq!(matches.len(), 1);
+    let (mut app, _) = fixture();
+    app.herdr = Arc::new(cli.clone());
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE projects SET workspace_id=?1,herdr_session=?2,root_path=?3 WHERE id='p1'",
+            params![matches[0].id, cli.session(), cwd],
+        )
+        .unwrap();
+    let prompt = format!(
+        "This is an input transport test {}. Reply exactly KANBAN_RECEIPT_OK. Do not use tools or change files.\n第一行：保留换行\n\n第二行：\t保留中文、制表符与空行\n最后一行 $kanban-dev",
+        uuid::Uuid::new_v4()
+    );
+    let operation = uuid::Uuid::new_v4().to_string();
+    let result = app.start_task("a", &prompt, &operation);
+    let target = app
+        .binding("a")
+        .unwrap()
+        .target
+        .expect("test pane was created");
+    eprintln!("isolated test pane: {} start: {result:?}", target.pane_id);
+    let created: String = app
+        .db
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT created_at FROM dispatch_operations WHERE id=?1",
+            [format!("{operation}:dispatch")],
+            |r| r.get(0),
+        )
+        .unwrap();
+    // A reply alone does not prove that the submitted body retained its newlines.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let receipt = loop {
+        if let Some(receipt) = cli
+            .prompt_receipt(&target, &prompt, &created, None)
+            .unwrap()
+        {
+            break receipt;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "exact multiline receipt missing; pane {} retained; start={result:?}",
+            target.pane_id
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    };
+    eprintln!("{}", receipt.evidence);
+    result.unwrap();
+    let db = app.db.lock().unwrap();
+    let states: (String, String, String, String, i64) = db.query_row(
+        "SELECT t.status,b.state,o.state,l.state,(SELECT COUNT(*) FROM dispatch_operations WHERE task_id=t.id) FROM tasks t JOIN task_bindings b ON b.task_id=t.id JOIN dispatch_operations o ON o.task_id=t.id JOIN lifecycle_operations l ON l.task_id=t.id WHERE t.id='a'",
+        [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)),
+    ).unwrap();
+    assert_eq!(
+        states,
+        (
+            "in_progress".into(),
+            "valid".into(),
+            "sent".into(),
+            "succeeded".into(),
+            1
+        )
+    );
+    drop(db);
+    // Preserve a still-running fixture on failure; only close after it settles.
+    while !matches!(
+        cli.validate(&target.workspace_id, &target)
+            .unwrap()
+            .status
+            .as_str(),
+        "idle" | "done"
+    ) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fixture did not settle; pane retained"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    cli.close_pane(&target, &|| Ok(())).unwrap();
+}
+
+#[test]
 #[ignore = "requires an isolated idle Codex pane; exits only that test agent to its existing shell"]
 fn live_codex_quit_preserves_the_test_shell() {
     let workspace = std::env::var("KANBAN_LIVE_WORKSPACE").expect("explicit workspace required");

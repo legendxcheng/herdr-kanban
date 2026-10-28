@@ -9,6 +9,9 @@ const SUGGESTION_SETTLE: Duration = Duration::from_millis(100);
 const ACK_INTERVAL: Duration = Duration::from_millis(200);
 const ACK_TIMEOUT: Duration = Duration::from_secs(10);
 const ACK_POLLS: usize = 50;
+const RECEIPT_GRACE: Duration = Duration::from_secs(30);
+const RECEIPT_INTERVAL: Duration = Duration::from_millis(500);
+const RECEIPT_POLLS: usize = 60;
 
 struct SubmissionState {
     sequence: u64,
@@ -123,7 +126,17 @@ fn submit_observed(
 ) -> Result<(), SendError> {
     // A busy turn cannot acknowledge this particular prompt; reject before writing.
     observe()?.ensure_idle()?;
-    request(&["pane", "send-text", pane, prompt])?;
+    // send-text is raw terminal input, not a paste. Codex can discard raw LF
+    // key events, so frame multiline content as one literal bracketed paste.
+    // Keep the delimiters out of the durable prompt and exact receipt comparison.
+    let pasted;
+    let input = if prompt.contains(['\r', '\n', '\t']) {
+        pasted = format!("\u{1b}[200~{prompt}\u{1b}[201~");
+        &pasted
+    } else {
+        prompt
+    };
+    request(&["pane", "send-text", pane, input])?;
     let result = (|| {
         observe()?.ensure_idle()?;
         // A trailing skill invocation can consume a batched Right+Enter. Give the
@@ -158,6 +171,20 @@ fn submit_observed(
             }
             pause(ACK_INTERVAL);
         }
+        // Startup/account initialization can outlive the status-ack window.
+        // Continue only read-only, exact receipt probes. Late status changes alone
+        // are not enough, and neither the body nor Enter is ever sent again.
+        let deadline = Instant::now() + RECEIPT_GRACE;
+        for poll in 0..=RECEIPT_POLLS {
+            if received()? {
+                // Workflow revalidates identity and commits the receipt atomically.
+                return Err(error("dispatch.submit_verify_required"));
+            }
+            if poll == RECEIPT_POLLS || Instant::now() >= deadline {
+                break;
+            }
+            pause(RECEIPT_INTERVAL);
+        }
         Err(error("dispatch.submit_verify_required"))
     })();
     // Once text was written, failures retain ownership. Never replay text or Enter.
@@ -174,6 +201,106 @@ mod tests {
             sequence,
             status: status.into(),
             ready: true,
+        }
+    }
+
+    #[test]
+    fn multiline_submission_reaches_the_composer_as_one_literal_paste() {
+        let prompt = "第一行\n\n第二行\t保留缩进\n末尾 $kanban-dev";
+        let mut pasted = String::new();
+        let mut enters = 0;
+        let mut observations = 0;
+        submit(
+            "pane",
+            prompt,
+            |args| {
+                if args.starts_with(&["pane", "send-text"]) {
+                    // Codex treats raw LF input as key events. Only a bracketed
+                    // paste transports literal multiline text into the composer.
+                    pasted = args[3]
+                        .strip_prefix("\u{1b}[200~")
+                        .and_then(|text| text.strip_suffix("\u{1b}[201~"))
+                        .unwrap_or("")
+                        .to_owned();
+                }
+                if args.last() == Some(&"enter") {
+                    enters += 1;
+                }
+                Ok(())
+            },
+            || {
+                observations += 1;
+                Ok(state(if observations > 4 { 2 } else { 1 }, "idle"))
+            },
+            |_| {},
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message));
+        assert_eq!(pasted, prompt);
+        assert_eq!(enters, 1);
+    }
+
+    #[test]
+    fn receipt_arriving_after_ack_timeout_is_checked_without_more_input() {
+        let writes = Cell::new(0);
+        let elapsed = Cell::new(Duration::ZERO);
+        let found = Cell::new(false);
+        let result = submit_observed(
+            "pane",
+            "delayed",
+            |_| {
+                writes.set(writes.get() + 1);
+                Ok(())
+            },
+            || Ok(state(1, "idle")),
+            |duration| elapsed.set(elapsed.get() + duration),
+            || {
+                let accepted = elapsed.get() >= Duration::from_secs(23);
+                found.set(accepted);
+                Ok(accepted)
+            },
+        );
+        assert!(found.get(), "late exact receipt was never checked");
+        // The workflow rechecks and atomically commits this evidence.
+        assert_eq!(
+            result.unwrap_err().message,
+            "dispatch.submit_verify_required"
+        );
+        assert_eq!(writes.get(), 4);
+    }
+
+    #[test]
+    fn receipt_grace_stops_on_expiry_or_stale_operation_without_replaying() {
+        for cancelled in [false, true] {
+            let writes = Cell::new(0);
+            let elapsed = Cell::new(Duration::ZERO);
+            let result = submit_observed(
+                "pane",
+                "once",
+                |_| {
+                    writes.set(writes.get() + 1);
+                    Ok(())
+                },
+                || Ok(state(1, "idle")),
+                |duration| elapsed.set(elapsed.get() + duration),
+                || {
+                    if cancelled && elapsed.get() >= Duration::from_secs(15) {
+                        Err(error("dispatch.operation_conflict"))
+                    } else {
+                        Ok(false)
+                    }
+                },
+            )
+            .unwrap_err();
+            assert!(result.uncertain);
+            assert_eq!(writes.get(), 4);
+            if cancelled {
+                assert_eq!(result.message, "dispatch.operation_conflict");
+                assert!(elapsed.get() < Duration::from_secs(16));
+            } else {
+                assert_eq!(result.message, "dispatch.submit_verify_required");
+                assert!(elapsed.get() >= Duration::from_secs(40));
+                assert!(elapsed.get() < Duration::from_secs(41));
+            }
         }
     }
 
