@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-28。修复原生终端大帧写入阻塞（GitHub #42）：命名管道单次最多写入 32 KiB，保留完整 Herdr 帧、实际写入偏移、整体 5 秒截止时间及取消检查。真实管道回归、桌面/SSH 证据和绘制残留边界见[大帧验收记录](docs/verification/2026-10-28-native-pipe-frames.md)，实现见 6.5。
+
 更新日期：2026-10-28。Windows Codex 多行提示词通过 bracketed paste 保留换行、空行与制表符；原 10 秒状态确认窗口结束后，再进行最多 30 秒的只读精确回执补查。正文与 Enter 各发送一次，回执仍要求同一目标、会话、时间范围及完整正文。实现见 6.4.1，真实 Herdr 与测试边界见[多行提交及延迟回执验收](docs/verification/2026-10-28-multiline-dispatch-receipt.md)。
 
 更新日期：2026-10-27。修复 SSH 接入目标为 `用户名@主机` 时专用密钥未自动匹配、Herdr 再次要求密码的问题；按原始主机及用户限定配置，重试时修复旧生成条目，注册前验证不带 `-i` 的免密连接。实现和验证边界见第 12 节及 [SSH 接入配置回归](docs/verification/2026-10-27-ssh-enrollment-config.md)。
@@ -782,6 +784,8 @@ Enter 前重新采集该目标的 `state_change_seq`，随后每约 200ms 查询
 不新增 IPC、数据库字段或迁移。原提示词可在真实 Windows Herdr/Codex 中复现成功回执但仍留在输入框；只拆开 Right/Enter 并延长等待仍可复现。最终验证包含原提示词连续三次、普通中文、多行与超过 11K 字符长文本，以及独立 Tauri/WebView2 + SQLite 的文本/技能节点两种拖放；每次均检查实际回复而非只检查回执。共享工作区 112 项 Rust、110 项前端测试及构建通过；8 项 opt-in live 默认跳过，其中本次提交矩阵和退出两项另行显式运行通过。详细证据、边界与运行中应用未替换的说明见[自动提交修复验收记录](docs/verification/2026-10-24-kanban-codex-submit.md)。
 
 ### 6.5 右侧原生 Herdr 客户端（2026-10-25）
+
+2026-10-28 大帧修正：`native_client_connection::Pipe::send` 将单次非阻塞写入限制为 32 KiB，按实际写入长度推进；不改写协议帧，也不重置一次发送的 5 秒截止时间。避免大于 64 KiB 管道缓冲区的帧持续零字节写入。`native_client_pipe_tests` 使用真实双向管道验证大小边界、多帧完整性、背压、时限和取消；真实原生窗口/SSH 验收及未解决的切换绘制残留见[验收记录](docs/verification/2026-10-28-native-pipe-frames.md)。
 
 `TerminalPanel → terminal_open → NativeTerminalManager → wezterm-gui.exe → herdr.exe client`。使用原生 Herdr UI 和右键菜单；选择任务后由 Herdr zoom 让目标 pane 单独占据内容区域，其他 pane 继续后台运行。Herdr server 继续拥有 Agent。旧的 ANSI bridge crate、替代用户配置的专用 Lua、构建脚本及资源不再使用；2026-10-26 新增的 Lua 仅在用户配置加载后追加字号处理。进程内连接适配负责原样传输官方客户端协议帧、任务定位和单 pane 显示恢复，不解析或重绘终端画面，也不编码键盘、鼠标、滚轮或尺寸事件。
 

@@ -332,7 +332,10 @@ impl Pipe {
         let mut remaining = bytes;
         while !remaining.is_empty() {
             check(view, stop, deadline)?;
-            match self.0.write(remaining) {
+            // PIPE_NOWAIT can write zero bytes forever when the request exceeds
+            // the 64 KiB pipe buffer. Chunk the byte stream, not protocol frames.
+            let chunk = &remaining[..remaining.len().min(32 * 1024)];
+            match self.0.write(chunk) {
                 Ok(0) => thread::sleep(Duration::from_millis(2)),
                 Ok(count) => remaining = &remaining[count..],
                 Err(error)
@@ -353,6 +356,10 @@ fn error() -> String {
         std::io::Error::last_os_error()
     )
 }
+
+#[cfg(test)]
+#[path = "native_client_pipe_tests.rs"]
+mod pipe_tests;
 
 #[cfg(test)]
 mod tests {
