@@ -6,6 +6,7 @@ mod db;
 mod execution;
 mod file_search;
 mod herdr;
+mod herdr_startup;
 mod image_commands;
 mod idle_cleanup;
 #[cfg(test)]
@@ -79,9 +80,14 @@ pub fn run() {
 
     db::recover_interrupted(&conn).expect("failed to recover dispatch operations");
     let conn = Arc::new(Mutex::new(conn));
+    let local_cli = herdr::Cli::from_env();
+    let startup = Arc::new(herdr_startup::LocalHerdrStartup::new(
+        local_cli.clone(),
+        db_path.with_file_name("herdr-startup.log"),
+    ));
     let workflow = Arc::new(workflow::Workflow {
         db: conn.clone(),
-        herdr: Arc::new(herdr::Cli::from_env()),
+        herdr: Arc::new(local_cli),
     });
     let projects = Arc::new(projects::ProjectService::new(
         conn.clone(),
@@ -91,6 +97,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .manage(DbState(conn.clone()))
+        .manage(startup)
         .setup(move |app| {
             let handle = app.handle().clone();
             app.manage(task_titles::TaskTitles::new(
@@ -123,6 +130,7 @@ pub fn run() {
             idle_cleanup::preview_idle_cleanup,
             idle_cleanup::execute_idle_cleanup,
             idle_cleanup::idle_cleanup_result,
+            herdr_startup::ensure_local_herdr,
             machine_commands::list_machines,
             machine_commands::enroll_machine,
             machine_commands::enrollment_status,

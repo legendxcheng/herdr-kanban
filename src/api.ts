@@ -19,6 +19,7 @@ export const connectMachine = (profileId: string) => invoke<Machine>("connect_ma
 export const renameMachine = (id: string, name: string) => invoke<void>("rename_machine", { id, name });
 export const removeMachine = (id: string) => invoke<void>("remove_machine", { id });
 export const listProjects = () => invoke<Project[]>("list_projects");
+export const ensureLocalHerdr = (retry = false) => invoke<void>("ensure_local_herdr", { retry });
 export const syncProjects = (machineId?: string) => machineId && machineId !== "local" ? invoke<ProjectSnapshot>("sync_projects", { machineId }) : invoke<ProjectSnapshot>("sync_projects");
 export const projectGitStatuses = (projectIds: string[]) => invoke<ProjectGitStatus[]>("project_git_statuses", { projectIds });
 export const moveProject = (projectId: string, beforeProjectId: string | null) =>

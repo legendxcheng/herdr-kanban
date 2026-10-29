@@ -49,6 +49,7 @@ beforeEach(() => {
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     const input = args as Record<string, string>;
     switch (command) {
+      case "ensure_local_herdr": return;
       case "last_codex_settings": return { model: null, effort: null };
       case "codex_model_catalog": return { models: [], source: "cli_catalog", cached: false, error: null };
       case "list_projects": return [];

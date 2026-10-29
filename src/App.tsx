@@ -16,7 +16,7 @@ import { WorkspaceAddDialog, machineLabel } from "./WorkspaceAddDialog";
 
 export default function App() {
   useLocale();
-  const { projects, navigation, hide, machines, machineErrors, machineBusy, gitStatuses, operations, dismissOperation, syncing, error, refresh, session, reordering, move } = useProjectSync();
+  const { projects, navigation, hide, machines, machineErrors, machineBusy, gitStatuses, operations, dismissOperation, syncing, startingHerdr, startupSettled, error, refresh, session, reordering, move } = useProjectSync();
   const inProgressCounts = useProjectTaskCounts(projects);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [summaryOpen, setSummaryOpen] = useState(false);
@@ -74,6 +74,7 @@ export default function App() {
         onDismissOperation={dismissOperation}
         operations={operations}
         syncing={syncing}
+        startingHerdr={startingHerdr}
         syncError={error}
         session={session}
         reordering={reordering}
@@ -81,6 +82,10 @@ export default function App() {
         onOverview={() => setOverviewOpen(true)}
       />
       <main className="board-area">
+        {!startupSettled && selectedProject && (selectedProject.machine_id ?? "local") === "local" ? <div className="board-workspace">
+          <div className="board-main empty-state" inert={terminalMaximized}><p role="status">{tr("herdr.starting")}</p></div>
+          <TerminalPanel task={null} maximized={terminalMaximized} onToggleMaximized={toggleTerminalMaximized} />
+        </div> : <>
         {summaryOpen ? <TaskSummaryBoard projects={projects} machines={machines} editorRef={editorRef} terminalMaximized={terminalMaximized} onToggleTerminalMaximized={toggleTerminalMaximized} /> : selectedProject ? (
           <KanbanBoard key={selectedProject.id} project={selectedProject} editorRef={editorRef}
             machineName={machineLabel(selectedProject.machine_id ?? "local", machines.find(m => m.id === selectedProject.machine_id)?.name)}
@@ -98,6 +103,7 @@ export default function App() {
             <TerminalPanel task={null} maximized={terminalMaximized} onToggleMaximized={toggleTerminalMaximized} />
           </div>
         )}
+        </>}
       </main>
       {overviewOpen && <TaskOverviewDialog projects={projects}
         onClose={() => setOverviewOpen(false)}

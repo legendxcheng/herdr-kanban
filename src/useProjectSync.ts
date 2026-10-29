@@ -23,6 +23,11 @@ export function useProjectSync() {
     setDismissedOperations(previous => new Set(previous).add(id));
   };
   const [syncing, setSyncing] = useState(false);
+  const [startingHerdr, setStartingHerdr] = useState(true);
+  const [startupSettled, setStartupSettled] = useState(false);
+  const startupDone = useRef(false);
+  const startupFailure = useRef<string | null>(null);
+  const retryStartup = useRef(false);
   const [error, setError] = useLocalizedMessage();
   const [session, setSession] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
@@ -58,6 +63,22 @@ export function useProjectSync() {
           } catch (e) { if (current()) setError(String(e)); }
         }
         try {
+          const retry = retryStartup.current;
+          retryStartup.current = false;
+          if (!retry && startupFailure.current) throw startupFailure.current;
+          if (!startupDone.current || retry) {
+            if (mounted.current) { setStartingHerdr(true); setError(""); }
+            try {
+              await api.ensureLocalHerdr(retry);
+              startupDone.current = true;
+              startupFailure.current = null;
+            } catch (e) {
+              startupFailure.current = String(e);
+              throw e;
+            } finally {
+              if (mounted.current) { setStartingHerdr(false); setStartupSettled(true); }
+            }
+          }
           const result = await api.syncProjects();
           if (current() && !repeat.current) { setProjects(result.projects); setSession(result.session); setOperations(result.operations); setError(""); initialized.current = true; }
         } catch (e) {
@@ -70,7 +91,7 @@ export function useProjectSync() {
     running.current = run().finally(() => { running.current = null; });
     return running.current;
   }, []);
-  const refresh = useCallback(() => { void remote.refresh(true); return sync(true); }, [sync, remote.refresh]);
+  const refresh = useCallback(() => { retryStartup.current = true; void remote.refresh(true); return sync(true); }, [sync, remote.refresh]);
   const move = useCallback(async (projectId: string, beforeProjectId: string | null) => {
     if (moving.current) return;
     moving.current = true;
@@ -115,5 +136,5 @@ export function useProjectSync() {
     remote.forget(id);
     void refresh();
   };
-  return { projects: allProjects, navigation, hide, machines: remote.machines, machineErrors: remote.errors, machineBusy: remote.busy, gitStatuses, operations: [...operations, ...remote.operations].filter(op => !dismissedOperations.has(op.id)), dismissOperation, syncing, error, refresh, session, reordering, move: moveOnMachine };
+  return { projects: allProjects, navigation, hide, machines: remote.machines, machineErrors: remote.errors, machineBusy: remote.busy, gitStatuses, operations: [...operations, ...remote.operations].filter(op => !dismissedOperations.has(op.id)), dismissOperation, syncing, startingHerdr, startupSettled, error, refresh, session, reordering, move: moveOnMachine };
 }

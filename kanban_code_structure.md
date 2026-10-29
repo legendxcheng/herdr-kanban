@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-29。修复本机默认 Herdr 会话启动误报：`status --json` 中显式 `session: null` 仅在目标为 `default` 时视为匹配，字段缺失及非默认会话仍严格拒绝。启动模块 11 项、前端启动/重试 3 项、生产构建和真实默认 Herdr 只读探测通过；未替换运行中的安装版。实现见 6.1.5，证据见[默认会话启动校验修复](docs/verification/2026-10-29-default-session-startup.md)。
+
 更新日期：2026-10-28。修复原生终端大帧写入阻塞（GitHub #42）：命名管道单次最多写入 32 KiB，保留完整 Herdr 帧、实际写入偏移、整体 5 秒截止时间及取消检查。真实管道回归、桌面/SSH 证据和绘制残留边界见[大帧验收记录](docs/verification/2026-10-28-native-pipe-frames.md)，实现见 6.5。
 
 更新日期：2026-10-28。Windows Codex 多行提示词通过 bracketed paste 保留换行、空行与制表符；原 10 秒状态确认窗口结束后，再进行最多 30 秒的只读精确回执补查。正文与 Enter 各发送一次，回执仍要求同一目标、会话、时间范围及完整正文。实现见 6.4.1，真实 Herdr 与测试边界见[多行提交及延迟回执验收](docs/verification/2026-10-28-multiline-dispatch-receipt.md)。
@@ -7,6 +9,8 @@
 更新日期：2026-10-27。修复 SSH 接入目标为 `用户名@主机` 时专用密钥未自动匹配、Herdr 再次要求密码的问题；按原始主机及用户限定配置，重试时修复旧生成条目，注册前验证不带 `-i` 的免密连接。实现和验证边界见第 12 节及 [SSH 接入配置回归](docs/verification/2026-10-27-ssh-enrollment-config.md)。
 
 更新日期：2026-10-27。任务自动分配始终新建 `kanban` Tab 内的 pane；单 Workspace 的 NewTask 旁提供“关闭空闲会话”，经二次确认和逐项复核后清理。InProgress 绑定、未决操作及 pause 子进程受保护；未知关闭持久化且不重放。实现见 6.6.5，验证边界见[空闲会话清理验收](docs/verification/2026-10-27-idle-cleanup.md)。
+
+更新日期：2026-10-27。本机 Herdr 自动启动：Kanban 首次同步前检查所选入口和 session，仅在明确未运行时启动后台服务；合并并发请求、限时等待并提供显式重试，失败保留缓存。实现与验证边界见 6.1.5 及[本机启动验收](docs/verification/2026-10-27-herdr-startup.md)。
 
 更新日期：2026-10-27。失败及待核实 Workspace 创建记录增加“移除记录”和应用内二次确认。移除仅持久化本地标记，保留已有项目、任务、Herdr 资源及原始创建证据；离线及停用电脑可用，拒绝已移除操作的重试/核实。实现与验证边界见 6.1.4 及[创建记录移除验收](docs/verification/2026-10-27-workspace-dismissal.md)。
 
@@ -218,6 +222,8 @@ herdr-kanban/
 │     ├─ workflow_tests/           独占、派发恢复、任务变更互斥与显式 live 场景
 │     ├─ herdr.rs                  Cli/Herdr 对外适配、目标身份核验及 workspace/pane 操作
 │     ├─ herdr_cli.rs              参数化的有界进程执行、动态 endpoint、输出及响应错误分类
+│     ├─ herdr_startup.rs          本机启动状态检查、共享启动结果、有界等待与显式重试；服务独立于应用存活
+│     ├─ herdr_startup_tests.rs    启动进程替身与 opt-in 隔离真实 Herdr 验收
 │     ├─ herdr_executable.rs       显式覆盖 → PATH/PATHEXT → 默认安装目录的入口发现，保留 Windows 批处理入口
 │     ├─ herdr_socket.rs           有界 JSONL 重排请求、Windows 管道/Unix socket、响应与管道回归
 │     ├─ projects.rs / project_commands.rs  Workspace 同步、创建恢复及拖动重排服务/IPC
@@ -257,8 +263,8 @@ herdr-kanban/
 1. [main.rs](src-tauri/src/main.rs) 调用 `kanban_lib::run()`；release 模式设置 Windows GUI subsystem。
 2. [lib.rs](src-tauri/src/lib.rs) 创建数据目录，持有数据库实例锁，再打开 SQLite、执行迁移，将上次中断的 pending 派发及生命周期操作标为 unknown。
 3. 连接包装为 `Arc<Mutex<Connection>>`，CRUD 与 Workflow 共享。外部 Herdr 请求不持有数据库锁。
-4. 注册插件、业务命令、Workflow 和 NativeTerminalManager，再启动 Tauri 窗口；销毁窗口时关闭专用 WezTerm/Herdr 客户端，保留外部 server 与 Agent。
-5. [main.tsx](src/main.tsx) 挂载 `App`；`App` 加载项目，自动选择列表中的第一个有效项目。
+4. 注册插件、业务命令、Workflow、LocalHerdrStartup 和 NativeTerminalManager，再启动 Tauri 窗口；销毁窗口时关闭专用 WezTerm/Herdr 客户端，保留后台 server 与 Agent。
+5. [main.tsx](src/main.tsx) 挂载 `App`；读取项目缓存，首次本机在线同步前检查并按需启动所选 Herdr session（见 6.1.5），自动选择列表中的第一个有效项目。
 6. `KanbanBoard` 按项目 ID 加载卡片，由后端按 Project ID 解析稳定 workspace ID 查询 Agent；卡片成功加载后自动选择第一张开发中任务，已有有效选择则保留。加载期间及没有项目时也保留右侧空终端。
 
 数据库初始化发生在窗口启动前。创建目录、连接和建表失败使用 `expect` 终止，没有恢复界面。数据库命令通过一把 Mutex 串行访问同一连接。
@@ -511,7 +517,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 
 默认目录按在线 ID 从 Herdr version 3 会话数据 `identity_cwd` 只读补充，不读取 pane cwd。保留显式 `KANBAN_HERDR_SESSION_FILE`；未覆盖时，通过所选 Herdr 入口调用 `status server` 与 `session list --json`，仅在唯一 session 名和 socket 匹配且 `session_dir` 为绝对路径时读取其中的 `session.json`。自定义启动脚本设置的目录同样生效，不从 Kanban 的 APPDATA 或 socket 父目录推测数据位置。查询失败、身份不匹配或元数据无效时保留既有降级行为。读取上限 8 MiB；格式、目录无效时保留缓存或请求本地回退。回退与后来读取的权威目录不同会显示冲突，由用户明确选择；不会写回 Herdr 会话文件。
 
-本地 CLI 入口优先级为显式 `KANBAN_HERDR_EXECUTABLE`、进程 PATH、`%LOCALAPPDATA%/Programs/Herdr/bin/herdr.exe`，最后保留 `herdr` 以返回既有不可用错误。Windows 在各 PATH 目录中依 PATHEXT 顺序识别 `.exe/.com/.cmd/.bat`，解析成绝对路径并保留 wrapper 本身，不跳过其配置去寻找内部 exe。同步、API socket 查询和原生终端使用同一 Cli 入口；不自动切换 session 或启动其他服务。入口须对 Kanban 进程可见，仅在某个终端临时设置的 PATH 不会自动出现在已运行的桌面进程中。
+本地 CLI 入口优先级为显式 `KANBAN_HERDR_EXECUTABLE`、进程 PATH、`%LOCALAPPDATA%/Programs/Herdr/bin/herdr.exe`，最后保留 `herdr` 以返回既有不可用错误。Windows 在各 PATH 目录中依 PATHEXT 顺序识别 `.exe/.com/.cmd/.bat`，解析成绝对路径并保留 wrapper 本身，不跳过其配置去寻找内部 exe。同步、API socket 查询、启动检查和原生终端使用同一 Cli 入口；仅按 6.1.5 启动选定的本机 session，不自动切换 session。入口须对 Kanban 进程可见，仅在某个终端临时设置的 PATH 不会自动出现在已运行的桌面进程中。
 
 Windows 批处理无法接收 CR/LF 参数。经批处理入口调用 `workspace/pane/agent/tab` 且包含换行时，先通过该入口读取 `status --json`，核验实际 native exe 和在线 socket，再直接调用该 exe 并以 `HERDR_SOCKET_PATH` 固定到同一服务；不传会重新推导地址的 `--session`。单行调用及原生客户端仍使用所选入口。探测失败明确为尚未发送，不自动重发；多行和命令特殊字符按字面值传递。
 
@@ -563,6 +569,18 @@ schema 13 的 `project_visibility(project_id, visible)` 保存明确显示/隐�
 后端仅依据操作 ID 查询本地记录所属电脑，使用与创建/恢复相同的机器级锁，锁内重新检查状态后写入 schema 17 的移除标记；pending 或已成功拒绝，重复移除幂等。无需构造机器适配器，离线及机器停用不影响操作。原始创建状态、错误和身份保留；create/recover 在持锁后检查标记，拒绝旧操作 ID。候选及同步使用排除已移除记录的投影，释放恢复占用，但不删除或隐藏已有关联项目，不写 Workspace 排除记录，不调用外部创建、改名或关闭。
 
 前端在成功后持有已移除 ID 集合，立即过滤本机/远端合并列表，即使旧快照迟到也不恢复条目；重启依据数据库投影。共用确认框的遮罩 mousedown 阻止默认聚焦，避免取消后的焦点被浏览器移走。隔离副本的 238 项前端及 228 项 Rust 测试通过（23 项环境相关测试跳过）；焦点修正后相关 22 项及生产构建再次通过。独立 Windows Tauri/WebView2 与真实本机 Herdr 验证绑定冲突移除、取消/焦点、数据保留、离线与进程重启；停用远端记录也能本地移除，未执行真实 SSH 或安装升级。证据与边界见[创建记录移除验收](docs/verification/2026-10-27-workspace-dismissal.md)。
+
+### 6.1.5 本机 Herdr 启动与重试（2026-10-27）
+
+`useProjectSync → ensure_local_herdr(retry) → LocalHerdrStartup → 同一 Cli 的 status --json / server`。`lib.rs` 将与 Workflow 共用入口/session 的启动管理器注册为应用状态。只对本机执行；远端同步仍由既有远端链路负责，不新增数据库迁移或修改任务派发。
+
+前端首先读取本地缓存；首次本机同步等待启动检查，已有本机项目在此期间展示启动占位及空终端，避免过早发起任务终端连接。无项目时保留原有空态及终端布局。首次检查结束后普通刷新不卸载看板，保留编辑草稿。侧栏检查期间禁用重复刷新；失败显示诊断和“重试连接”，保留缓存卡片和未决操作。失败后的焦点/15 秒轮询不重新启动；显式刷新再次检查，成功后继续 Workspace 同步。
+
+后端核验状态中的 client/server session，只在 `server.running=false` 且 `status=not_running` 时通过原入口运行 `--session <已选 session> server`。入口不存在、访问拒绝、状态格式错误、会话不匹配或协议不兼容均返回错误，不推断为未启动。启动检查总限时 20 秒，单次状态读取最多 2 秒；并发调用共享同一结果。超时保留尚未退出的子进程，重试继续等待；包装器成功退出但服务尚未就绪时保留待交接状态，重试不重复启动该不确定交接。
+
+2026-10-29 默认会话兼容修正：Herdr 0.9.5 的默认会话状态可在 client/server 两侧返回显式 `session: null`。`status_running` 分别读取两侧字段，仅当所选 session 为 `default` 时接受该表示，同时保留显式字符串名称的精确匹配。使用 `get` 区分显式 null 与字段缺失；缺失、错误类型、空字符串、其他名称和非默认目标下的 null 均拒绝。运行状态与协议兼容性检查不变。修复后正常默认会话继续 Workspace 同步并沿用现有成功清除侧栏错误的逻辑；没有新增 IPC、迁移或自动重启策略。回归及真实只读验证见[验收记录](docs/verification/2026-10-29-default-session-startup.md)。
+
+后台服务使用空标准输入和隐藏控制台，输出写入数据库同目录的 `herdr-startup.log`；不使用会在 CLI 结束时终止整个进程树的短命令执行器。成功后仅异步回收启动入口，Kanban 退出不关闭服务。真实 Herdr 和桌面验证、安装边界见[验收记录](docs/verification/2026-10-27-herdr-startup.md)。
 
 ### 6.2 创建、编辑和移动卡片
 

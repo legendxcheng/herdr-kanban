@@ -33,13 +33,14 @@ interface ProjectSidebarProps {
   operations?: WorkspaceOperation[];
   onDismissOperation?: (id: string) => Promise<void>;
   syncing?: boolean;
+  startingHerdr?: boolean;
   syncError?: string;
   session?: string | null;
   reordering?: boolean;
   onMove?: (projectId: string, beforeProjectId: string | null) => Promise<void>;
 }
 
-export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy = {}, inert = false, projects, gitStatuses = {}, inProgressCounts = {}, selectedId, onSelect, onHide, recoveryProjects = [], onRecovery, onChanged, onOverview, summarySelected = false, onSummary, operations = [], onDismissOperation, syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
+export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy = {}, inert = false, projects, gitStatuses = {}, inProgressCounts = {}, selectedId, onSelect, onHide, recoveryProjects = [], onRecovery, onChanged, onOverview, summarySelected = false, onSummary, operations = [], onDismissOperation, syncing = false, startingHerdr = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
   useLocale();
   const [showNew, setShowNew] = useState(false);
   const [manageMachines, setManageMachines] = useState(false);
@@ -169,7 +170,7 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
         </section>;
         })}
       </div>
-      <div className="workspace-sync"><button className="btn-secondary" disabled={syncing} onClick={onChanged}>{tr(syncing ? "workspace.syncing" : "workspace.refresh")}</button>
+      <div className="workspace-sync"><button className="btn-secondary" disabled={syncing || startingHerdr} onClick={onChanged}>{tr(startingHerdr ? "herdr.starting" : syncing ? "workspace.syncing" : syncError ? "herdr.retry" : "workspace.refresh")}</button>
         {reordering && <p role="status">{tr("workspace.reordering")}</p>}
         {syncError && <p className="error" role="alert">{syncError}</p>}
       </div>
