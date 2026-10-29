@@ -90,6 +90,7 @@ impl Cli {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut ready_shell: Option<Target> = None;
         let mut rejection = None;
+        let mut startup_error = None;
         loop {
             check_current()?;
             let (shell, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
@@ -128,6 +129,10 @@ impl Cli {
                     Err(error) if super::agent_start_rejected_busy(&error) => {
                         rejection = Some(error);
                     }
+                    Err(error) if super::cli::agent_start_not_ready(&error) => {
+                        startup_error = Some(error);
+                        break;
+                    }
                     Err(error) => return Err(error),
                 }
             }
@@ -137,6 +142,8 @@ impl Cli {
         // In particular, a reused pane may still be detecting the new Codex process.
         let (mut live, info) = self.wait_started_codex(
             ready_shell.as_ref().ok_or("binding.identity_unknown")?,
+            name,
+            startup_error.as_deref(),
             check_current,
         )?;
         if let Some(expected) = resume {
@@ -180,10 +187,13 @@ impl Cli {
     fn wait_started_codex(
         &self,
         shell: &Target,
+        name: &str,
+        startup_error: Option<&str>,
         check_current: &dyn Fn() -> Result<(), String>,
     ) -> Result<(Target, Value), String> {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut observed: Option<Target> = None;
+        let mut skipped_update = false;
         loop {
             check_current()?;
             match self.inspect_pane(&shell.workspace_id, &shell.pane_id) {
@@ -199,6 +209,12 @@ impl Cli {
                     }
                     if live.agent == "codex" && live.process_id != shell.process_id {
                         observed.get_or_insert_with(|| live.clone());
+                        if live.status == "blocked" && !skipped_update {
+                            if !self.skip_startup_update(&live, &info, name, check_current)? {
+                                return Err(startup_error.unwrap_or("flow.not_idle").into());
+                            }
+                            skipped_update = true;
+                        }
                         if self.ready(&live, &info) {
                             check_current()?;
                             return Ok((live, info));
@@ -213,6 +229,53 @@ impl Cli {
             }
             thread::sleep(Duration::from_millis(150));
         }
+    }
+    /// Answer only the update picker of the process this operation just launched.
+    /// A failure after Esc remains uncertain; callers must not replay the input.
+    fn skip_startup_update(
+        &self,
+        target: &Target,
+        info: &Value,
+        name: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<bool, String> {
+        if info["name"].as_str() != Some(name) || info["launch_pending"].as_bool() != Some(true) {
+            return Ok(false);
+        }
+        let explain = self.json(&["agent", "explain", name, "--json"])?;
+        if explain["agent"] != "codex"
+            || explain["state"] != "blocked"
+            || explain["matched_rule"]["id"] != "startup_update"
+            || explain["matched_rule"]["state"] != "blocked"
+        {
+            return Ok(false);
+        }
+        // The legacy update dialog has different keys. Require the visible Esc
+        // hint instead of guessing a choice or pressing Enter on Update now.
+        let bytes = self
+            .output(&[
+                "agent", "read", name, "--source", "visible", "--format", "text",
+            ])
+            .map_err(|error| error.message)?;
+        let screen = std::str::from_utf8(&bytes).map_err(|_| "herdr.invalid_response")?;
+        let screen = screen.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !screen.contains("Update available ·") || !screen.ends_with("enter continue · esc skip")
+        {
+            return Ok(false);
+        }
+        let (current, current_info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
+        if !current.same_identity(target) || current_info["name"].as_str() != Some(name) {
+            return Err("binding.identity_changed".into());
+        }
+        if current.status != "blocked"
+            || current_info["launch_pending"].as_bool() != Some(true)
+            || current_info["state_change_seq"] != info["state_change_seq"]
+        {
+            return Err("flow.not_idle".into());
+        }
+        check_current()?;
+        self.json(&["agent", "send-keys", name, "esc"])?;
+        Ok(true)
     }
     pub(super) fn read_codex_session(&self, target: &Target) -> Result<Option<String>, String> {
         self.check_target(target).map_err(|e| e.message)?;

@@ -7,15 +7,23 @@ use std::{process::Command, time::Duration};
 /// Only a complete, explicit rejection of agent.start proves no launch occurred.
 /// Also accepts the persisted stderr envelope from older Kanban versions.
 pub(crate) fn agent_start_rejected_busy(error: &str) -> bool {
+    agent_start_error(error, "agent_pane_busy")
+}
+
+/// This response means a process was started but is waiting at a startup UI.
+/// It must never enter the rejected-start retry/release path.
+pub(super) fn agent_start_not_ready(error: &str) -> bool {
+    agent_start_error(error, "agent_not_ready")
+}
+
+fn agent_start_error(error: &str, code: &str) -> bool {
     let Some(json) = error.strip_prefix("herdr.failed: ") else {
         return false;
     };
     let Ok(doc) = serde_json::from_str::<Value>(json) else {
         return false;
     };
-    doc["id"] == "cli:agent:start"
-        && doc["error"]["code"] == "agent_pane_busy"
-        && doc.get("result").is_none()
+    doc["id"] == "cli:agent:start" && doc["error"]["code"] == code && doc.get("result").is_none()
 }
 
 impl Cli {

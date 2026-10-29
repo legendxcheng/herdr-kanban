@@ -1,4 +1,4 @@
-//! Real CLI adapter with a deterministic process fixture for the exit/start race.
+//! Real CLI adapter fixtures for exit/start races and guarded update skipping.
 use super::*;
 
 struct Fixture(std::path::PathBuf);
@@ -27,6 +27,13 @@ if (-not $started -and $mode -in @('registry_cleared','registry_replaced')) {
 }
 if ($started) {
     $pane.agent='codex'; $pane.agent_status='idle'; $pane.interactive_ready=$true
+    $pane.name='test'
+    if ($mode.StartsWith('update_') -and ($mode -eq 'update_still_blocked' -or -not (Test-Path "$PSScriptRoot/skipped"))) {
+        $pane.agent_status='blocked'; $pane.interactive_ready=$false; $pane.launch_pending=$true
+        if ($mode -eq 'update_wrong_name') { $pane.name='someone-else' }
+        if ($mode -eq 'update_replaced' -and (Test-Path "$PSScriptRoot/explained")) { $pane.terminal_id='replacement' }
+    }
+    if ($mode -eq 'update_after_skip' -and (Test-Path "$PSScriptRoot/skipped")) { $pane.terminal_id='replacement' }
     if ($mode -in @('delayed_ready','ready_replaced')) {
         $reads=0
         if (Test-Path "$PSScriptRoot/ready_reads") { $reads=[int](Get-Content "$PSScriptRoot/ready_reads") }
@@ -39,9 +46,16 @@ if ($started) {
 $result = switch ($command) {
     'pane get' { @{pane=$pane} }
     'agent get' { @{agent=$pane} }
-    'pane process-info' { @{process_info=@{shell_pid=$shell;foreground_process_group_id=$(if ($started) { 2 } else { $shell })}} }
+    'pane process-info' { @{process_info=@{shell_pid=$shell;foreground_process_group_id=$(if ($mode -eq 'update_process_changed' -and (Test-Path "$PSScriptRoot/explained")) { 3 } elseif ($started) { 2 } else { $shell })}} }
     'agent start' {
         $n++; Set-Content "$PSScriptRoot/starts" $n
+        if ($mode.StartsWith('update_')) {
+            Set-Content "$PSScriptRoot/started" 'yes'
+            if ($mode -ne 'update_success') {
+                [Console]::Error.WriteLine('{"error":{"code":"agent_not_ready","message":"blocked during startup"},"id":"cli:agent:start"}'); exit 1
+            }
+            break
+        }
         if ($mode -eq 'unknown' -or ($mode -eq 'unknown_after_busy' -and $n -gt 1)) { [Console]::Error.WriteLine('connection lost'); exit 1 }
         if ($n -eq 1 -or $mode -eq 'always_busy') {
             $errorJson = '{"error":{"code":"agent_pane_busy","message":"not an available shell"},"id":"cli:agent:start"}'
@@ -49,6 +63,22 @@ $result = switch ($command) {
             [Console]::Error.WriteLine($errorJson); exit 1
         }
         Set-Content "$PSScriptRoot/started" 'yes'; @{}
+    }
+    'agent explain' {
+        Set-Content "$PSScriptRoot/explained" 'yes'
+        $rule = if ($mode -eq 'update_other_dialog') { 'trust_directory' } else { 'startup_update' }
+        @{agent='codex';state='blocked';matched_rule=@{id=$rule;state='blocked'}} | ConvertTo-Json -Depth 8 -Compress
+        exit 0
+    }
+    'agent read' {
+        if ($mode -eq 'update_no_skip') { Write-Output 'Update available! Press enter to continue' }
+        else { Write-Output "  Update available · 0.165.0 → 0.166.0`n  enter continue · esc skip" }
+        exit 0
+    }
+    'agent send-keys' {
+        Add-Content "$PSScriptRoot/keys" "$($args[4]) $($args[5])"
+        if ($mode -eq 'update_skip_unknown') { [Console]::Error.WriteLine('connection lost'); exit 1 }
+        Set-Content "$PSScriptRoot/skipped" 'yes'; @{}
     }
     default { throw "unexpected command: $command" }
 }
@@ -60,6 +90,13 @@ $result = switch ($command) {
         self.configured(&Default::default())
     }
     fn configured(&self, settings: &crate::codex_settings::Settings) -> Result<Target, String> {
+        self.checked(settings, &|| Ok(()))
+    }
+    fn checked(
+        &self,
+        settings: &crate::codex_settings::Settings,
+        check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Target, String> {
         let cli = Cli {
             executable: self.0.join("herdr.cmd"),
             session: "default".into(),
@@ -77,7 +114,7 @@ $result = switch ($command) {
             title: String::new(),
             status: "idle".into(),
         };
-        cli.prepare_codex_configured(&target, ".", None, "test", settings, &|| Ok(()))
+        cli.prepare_codex_configured(&target, ".", None, "test", settings, check)
     }
     fn starts(&self) -> usize {
         std::fs::read_to_string(self.0.join("starts"))
@@ -208,6 +245,144 @@ fn pane_agent_transition_does_not_adopt_a_different_terminal() {
     let f = Fixture::new("registry_replaced");
     assert_eq!(f.run().unwrap_err(), "binding.identity_changed");
     assert!(!f.0.join("starts").exists());
+}
+
+#[test]
+fn startup_update_skips_once_and_continues_without_relaunching() {
+    for mode in ["update_blocked", "update_success"] {
+        let f = Fixture::new(mode);
+        let target = f.run().unwrap();
+        assert_eq!(target.status, "idle");
+        assert_eq!(f.starts(), 1);
+        assert_eq!(
+            std::fs::read_to_string(f.0.join("keys")).unwrap().trim(),
+            "test esc"
+        );
+    }
+}
+
+#[test]
+fn startup_update_does_not_answer_other_dialogs_or_replaced_agents() {
+    for mode in [
+        "update_other_dialog",
+        "update_no_skip",
+        "update_wrong_name",
+        "update_replaced",
+        "update_process_changed",
+    ] {
+        let f = Fixture::new(mode);
+        assert!(f.run().is_err(), "{mode}");
+        assert_eq!(f.starts(), 1);
+        assert!(!f.0.join("keys").exists(), "{mode}");
+    }
+}
+
+#[test]
+fn startup_update_never_repeats_an_uncertain_skip() {
+    let f = Fixture::new("update_skip_unknown");
+    assert!(f.run().is_err());
+    assert_eq!(f.starts(), 1);
+    assert_eq!(
+        std::fs::read_to_string(f.0.join("keys"))
+            .unwrap()
+            .lines()
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn startup_update_checks_cancellation_immediately_before_skip() {
+    let f = Fixture::new("update_cancelled");
+    let result = f.checked(&Default::default(), &|| {
+        if f.0.join("explained").exists() {
+            Err("dispatch.operation_conflict".into())
+        } else {
+            Ok(())
+        }
+    });
+    assert_eq!(result.unwrap_err(), "dispatch.operation_conflict");
+    assert_eq!(f.starts(), 1);
+    assert!(!f.0.join("keys").exists());
+}
+
+#[test]
+fn startup_update_still_requires_readiness_of_the_same_process_after_skip() {
+    for mode in ["update_still_blocked", "update_after_skip"] {
+        let f = Fixture::new(mode);
+        let error = f.run().unwrap_err();
+        assert_eq!(
+            error,
+            if mode == "update_still_blocked" {
+                "flow.not_idle"
+            } else {
+                "binding.identity_changed"
+            }
+        );
+        assert_eq!(f.starts(), 1);
+        assert_eq!(
+            std::fs::read_to_string(f.0.join("keys"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn startup_update_requires_an_exact_start_error_envelope() {
+    let valid = r#"herdr.failed: {"id":"cli:agent:start","error":{"code":"agent_not_ready"}}"#;
+    assert!(cli::agent_start_not_ready(valid));
+    assert!(!agent_start_rejected_busy(valid));
+    for error in [
+        "agent_not_ready",
+        r#"herdr.failed: {"id":"cli:agent:prompt","error":{"code":"agent_not_ready"}}"#,
+        r#"herdr.failed: {"id":"cli:agent:start","error":{"code":"timeout"}}"#,
+        r#"herdr.failed: {"id":"cli:agent:start","error":{"code":"agent_not_ready"},"result":{}}"#,
+        r#"herdr.failed: {"id":"cli:agent:start","error":{"code":"agent_not_ready"}"#,
+    ] {
+        assert!(!cli::agent_start_not_ready(error), "{error}");
+    }
+}
+
+#[test]
+#[ignore = "requires an isolated kanban-acceptance workspace with a real Codex update picker and a CLI trace wrapper"]
+fn live_startup_update_skips_once_without_restarting_or_sending_a_prompt() {
+    assert_eq!(std::env::var("HERDR_ENV").unwrap(), "1");
+    let name = std::env::var("KANBAN_LIVE_UPDATE_WORKSPACE").unwrap();
+    assert!(name.starts_with("kanban-acceptance-"));
+    let cwd = std::env::var("KANBAN_LIVE_CWD").unwrap();
+    let cli = Cli::from_env();
+    let workspaces = cli.workspaces().unwrap();
+    let matching: Vec<_> = workspaces.iter().filter(|w| w.name == name).collect();
+    assert_eq!(matching.len(), 1);
+    let panes = cli.workspace_panes(&matching[0].id).unwrap();
+    assert_eq!(panes.len(), 1);
+    let (shell, _) = cli
+        .inspect_pane(&matching[0].id, panes[0]["pane_id"].as_str().unwrap())
+        .unwrap();
+    assert!(shell.agent.is_empty());
+    let target = cli
+        .prepare_codex(&shell, &cwd, None, "kanban-update-check", &|| Ok(()))
+        .unwrap();
+    let trace =
+        std::fs::read_to_string(std::env::var("KANBAN_LIVE_UPDATE_TRACE").unwrap()).unwrap();
+    assert_eq!(trace.lines().filter(|s| *s == "agent start").count(), 1);
+    assert_eq!(
+        trace
+            .lines()
+            .filter(|s| *s == "agent send-keys kanban-update-check esc")
+            .count(),
+        1
+    );
+    assert!(!trace.contains("agent prompt"));
+    assert!(!trace.contains("pane send-text"));
+    eprintln!(
+        "update skipped, ready: {} {}",
+        target.pane_id, target.process_id
+    );
+    cli.close_pane(&target, &|| Ok(())).unwrap();
 }
 
 #[test]

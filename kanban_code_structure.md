@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-30。Codex 启动遇到确认的更新选择页时自动发送一次 Esc（Skip），等待同一进程交互就绪后继续原流程；其他弹窗、身份变化及不确定结果不自动回答或重放。无 IPC／数据库迁移。285 项 Rust 常规测试及真实本机 0.165.0 更新页跳过验证通过，运行中的安装版未替换；实现见 6.6.4，证据及边界见[更新提示 Skip 验证](docs/verification/2026-10-30-codex-startup-update-skip.md)。
+
 更新日期：2026-10-29。SSH 任务新建与精确恢复跳过模型目录预检，保留配置格式检查并将冻结的模型／思考强度直接传给 Herdr；本地启动仍查询目录校验。远端目录或缓存继续用于表单选择，查询失败提示可保留已有配置启动。无 IPC／数据库迁移，恢复与未知结果不重发。实现见 6.2.7，测试和真实 SSH 未覆盖边界见[SSH 模型预检修正](docs/verification/2026-10-29-ssh-model-preflight.md)。
 
 更新日期：2026-10-29。任务 Codex CLI 新建与精确恢复统一改为 Full Access，保留模型、思考强度、目录及会话隔离；恢复核验适配单一目标写锁，并兼容已有自动审批绑定。运行中的有效绑定沿用原权限。实现见 6.6，验证与限制见[Full Access 验证记录](docs/verification/2026-10-29-codex-full-access.md)。
@@ -957,6 +959,8 @@ Windows 进程查询可能先观察到 shell，而 Herdr 的 Agent 注册状态�
 `start-timing.jsonl` 位于数据库同目录，记录操作 ID、机器 ID、各阶段相对启动线程的毫秒数、总耗时与成功标记，不记录正文或文件内容；超过 2 MiB 后在下一条记录时重新开始，日志失败不改变任务结果。它不包含受理前的适配器/首次 helper 更新，也不表示模型完成时间。
 
 ### 6.6.4 启动回执与交互就绪分离（2026-10-26）
+
+2026-10-30 更新提示处理：`herdr_cli::agent_start_not_ready` 只接受完整的 `cli:agent:start / agent_not_ready` 错误信封，此时进程可能已启动，进入同一目标的等待而不重试 `agent.start`。`wait_started_codex` 同时处理启动成功后才出现的阻塞；仅当本次 Agent 名称、terminal、原 shell 和新 Codex 进程身份一致且 blocked/launch_pending，`skip_startup_update` 才读取 Herdr 检测和可见页。需要 `startup_update` 命中及 `Update available ·`、页尾 `enter continue · esc skip` 同时成立，发送前再检查身份、状态序号及任务有效性，发送一次 Esc 后继续核验就绪。其他弹窗和缺少该快捷键提示的旧版更新页不自动处理；发送结果不确定不重发，持续阻塞有界失败，保留原生命周期恢复语义。该逻辑由新建与精确恢复共用，不更改全局更新设置、不自动恢复旧 unknown 卡片。自动化和真实更新页验收、未打包安装及 SSH/完整派发未验收边界见[验证记录](docs/verification/2026-10-30-codex-startup-update-skip.md)。
 
 `agent.start` 成功后，`herdr_codex::wait_started_codex` 在 10 秒名义窗口内有界只读轮询（单次 CLI 仍有自己的超时），不再仅凭第一份非就绪快照判失败。检查任务有效性、terminal 与原 shell PID；观察到新 Codex 后固定其进程身份，替换进程/终端/其他 Agent 都拒绝继续。只有同一进程达到 idle/done、interactive_ready 且非 launch_pending 才返回，之后才进入原有会话核验和派发流程。未知进程身份仅在此只读窗口内继续等待；不重发 agent.start 或提示词，超时仍保留待核实保护。该修正不会自动解除此前失败卡片的状态。
 
