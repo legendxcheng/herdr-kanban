@@ -98,6 +98,14 @@ fn selected_model_and_effort_reach_the_real_cli_adapter_as_arguments() {
     fixture.configured(&settings).unwrap();
     let bytes = std::fs::read_to_string(fixture.0.join("argv.json")).unwrap();
     let argv: Vec<String> = serde_json::from_str(bytes.trim_start_matches('\u{feff}')).unwrap();
+    assert!(argv.windows(3).any(|w| {
+        w == [
+            "--",
+            "--no-daemon",
+            "--dangerously-bypass-approvals-and-sandbox",
+        ]
+    }));
+    assert!(!argv.iter().any(|arg| arg == "--approve-for-me"));
     assert!(argv.windows(2).any(|w| w == ["--model", "test-model"]));
     // PowerShell's Windows native argv marshalling may remove TOML quotes;
     // Codex accepts the unquoted string fallback as well.

@@ -56,6 +56,14 @@ mod tests {
         assert!(!matches_startup_locks(&startup, "other", &startup));
         assert!(!matches_startup_locks(&startup, &root, &[]));
         assert!(matches_startup_locks(&[root.clone()], &root, &[]));
+        let full_access = vec![root.clone()];
+        assert!(matches_startup_locks(&full_access, &root, &full_access));
+        assert!(!matches_startup_locks(
+            &["other".into()],
+            &root,
+            &full_access
+        ));
+        assert!(!matches_startup_locks(&startup, &root, &full_access));
     }
 }
 

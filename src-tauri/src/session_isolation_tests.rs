@@ -14,7 +14,7 @@ fn operation() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-fn assert_automatic_review_launch(cli: &Cli, target: &Target, cwd: &str, resume: Option<&str>) {
+fn assert_full_access_launch(cli: &Cli, target: &Target, cwd: &str, resume: Option<&str>) {
     let doc = cli
         .json(&["pane", "process-info", "--pane", &target.pane_id])
         .unwrap();
@@ -31,7 +31,7 @@ fn assert_automatic_review_launch(cli: &Cli, target: &Target, cwd: &str, resume:
         .iter()
         .map(|arg| arg.as_str().unwrap())
         .collect();
-    let mut expected = vec!["--no-daemon", "--approve-for-me"];
+    let mut expected = vec!["--no-daemon", "--dangerously-bypass-approvals-and-sandbox"];
     if let Some(id) = resume {
         expected.extend(["resume", id]);
     }
@@ -136,7 +136,7 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
     let shared_tab = cli.kanban_tab(workspace).unwrap().unwrap();
     for id in &ids {
         let target = app.binding(id).unwrap().target.unwrap();
-        assert_automatic_review_launch(&cli, &target, &cwd, None);
+        assert_full_access_launch(&cli, &target, &cwd, None);
         let pane = cli.json(&["pane", "get", &target.pane_id]).unwrap();
         assert_eq!(
             pane.pointer("/result/pane/tab_id")
@@ -191,7 +191,7 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
         app.start_task(id, "MUST_NOT_BE_SENT_ON_RESUME", &operation())
             .unwrap();
         let target = app.binding(id).unwrap().target.unwrap();
-        assert_automatic_review_launch(&cli, &target, &cwd, Some(&sessions[index]));
+        assert_full_access_launch(&cli, &target, &cwd, Some(&sessions[index]));
         let tab = cli.kanban_tab(workspace).unwrap().unwrap();
         let pane = cli.json(&["pane", "get", &target.pane_id]).unwrap();
         assert_eq!(
@@ -203,7 +203,7 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
             app.herdr.session_id(&target).unwrap(),
             Some(sessions[index].clone())
         );
-        assert_eq!(target.codex_resume_locks.len(), 2);
+        assert_eq!(target.codex_resume_locks, vec![sessions[index].clone()]);
         // The new process evidence must survive a Kanban restart before input.
         drop(app);
         let conn = Connection::open(&path).unwrap();
@@ -237,7 +237,7 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
         );
     }
     // A later in-process switch keeps the original argv. Its changed lock set
-    // must not be accepted as the startup helper, even after automatic review.
+    // must not be accepted as the original session's startup evidence.
     app.start_task(&ids[0], "MUST_NOT_BE_SENT_ON_RESUME", &operation())
         .unwrap();
     let target = app.binding(&ids[0]).unwrap().target.unwrap();

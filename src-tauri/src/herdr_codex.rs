@@ -79,7 +79,7 @@ impl Cli {
             // Hooks must inherit this pane's environment, including on resume.
             // A shared app-server may retain another pane's HERDR_PANE_ID.
             "--no-daemon",
-            "--approve-for-me",
+            "--dangerously-bypass-approvals-and-sandbox",
         ];
         if let Some(id) = resume {
             args.extend(["resume", id]);
@@ -150,13 +150,14 @@ impl Cli {
                 #[cfg(windows)]
                 if needs_startup_locks && live.codex_resume_locks.is_empty() {
                     if let Some(ids) = self.startup_session_locks(&live)? {
-                        if ids.len() == 2 && ids.iter().any(|id| id == expected) {
+                        if ids.len() == 1 && ids[0] == expected {
                             self.check_target(&live).map_err(|e| e.message)?;
                             live.codex_resume_locks = ids;
                         }
                     }
                     // Herdr can report interactive readiness before Codex has
-                    // finished opening the resumed and auto-review threads.
+                    // finished opening the resumed thread. Full Access does not
+                    // start an auto-review helper; require the single exact lock.
                     if live.codex_resume_locks.is_empty() {
                         if Instant::now() >= deadline {
                             return Err("flow.session_mismatch".into());
@@ -422,13 +423,13 @@ fn codex_resume_command_session<'a>(argv: &[&'a str]) -> Result<Option<&'a str>,
         }
         other => other,
     };
-    // Accept only launches we issue, including panes started before automatic
-    // review became the default. Unknown flags must not weaken resume evidence.
+    // Accept only launches we issue, including legacy automatic-review panes.
+    // Unknown flags must not weaken resume evidence.
     let (exe, id, cwd, rest) = match argv {
         [
             exe,
             "--no-daemon",
-            "--approve-for-me",
+            "--dangerously-bypass-approvals-and-sandbox" | "--approve-for-me",
             "resume",
             id,
             "-C",
@@ -477,9 +478,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resume_evidence_accepts_automatic_review_and_existing_legacy_panes() {
+    fn resume_evidence_accepts_full_access_and_existing_legacy_panes() {
         let id = "22222222-2222-4222-8222-222222222222";
         for argv in [
+            vec![
+                "codex",
+                "--no-daemon",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "resume",
+                id,
+                "-C",
+                "E:/project",
+                "--model",
+                "test-model",
+                "-c",
+                "model_reasoning_effort=\"high\"",
+            ],
+            vec![
+                "C:/Program Files/nodejs/node.exe",
+                "C:/Users/test/npm/node_modules/@openai/codex/bin/codex.js",
+                "--no-daemon",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "resume",
+                id,
+                "-C",
+                "C:/remote project",
+            ],
             vec![
                 "codex",
                 "--no-daemon",
@@ -558,6 +582,7 @@ mod tests {
                 "codex",
                 "--no-daemon",
                 "--dangerously-bypass-approvals-and-sandbox",
+                "--approve-for-me",
                 "resume",
                 id,
                 "-C",

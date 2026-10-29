@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-29。任务 Codex CLI 新建与精确恢复统一改为 Full Access，保留模型、思考强度、目录及会话隔离；恢复核验适配单一目标写锁，并兼容已有自动审批绑定。运行中的有效绑定沿用原权限。实现见 6.6，验证与限制见[Full Access 验证记录](docs/verification/2026-10-29-codex-full-access.md)。
+
 更新日期：2026-10-29。InProgress 卡片默认压为两行：单行标题与编辑入口、优先级及提示词图标／完成／删除。模型与异常详情按需展开，来源信息并入操作行。浏览器组件实测折叠高度约 78 CSS px；实现见 6.2.1，验证与限制见[两行卡片验证记录](docs/verification/2026-10-29-compact-in-progress.md)。
 
 更新日期：2026-10-29。修复本机默认 Herdr 会话启动误报：`status --json` 中显式 `session: null` 仅在目标为 `default` 时视为匹配，字段缺失及非默认会话仍严格拒绝。启动模块 11 项、前端启动/重试 3 项、生产构建和真实默认 Herdr 只读探测通过；未替换运行中的安装版。实现见 6.1.5，证据见[默认会话启动校验修复](docs/verification/2026-10-29-default-session-startup.md)。
@@ -853,7 +855,7 @@ Herdr 侧栏默认收起且完全隐藏，保留原生快捷键主动展开。�
 
 - 首次启动先写 pending 生命周期意图。按电脑、session + 稳定 workspace ID 查找唯一、名称精确为 `kanban` 的 Tab，每次自动分配都创建新 pane，不选择旧空闲 shell/Codex。不存在该 Tab 时创建一个；已有 Tab 时，在面积最大的 pane 旁按宽高选择右分屏或下分屏。创建及分屏显式指定目录并使用 `--no-focus`；同名 Tab 歧义拒绝创建。
 - 创建前清单、创建回执及唯一预占按电脑/session/workspace 在进程内串行，并与确认清理共用分配锁；外部调用不持 SQLite Mutex，Agent 准备与发送在释放分配锁后继续。不同 workspace 独立分配。旧任务保留原 Tab 中的有效绑定；关闭后再次启动时使用新 pane。手动派发与修复仍使用用户明确选择的目标，并拒绝清理占用或待核实的 pane。
-- 首次启动新会话；新建与恢复均显式使用 `--no-daemon --approve-for-me`，恢复通过命令行 `codex --no-daemon --approve-for-me resume <UUID> -C <目录>` 执行。模式保留 workspace-write 沙箱，审批策略为 on-request，审核者为 auto_review；不修改全局 Codex/Herdr 配置。保留原有效任务绑定时直接连接，沿用该进程当前权限，不创建或发送。旧 Codex 退出准备能力仍供显式调用使用，自动分配不再进入旧 pane。
+- 首次启动新会话；新建与恢复均显式使用 `--no-daemon --dangerously-bypass-approvals-and-sandbox`，恢复通过命令行 `codex --no-daemon --dangerously-bypass-approvals-and-sandbox resume <UUID> -C <目录>` 执行。模式为 Full Access（danger-full-access / never），不启用执行沙箱或执行审批；不修改全局 Codex/Herdr 配置。保留原有效任务绑定时直接连接，沿用该进程当前权限，不创建或发送。旧 Codex 退出准备能力仍供显式调用使用，自动分配不再进入旧 pane。
 - 会话优先接受当前目标身份下 `agent_session.agent=codex`、`kind=id` 且 value 是合法 UUID 的上报；上报缺失的精确 CLI resume 可通过下述当前进程 argv 与 Windows 启动写锁证据核验取得 ID，不猜最近会话或从屏幕提取 ID。首次启动允许暂缺 ID；完成前必须重新从当前目标读取并落库，拿不到时保留 pane。
 - 完成先提交 done，再保存会话、复核目标进程身份、关闭任务 pane，并用成功的 pane 列表确认其已消失后释放绑定。警告与卡片状态分开返回；重试关闭不会对已不存在的 pane 再发关闭请求。已发送关闭但结果不确定时保留 unknown，先核实关闭再允许重新开发，避免迟到关闭影响继续工作。不会关闭 workspace 或其他任务的 pane。
 - 成功完成后的任务返回 dormant，恢复时不解析历史提示词、不发送原 prompt，精确确认恢复的 ID 后进入开发中。旧会话 ID 不会被一次错误 resume 的 ID 覆盖。
@@ -861,11 +863,11 @@ Herdr 侧栏默认收起且完全隐藏，保留原生快捷键主动展开。�
 - 完成只关闭该任务的 pane；同 Tab 的其他 pane 继续保留。最后一个 pane 关闭时 Herdr 会移除 Tab，后续任务需要时重建 `kanban` Tab，不保留额外空终端。
 - 启动和关闭的未知结果仅影响相关任务。延迟核实请求不能覆盖新操作；删除项目和修改项目配置仍受到未决操作约束；删除任务不依赖核实或 Herdr 连接。
 
-2026-10-24 会话隔离修复（[GitHub #17](https://github.com/legendxcheng/ContextSwitcher/issues/17)）：Codex 启动不再复用可能携带其他 pane 环境的共享 app-server。Herdr 只承载窗口及启动命令，实际恢复由 Codex CLI 完成。resume 的 SessionStart 要等首次新输入才上报；补充识别要求目标 interactive_ready、完整身份前后核验一致，且真实前台进程 argv 精确匹配本应用命令。匹配器兼容旧 `--no-daemon resume` 和当前 `--no-daemon --approve-for-me resume`，拒绝未知参数。旧绑定没有启动证据时仍要求唯一目标 UUID 写锁。
+2026-10-24 会话隔离修复（[GitHub #17](https://github.com/legendxcheng/ContextSwitcher/issues/17)）：Codex 启动不再复用可能携带其他 pane 环境的共享 app-server。Herdr 只承载窗口及启动命令，实际恢复由 Codex CLI 完成。resume 的 SessionStart 要等首次新输入才上报；补充识别要求目标 interactive_ready、完整身份前后核验一致，且真实前台进程 argv 精确匹配本应用命令。匹配器接受当前 Full Access 的精确启动参数，同时兼容旧 `--no-daemon resume` 与 `--no-daemon --approve-for-me resume`，拒绝混用权限模式及未知参数。旧绑定没有启动证据时仍要求唯一目标 UUID 写锁。
 
-Approve For Me 下本机 Codex 0.164.0 会额外持有辅助会话写锁。仅在本应用刚执行精确 resume、尚未向 UI 开放该启动结果时，最多等待 5 秒取得包含目标 UUID 的两个写锁 ID，随 Target 持久化；后续校验必须与这次启动集合完全相同。`Cli::validate` 只在完整进程身份一致后沿用证据，运行中不重新采集或按锁数量放行。切换会话导致锁集合变化、句柄查询失败或非 Windows 时拒绝补充分支并保留窗口；不从历史 ID、其他窗口或屏幕猜测，不发送模型恢复探测。该证据依赖当前 Codex 的进程/写锁行为，未知结果保守保留。
+Full Access 的新恢复进程仅接受目标 UUID 的单一写锁；仅在本应用刚执行精确 resume、尚未向 UI 开放该启动结果时，最多等待 5 秒采集并随 Target 持久化。旧 Approve For Me 绑定保存的目标及辅助会话双锁证据继续兼容；后续校验必须与各自启动时的锁集合完全相同。`Cli::validate` 只在完整进程身份一致后沿用证据，运行中不重新采集或按锁数量放行。切换会话导致锁集合变化、句柄查询失败或非 Windows 时拒绝补充分支并保留窗口；不从历史 ID、其他窗口或屏幕猜测，不发送模型恢复探测。该证据依赖当前 Codex 的进程/写锁行为，未知结果保守保留。
 
-原会话隔离增量的 Windows Tauri/WebView2 双任务与归档证据见[会话隔离验收记录](docs/verification/2026-10-24-kanban-session-isolation.md)。本次自动审批增量另在真实 Windows Herdr/Codex + SQLite 验证双任务新建、完成、精确恢复、恢复后数据库重开、无新消息完成、不重发及进程内切换拒绝；权限菜单的新建与恢复检查通过。99 项 Rust 常规测试及生产构建通过；本次未重跑原生 WebView2 拖放或安装包验收，详见 [Approve For Me 验证记录](docs/verification/2026-10-24-kanban-approve-for-me.md)。
+原会话隔离增量的 Windows Tauri/WebView2 双任务与归档证据见[会话隔离验收记录](docs/verification/2026-10-24-kanban-session-isolation.md)。2026-10-24 自动审批增量曾在真实 Windows Herdr/Codex + SQLite 验证双任务新建、完成、精确恢复、恢复后数据库重开、无新消息完成、不重发及进程内切换拒绝；权限菜单的新建与恢复检查通过。99 项 Rust 常规测试及生产构建通过；该轮未重跑原生 WebView2 拖放或安装包验收，详见 [Approve For Me 验证记录](docs/verification/2026-10-24-kanban-approve-for-me.md)。
 
 ### 6.6.1 看板立即响应与后台启动（GitHub #16）
 
