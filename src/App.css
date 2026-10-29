@@ -234,6 +234,34 @@ body {
 .task-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding-top: 9px; border-top: 1px solid var(--border); }
 .task-card .task-actions { flex-wrap: nowrap; }
 
+/* InProgress keeps a title row and an action row; details expand explicitly. */
+.task-footer-meta { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.task-card.status-in_progress { padding: 8px; min-height: 78px; container-type: inline-size; }
+.status-in_progress .task-heading { align-items: center; margin-bottom: 4px; height: 28px; }
+.status-in_progress .task-header { align-items: center; padding-top: 0; }
+.status-in_progress .task-header .agent-status-dot { margin-top: 0; }
+.status-in_progress .task-name { display: block; white-space: nowrap; text-overflow: ellipsis; }
+.status-in_progress .task-footer { height: 28px; }
+.status-in_progress .task-footer-meta { flex: 1; overflow: hidden; }
+.status-in_progress .task-footer > .task-actions { flex-shrink: 0; }
+.status-in_progress .task-priority { min-width: 0; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-card .task-compact-state, .task-card .task-compact-source { min-width: 0; min-height: 28px; padding: 2px 4px; font-size: 12px; background: transparent; color: var(--text-muted); }
+.task-card .task-compact-state { overflow: hidden; justify-content: flex-start; }
+.task-compact-state span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-card .task-compact-state.attention { color: var(--warning); background: #e5b56712; border-color: #e5b56733; }
+.task-card .task-compact-source { gap: 0; justify-content: flex-start; overflow: hidden; white-space: nowrap; }
+.task-compact-source .machine-source, .task-compact-source .summary-workspace { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.task-compact-details:not([hidden]) { margin-top: 6px; border-top: 1px solid var(--border); padding-top: 2px; }
+.task-compact-details .task-notice .machine-source { max-width: none; white-space: normal; overflow-wrap: anywhere; }
+@container (max-width: 230px) {
+  .task-card .task-compact-source { display: none; }
+}
+@container (max-width: 170px) {
+  .task-card.status-in_progress .task-actions .btn-icon { width: 24px; padding-inline: 3px; }
+  .status-in_progress .task-priority { font-size: 11px; padding-inline: 3px; }
+  .task-card.status-in_progress .task-actions .btn-success { padding-inline: 4px; }
+}
+
 /* ── Buttons ─────────────────────────────────────────────────────────────────── */
 button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 6px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); font: inherit; font-size: 14px; font-weight: 500; background: var(--surface-2); color: var(--text); cursor: pointer; transition: background 140ms, border-color 140ms, color 140ms, box-shadow 140ms; }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

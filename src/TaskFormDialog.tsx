@@ -24,6 +24,7 @@ export interface TaskEditorHandle { requestLeave: () => Promise<boolean>; projec
 interface TaskFormProps {
   project: Project; task?: Task; onClose: () => void; onSaved: () => void | Promise<void>;
   unavailable?: boolean;
+  readOnly?: boolean;
 }
 
 export function TaskFormDialog(props: TaskFormProps) { return <TaskForm {...props} />; }
@@ -32,7 +33,7 @@ export function TaskEditPanel(props: TaskFormProps & { task: Task; editorRef: Re
   return <TaskForm {...props} panel />;
 }
 
-function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, unavailable = false }: TaskFormProps & {
+function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, unavailable = false, readOnly = false }: TaskFormProps & {
   panel?: boolean; editorRef?: Ref<TaskEditorHandle>;
 }) {
   const [name, setName] = useState(task?.name ?? "");
@@ -58,7 +59,7 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, u
   const [leaving, setLeaving] = useState(false);
   const leaveResolver = useRef<((allow: boolean) => void) | null>(null);
   const leaveDialog = useRef<HTMLDivElement>(null);
-  const canSubmit = !unavailable && !settingsLoading && settingsValid && (task ? !!name.trim() : hasTaskContent(promptJson));
+  const canSubmit = !readOnly && !unavailable && !settingsLoading && settingsValid && (task ? !!name.trim() : hasTaskContent(promptJson));
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
   const id = useId();
 
@@ -162,37 +163,39 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, u
   const content = <form ref={form} className={panel ? "task-edit-form" : "dialog task-form-dialog"} role={panel ? undefined : "dialog"} aria-modal={panel ? undefined : true} aria-labelledby={`${id}-heading`}
       aria-busy={saving} onSubmit={submit} onKeyDown={keyDown}>
       <div className="task-form-header">
-        <h3 id={`${id}-heading`}>{tr(task ? "task.edit_dialog" : "task.create")}</h3>
+        <h3 id={`${id}-heading`}>{tr(readOnly ? "task.view_prompt" : task ? "task.edit_dialog" : "task.create")}</h3>
         <button type="button" className="btn-icon" disabled={saving} onClick={close} aria-label={tr("common.close")}>✕</button>
       </div>
       <div className="task-form-body">
         {task && <div>
           <label className="field-label" htmlFor={`${id}-title`}>{tr("task.title")}</label>
-          <input ref={titleInput} id={`${id}-title`} className="field-input" value={name} disabled={saving}
+          <input ref={titleInput} id={`${id}-title`} className="field-input" value={name} readOnly={readOnly} disabled={saving}
             placeholder={tr("task.title_placeholder")} onChange={(event) => setName(event.target.value)} />
         </div>}
         <div>
           <label id={`${id}-prompt`} className="field-label">{tr("task.prompt")}</label>
           <PromptEditor content={promptJson} rootPath={project.root_path} projectId={project.machine_id && project.machine_id !== "local" ? project.id : undefined} onChange={setPromptJson}
             getDraftId={draft.getId} onImageBusy={busy => { setImageBusy(busy); if (busy) setImageError(""); }} onImageError={reason => setImageError(String(reason))}
-            labelledBy={`${id}-prompt`} disabled={saving} autoFocus={!task} />
+            labelledBy={`${id}-prompt`} disabled={saving || readOnly} autoFocus={!task} />
+          {readOnly && <p className="field-hint">{tr("task.prompt_readonly")}</p>}
           {imageError && <p role="alert" className="error">{imageError}</p>}
         </div>
         <div>
           <label className="field-label" htmlFor={`${id}-priority`}>{tr("priority.label")}</label>
-          <PrioritySelect id={`${id}-priority`} label={tr("priority.label")} value={priority} onChange={setPriority} disabled={saving} />
+          <PrioritySelect id={`${id}-priority`} label={tr("priority.label")} value={priority} onChange={setPriority} disabled={saving || readOnly} />
         </div>
         {unavailable && <p role="alert" className="error">{tr("summary.project_unavailable")}</p>}
-        <CodexSettingsSelect projectId={project.id} value={codexSettings} disabled={saving || settingsLoading} locked={settingsLocked}
-          onChange={settings => { settingsEdited.current = true; setCodexSettings(settings); }} onValid={setSettingsValid} />
+        {readOnly ? <p>{tr("model.startup")}: {codexSettings.model ?? tr("model.default")} · {codexSettings.effort ?? tr("model.default")}</p>
+          : <CodexSettingsSelect projectId={project.id} value={codexSettings} disabled={saving || settingsLoading} locked={settingsLocked}
+            onChange={settings => { settingsEdited.current = true; setCodexSettings(settings); }} onValid={setSettingsValid} />}
         {error && <p role="alert" className="error">{error}</p>}
       </div>
       <div className="task-form-footer">
         {panel && <span role="status" className="task-save-state">{tr(dirty ? "task.unsaved" : "task.saved")}</span>}
         <button type="button" className="btn-secondary" disabled={saving || (panel && imageBusy)} onClick={close}>{tr(panel ? "common.close" : "common.cancel")}</button>
-        <button type="submit" className="btn-primary" disabled={saving || imageBusy || !canSubmit}>
+        {!readOnly && <button type="submit" className="btn-primary" disabled={saving || imageBusy || !canSubmit}>
           {saving && <span className="spinner" />}{tr(task ? "common.save" : "task.add")}
-        </button>
+        </button>}
       </div>
     </form>;
 

@@ -391,5 +391,12 @@
   "mention.refresh": "Refresh candidates",
   "mention.index_limit": "Directory is too large. Search a more specific subdirectory.",
   "mention.busy": "Search is preparing. Please retry shortly.",
-  "mention.project_changed": "The project directory changed. Reopen the editor."
+  "mention.project_changed": "The project directory changed. Reopen the editor.",
+  "task.complete_short": "Done",
+  "task.details": "Task details",
+  "task.compact_verify": "Verify",
+  "task.compact_failed": "Issue",
+  "task.compact_preparing": "Preparing",
+  "task.view_prompt": "View prompt",
+  "task.prompt_readonly": "Saved prompt. Select text to copy."
 }

@@ -57,7 +57,7 @@ export function PromptEditor({ content, rootPath, projectId, onChange, labelledB
     <EditorContext.Provider value={{ editor }}>
       <div className="prompt-editor-wrap">
         <EditorContent editor={editor} className="prompt-editor" />
-        <p className="image-paste-hint">{tr("image.hint")}</p>
+        {!disabled && <p className="image-paste-hint">{tr("image.hint")}</p>}
         {!disabled && <MentionPopover rootPath={rootPath} projectId={projectId} />}
       </div>
     </EditorContext.Provider>

@@ -74,6 +74,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
   const draggingIdRef = useRef<string | null>(null);
   const dragFromControl = useRef(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [viewingPromptId, setViewingPromptId] = useState<string | null>(null);
   const { agents, refreshAgents } = useAgentStatus(projects);
   const [pendingDispatch, setPendingDispatch] = useState<{ task: Task; paneId: string } | null>(null);
   const [recoveringTaskId, setRecoveringTaskId] = useState<string | null>(null);
@@ -174,6 +175,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
   }
 
   useEffect(() => { mounted.current = true; taskRequest.current = null; void load(); return () => { mounted.current = false; ++loadSequence.current; }; }, [scope]);
+  useEffect(() => { setViewingPromptId(null); }, [scope]);
   useTaskFlowUpdates(projects.map(p => p.id), async () => { await load(false); });
 
   useEffect(() => {
@@ -195,6 +197,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
     setSelectedTaskId((current) => current && removed.has(current) ? null : current);
     setRepairingTaskId((current) => current && removed.has(current) ? null : current);
     setRecoveringTaskId((current) => current && removed.has(current) ? null : current);
+    setViewingPromptId((current) => current && removed.has(current) ? null : current);
     setPendingDispatch((current) => current && removed.has(current.task.id) ? null : current);
     void load();
   }
@@ -316,6 +319,17 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
     const task = tasks.find((t) => t.id === taskId);
     if (!task || taskColumn(task) === targetStatus) return;
     await moveTask(task, targetStatus);
+  }
+
+  async function viewPrompt(task: Task) {
+    const selection = ++selectionSequence.current;
+    const actionScope = scope;
+    if (editorRef.current && !await leaveTodo()) return;
+    if (!mounted.current || actionScope !== scopeRef.current || selection !== selectionSequence.current) return;
+    const current = tasksRef.current.find(t => t.id === task.id);
+    if (!current) return;
+    task = current;
+    setViewingPromptId(task.id);
   }
 
   async function moveTask(task: Task, status: TaskStatus) {
@@ -474,6 +488,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
                           onComplete={() => moveTask(task, "done")}
                           onStart={() => moveTask(task, "in_progress")}
                           onFlowRecover={() => recoverFlow(task)}
+                          onViewPrompt={() => { void viewPrompt(task); }}
                           onChanged={load}
                           onRemoved={() => handleRemoved([task.id])}
                           onRecover={() => setRecoveringTaskId(task.id)}
@@ -554,6 +569,11 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
             onSaved={() => { setEditingTaskId(null); load(); }}
           />
         ) : null;
+      })()}
+      {viewingPromptId && (() => {
+        const task = tasks.find(t => t.id === viewingPromptId);
+        return task ? <TaskFormDialog key={`view-${task.id}`} task={task} project={projectFor(task)} readOnly
+          onClose={() => setViewingPromptId(null)} onSaved={() => {}} /> : null;
       })()}
     </div>
   );

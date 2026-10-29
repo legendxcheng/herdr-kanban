@@ -1,6 +1,8 @@
 import type { CSSProperties } from "react";
 
 const paths = {
+  document: "M5 3h9l5 5v13H5z M14 3v5h5 M8 12h8 M8 16h6",
+  info: "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0 M12 11v6 M12 7h.01",
   board: "M3 4h18v16H3z M9 4v16 M15 4v16 M5.5 8h1 M11.5 8h1 M17.5 8h1",
   folder: "M3 7V5h6l2 2h10v13H3z",
   branch: "M6 6v12 M6 12h6a6 6 0 0 0 6-6 M8 4a2 2 0 1 1-4 0 2 2 0 0 1 4 0 M8 20a2 2 0 1 1-4 0 2 2 0 0 1 4 0 M20 4a2 2 0 1 1-4 0 2 2 0 0 1 4 0",

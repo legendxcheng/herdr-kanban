@@ -391,5 +391,12 @@
   "mention.refresh": "刷新候选列表",
   "mention.index_limit": "目录过大，请输入更具体的子目录后搜索",
   "mention.busy": "搜索准备中，请稍后重试",
-  "mention.project_changed": "项目目录已变化，请重新打开编辑器"
+  "mention.project_changed": "项目目录已变化，请重新打开编辑器",
+  "task.complete_short": "完成",
+  "task.details": "任务详情",
+  "task.compact_verify": "需核实",
+  "task.compact_failed": "异常",
+  "task.compact_preparing": "准备中",
+  "task.view_prompt": "查看提示词",
+  "task.prompt_readonly": "已保存的提示词，可选中文字复制。"
 }
