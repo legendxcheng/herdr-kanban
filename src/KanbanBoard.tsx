@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, type RefObject } from "react";
 import type { Task, Project, TaskStatus, Machine } from "./types";
 import { TaskCard } from "./TaskCard";
+import { ResetTaskDialog } from "./ResetTaskDialog";
 import { DispatchDialog } from "./DispatchDialog";
 import { TaskEditPanel, TaskFormDialog, type TaskEditorHandle } from "./TaskFormDialog";
 import * as api from "./api";
@@ -75,10 +76,16 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
   const dragFromControl = useRef(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [viewingPromptId, setViewingPromptId] = useState<string | null>(null);
+  const [pendingReset, setPendingReset] = useState<{ task: Task; requestId: string } | null>(null);
+  const resetInFlight = useRef(false);
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useLocalizedMessage();
   const { agents, refreshAgents } = useAgentStatus(projects);
   const [pendingDispatch, setPendingDispatch] = useState<{ task: Task; paneId: string } | null>(null);
   const [recoveringTaskId, setRecoveringTaskId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [shellProjectId, setShellProjectId] = useState<string | null>(null);
+  const shellWorkspace = project && shellProjectId === project.id ? project : undefined;
   const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null);
   const localEditorRef = useRef<TaskEditorHandle>(null);
   const editorRef = externalEditorRef ?? localEditorRef;
@@ -175,7 +182,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
   }
 
   useEffect(() => { mounted.current = true; taskRequest.current = null; void load(); return () => { mounted.current = false; ++loadSequence.current; }; }, [scope]);
-  useEffect(() => { setViewingPromptId(null); }, [scope]);
+  useEffect(() => { setViewingPromptId(null); setPendingReset(null); setShellProjectId(null); }, [scope]);
   useTaskFlowUpdates(projects.map(p => p.id), async () => { await load(false); });
 
   useEffect(() => {
@@ -198,6 +205,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
     setRepairingTaskId((current) => current && removed.has(current) ? null : current);
     setRecoveringTaskId((current) => current && removed.has(current) ? null : current);
     setViewingPromptId((current) => current && removed.has(current) ? null : current);
+    setPendingReset((current) => current && removed.has(current.task.id) ? null : current);
     setPendingDispatch((current) => current && removed.has(current.task.id) ? null : current);
     void load();
   }
@@ -275,6 +283,15 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
     setCreatingTask(true);
   }
 
+  async function openWorkspaceTerminal() {
+    if (!project) return;
+    const selection = ++selectionSequence.current;
+    const selectionScope = scope;
+    if (editorRef.current && !await leaveTodo()) return;
+    if (!mounted.current || selectionScope !== scopeRef.current || selection !== selectionSequence.current) return;
+    setShellProjectId(project.id);
+  }
+
   async function leaveTodo() {
     if (await editorRef.current?.requestLeave() === false || !mounted.current) return false;
     setSelectedTodoId(null);
@@ -294,6 +311,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
       task = target;
     }
     if (!mounted.current || selectionScope !== scopeRef.current || selection !== selectionSequence.current) return;
+    setShellProjectId(null);
     if (taskColumn(task) === "todo") setSelectedTodoId(task.id);
     else if (taskColumn(task) === "done") setEditingTaskId(task.id);
     else { defaultSelectionSuppressed.current = false; setSelectedTaskId(task.id); }
@@ -321,7 +339,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
     await moveTask(task, targetStatus);
   }
 
-  async function viewPrompt(task: Task) {
+  async function openTaskAction(task: Task, action: "view" | "reset") {
     const selection = ++selectionSequence.current;
     const actionScope = scope;
     if (editorRef.current && !await leaveTodo()) return;
@@ -329,7 +347,29 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
     const current = tasksRef.current.find(t => t.id === task.id);
     if (!current) return;
     task = current;
-    setViewingPromptId(task.id);
+    if (action === "view") setViewingPromptId(task.id);
+    else { setResetError(""); setPendingReset({ task, requestId: crypto.randomUUID() }); }
+  }
+
+  async function resetTask() {
+    if (!pendingReset || resetInFlight.current) return;
+    const { task, requestId } = pendingReset;
+    const selection = ++selectionSequence.current;
+    const resetScope = scope;
+    resetInFlight.current = true; setResetBusy(true); setResetError("");
+    try {
+      const reset = await api.resetTask(task, requestId);
+      optimisticStarts.current.delete(task.id);
+      ++loadSequence.current;
+      // A committed reset remains visible even if the subsequent refresh fails.
+      setTasks(current => current.map(t => t.id === task.id ? reset : t));
+      setPendingReset(null);
+      if (mounted.current && resetScope === scopeRef.current && selection === selectionSequence.current) {
+        if (taskColumn(reset) === "todo") { setSelectedTaskId(null); setSelectedTodoId(task.id); }
+      }
+      void load();
+    } catch (error) { setResetError(String(error)); }
+    finally { resetInFlight.current = false; setResetBusy(false); }
   }
 
   async function moveTask(task: Task, status: TaskStatus) {
@@ -351,6 +391,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
       optimisticStarts.current.set(task.id, flow);
       ++loadSequence.current;
       setTasks(current => current.map(t => t.id === task.id ? { ...t, flow } : t));
+      setShellProjectId(null);
       setSelectedTaskId(task.id);
     }
     try {
@@ -407,6 +448,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
             <div className="board-toolbar-actions">
               <span className="board-summary">{tr("board.summary", { done: tasks.filter(task => taskColumn(task) === "done").length, total: tasks.length })}</span>
               <button className="btn-primary" onClick={() => void createTask()}><Icon name="plus" />{tr("task.create")}<kbd>N</kbd></button>
+              {project && <button className="btn-secondary" aria-pressed={!!shellWorkspace} onClick={() => void openWorkspaceTerminal()}>{tr("workspace_terminal.open")}</button>}
               {project && <IdleCleanupButton key={project.id} projectId={project.id} workspace={project.name}
                 machine={machineName ?? machineLabel(project.machine_id ?? "local", undefined)} onChanged={() => void load()} />}
             </div>
@@ -481,18 +523,24 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
                       >
                         <TaskCard
                           task={task}
-                          source={summary ? `${machineFor(task)} · ${projectFor(task).name}` : undefined}
+                          source={summary ? {
+                            machineId: projectFor(task).machine_id ?? "local",
+                            machineName: machineFor(task) ?? "",
+                            workspaceId: projectFor(task).id,
+                            workspaceName: projectFor(task).name,
+                          } : undefined}
                           agentStatus={agentStatuses.get(task.id)!}
                           busy={busyTasks.has(task.id)}
                           removing={bulkTaskIds.has(task.id)}
                           onComplete={() => moveTask(task, "done")}
                           onStart={() => moveTask(task, "in_progress")}
                           onFlowRecover={() => recoverFlow(task)}
-                          onViewPrompt={() => { void viewPrompt(task); }}
+                          onViewPrompt={() => { void openTaskAction(task, "view"); }}
+                          onReset={() => { void openTaskAction(task, "reset"); }}
                           onChanged={load}
                           onRemoved={() => handleRemoved([task.id])}
                           onRecover={() => setRecoveringTaskId(task.id)}
-                          selected={(selectedTodoId ?? selectedTaskId) === task.id}
+                          selected={!shellWorkspace && (selectedTodoId ?? selectedTaskId) === task.id}
                           onSelect={summary || taskColumn(task) !== "done" ? () => { void selectTask(task); } : undefined}
                           onEditTask={editTask}
                           onDispatchTask={async (id) => {
@@ -529,7 +577,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
           setSelectedTodoId(null);
           setSelectedTaskId(current => current ?? tasks.find(task => taskColumn(task) === "in_progress")?.id ?? null);
         }} onSaved={async () => { await load(); }} /> :
-      <TerminalPanel task={selectedTask} machineName={machineFor(selectedTask)} maximized={terminalMaximized} onToggleMaximized={onToggleTerminalMaximized} onRepair={selectedTask ? () => {
+      <TerminalPanel task={shellWorkspace ? null : selectedTask} workspace={shellWorkspace} machineName={shellWorkspace ? machineName ?? machineLabel(shellWorkspace.machine_id ?? "local", undefined) : machineFor(selectedTask)} maximized={terminalMaximized} onToggleMaximized={onToggleTerminalMaximized} onRepair={!shellWorkspace && selectedTask ? () => {
         if (selectedTask.binding?.operation) setRecoveringTaskId(selectedTask.id);
         else setRepairingTaskId(selectedTask.id);
       } : undefined} />}
@@ -544,6 +592,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
           onClose={() => setPendingDispatch(null)}
           onDispatched={() => {
             defaultSelectionSuppressed.current = false;
+            setShellProjectId(null);
             setSelectedTaskId(pendingDispatch.task.id);
             setPendingDispatch(null); void load();
           }}
@@ -575,6 +624,8 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
         return task ? <TaskFormDialog key={`view-${task.id}`} task={task} project={projectFor(task)} readOnly
           onClose={() => setViewingPromptId(null)} onSaved={() => {}} /> : null;
       })()}
+      {pendingReset && <ResetTaskDialog name={pendingReset.task.name} busy={resetBusy} error={resetError}
+        onCancel={() => setPendingReset(null)} onConfirm={() => { void resetTask(); }} />}
     </div>
   );
 }

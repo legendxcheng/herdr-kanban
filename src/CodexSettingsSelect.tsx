@@ -6,8 +6,8 @@ import { errorText, tr } from "./i18n";
 export const defaultCodexSettings: CodexSettings = { model: null, effort: null };
 export function sameCodexSettings(a: CodexSettings, b: CodexSettings) { return a.model === b.model && a.effort === b.effort; }
 
-export function CodexSettingsSelect({ projectId, value, onChange, disabled, locked, onValid }: {
-  projectId: string; value: CodexSettings; onChange: (value: CodexSettings) => void;
+export function CodexSettingsSelect({ projectId, remote, value, onChange, disabled, locked, onValid }: {
+  projectId: string; remote: boolean; value: CodexSettings; onChange: (value: CodexSettings) => void;
   disabled: boolean; locked: boolean; onValid: (valid: boolean) => void;
 }) {
   const id = useId();
@@ -48,10 +48,10 @@ export function CodexSettingsSelect({ projectId, value, onChange, disabled, lock
       </div>
     </div>
     {locked ? <p className="field-hint">{tr("model.locked_hint")}</p> : <>
-      <div className="codex-catalog-status"><span aria-live="polite">{tr(loading ? "model.loading" : catalog?.cached ? "model.cached" : "model.catalog_hint")}</span>
+      <div className="codex-catalog-status"><span aria-live="polite">{tr(loading ? "model.loading" : catalog?.cached ? remote ? "model.remote_cached" : "model.cached" : "model.catalog_hint")}</span>
         <button type="button" className="btn-ghost" disabled={loading || disabled} onClick={() => setRefresh(n => n + 1)}>{tr("model.refresh")}</button>
       </div>
-      {error && <p className="field-hint">{errorText(error)} · {tr("model.catalog_fallback")}</p>}
+      {error && <p className="field-hint">{errorText(error)} · {tr(remote ? "model.remote_catalog_fallback" : "model.catalog_fallback")}</p>}
       {invalid && <p role="alert" className="error">{tr("model.invalid_choice")}</p>}
     </>}
   </div>;

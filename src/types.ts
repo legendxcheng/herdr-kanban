@@ -47,6 +47,7 @@ export interface WorkspaceOperation { machine_id?: string; id: string; session: 
 export interface ProjectSnapshot { session: string; projects: Project[]; workspaces: HerdrWorkspace[]; operations: WorkspaceOperation[] }
 
 export interface Task {
+  execution_epoch?: number;
   codex_settings?: CodexSettings;
   codex_settings_editable?: boolean;
   priority: TaskPriority;

@@ -4,12 +4,13 @@ import * as api from "./api";
 import { notify } from "./Toast";
 import { Icon } from "./Icon";
 import { errorText, tr, useLocalizedMessage } from "./i18n";
-import { flowPending, flowUnresolved, preparationLabel, taskColumn } from "./taskFlow";
+import { canResetTask, flowPending, flowUnresolved, preparationLabel, taskColumn } from "./taskFlow";
 import { AgentStatusDot, type AgentStatus } from "./agentStatus";
+import { identityColor } from "./identityColors";
 
 interface TaskCardProps {
   task: Task;
-  source?: string;
+  source?: { machineId: string; machineName: string; workspaceId: string; workspaceName: string };
   agentStatus: AgentStatus;
   onChanged: () => void;
   onRemoved: () => void;
@@ -24,9 +25,10 @@ interface TaskCardProps {
   onStart: () => void;
   onFlowRecover?: () => void;
   onViewPrompt?: () => void;
+  onReset?: () => void;
 }
 
-export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, removing, onComplete, onStart, onFlowRecover, onViewPrompt }: TaskCardProps) {
+export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, removing, onComplete, onStart, onFlowRecover, onViewPrompt, onReset }: TaskCardProps) {
   const archivingRef = useRef(false);
   const deletingRef = useRef(false);
   const [deleting, setDeleting] = useState(false);
@@ -43,11 +45,15 @@ export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEd
   const detailsId = useId();
   const hasModel = !!(task.codex_settings?.model || task.codex_settings?.effort);
   const statusKey = task.flow?.state === "unknown" || task.binding?.operation ? "task.compact_verify"
-    : task.flow?.state === "failed" || task.flow?.error || task.cleanup_required ? "task.compact_failed"
+    : task.flow?.state === "failed" || task.flow?.error || task.cleanup_required || canResetTask(task) ? "task.compact_failed"
     : preparation || busy ? "task.compact_preparing" : null;
   const toggleDetails = () => setDetailsOpen(open => !open);
-  const sourceLabel = source ?? "";
-  const sourceContent = source && <span className="summary-workspace">{source}</span>;
+  const sourceLabel = source ? `${source.machineName} · ${source.workspaceName}` : "";
+  const sourceContent = source && <>
+    <span className="machine-source" style={{ color: identityColor("machine", source.machineId) }}>{source.machineName}</span>
+    <span className="summary-source-separator"> · </span>
+    <span className="summary-workspace" style={{ color: identityColor("workspace", source.workspaceId) }}>{source.workspaceName}</span>
+  </>;
   const controls = {
     onClick: (event: React.MouseEvent) => event.stopPropagation(),
     onKeyDown: (event: React.KeyboardEvent) => event.stopPropagation(),
@@ -134,9 +140,10 @@ export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEd
       {(task.codex_settings?.model || task.codex_settings?.effort) && <p className="task-model" title={tr("model.startup")}>{task.codex_settings.model ?? tr("model.default")} · {task.codex_settings.effort ?? tr("model.default")}</p>}
       {(preparation || busy) && <p role="status" className="task-notice">{tr(preparation ?? "flow.busy")}</p>}
       {task.flow?.error && <p className="error task-notice">{errorText(task.flow.error)}</p>}
-      {(flowUnresolved(task) || taskColumn(task) === "in_progress") && <div className="task-recovery" {...controls}>
+      {(flowUnresolved(task) || canResetTask(task) || taskColumn(task) === "in_progress") && <div className="task-recovery" {...controls}>
         {!compact && <button className="btn-secondary" disabled={deleting || removing} onClick={onViewPrompt}>{tr("task.view_prompt")}</button>}
         {compact && task.flow?.kind === "start" && task.flow.state === "failed" && <button disabled={controlsDisabled} onClick={onStart} className="btn-secondary">{tr("flow.retry_start")}</button>}
+        {canResetTask(task) && <button className="btn-secondary" disabled={disabled} onClick={onReset}>{tr("reset.action")}</button>}
       </div>}
       {taskColumn(task) === "done" && archiveReason && <p className="task-notice">{tr(archiveReason)}</p>}
       {archiveError && <p role="alert" className="error task-notice">{archiveError}</p>}

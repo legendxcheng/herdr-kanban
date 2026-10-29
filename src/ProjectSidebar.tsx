@@ -12,6 +12,7 @@ import { LanguageSelect } from "./LanguageSelect";
 import { MachineDialog } from "./MachineDialog";
 import { WorkspaceAddDialog, machineLabel } from "./WorkspaceAddDialog";
 import { WorkspaceActionDialog } from "./WorkspaceActionDialog";
+import { identityColor } from "./identityColors";
 
 interface ProjectSidebarProps {
   machines?: Machine[];
@@ -148,10 +149,10 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
               <span className="project-info">
                 <span className="project-title">
                   <span className={`project-machine machine-${machineState}`} title={machineTitle}>
-                    <span className="project-machine-name">{group.id === "local" ? "local" : group.name}</span>
+                    <span className="project-machine-name" style={{ color: identityColor("machine", group.id) }}>{group.id === "local" ? "local" : group.name}</span>
                     {machineState !== "unknown" && <span className="project-machine-status" aria-hidden="true" />}
                   </span>
-                  <span className="project-name">{p.name}</span>
+                  <span className="project-name" style={{ color: identityColor("workspace", p.id) }}>{p.name}</span>
                 </span>
                 <span className="project-meta">
                   <span className="project-ws" title={`${label}\n${p.root_path}`}><Icon name="branch" size={13} /><span>{label}</span></span>

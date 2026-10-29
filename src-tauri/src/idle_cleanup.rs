@@ -88,6 +88,9 @@ pub(crate) fn recover(db: &Connection) -> rusqlite::Result<()> {
 
 fn eligible_owner(db: &Connection, pane: &IdlePane) -> Result<Option<Owner>, String> {
     let t = &pane.target;
+    if crate::workspace_terminal::owns(db, t)? {
+        return Err("cleanup.protected".into());
+    }
     if crate::lifecycle::pane_allocation::quarantines(db, t)? {
         return Err("cleanup.protected".into());
     }

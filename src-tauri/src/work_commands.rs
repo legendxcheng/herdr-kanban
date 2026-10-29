@@ -174,6 +174,37 @@ pub fn terminal_close(
 ) {
     native.close(&connection_id);
 }
+
+#[tauri::command]
+pub async fn workspace_terminal_open(
+    window: tauri::Window,
+    app: State<'_, Arc<Workflow>>,
+    native: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
+    search: State<'_, Arc<crate::mention_search::Search>>,
+    project_id: String,
+    connection_id: String,
+    bounds: crate::native_terminal::Bounds,
+    output: tauri::ipc::Channel<Output>,
+) -> Result<String, String> {
+    let app = app.inner().clone();
+    let native = native.inner().clone();
+    let search = search.inner().clone();
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    let view = native.select_owner(
+        connection_id.clone(),
+        crate::native_terminal::Owner::Workspace(project_id),
+        bounds,
+        Arc::new(move |packet| {
+            let _ = output.send(packet);
+        }),
+    )?;
+    tauri::async_runtime::spawn_blocking(move || {
+        native.open(view, app, search, hwnd)?;
+        Ok(connection_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
 #[tauri::command]
 pub fn terminal_bounds(
     native: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,

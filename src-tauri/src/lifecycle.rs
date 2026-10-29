@@ -47,7 +47,7 @@ pub fn ensure_idle(db: &Connection, task: &str, own: Option<&str>) -> Result<(),
     Ok(())
 }
 
-fn ensure_operation(db: &Connection, task: &str, id: &str) -> Result<(), String> {
+pub(crate) fn ensure_operation(db: &Connection, task: &str, id: &str) -> Result<(), String> {
     ensure_idle(db, task, Some(id))?;
     let active: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM lifecycle_operations WHERE id=?1 AND task_id=?2 AND state IN ('pending','unknown'))",params![id,task],|r|r.get(0)).map_err(err)?;
     if !active {
@@ -149,6 +149,16 @@ pub(crate) fn begin_flow_in(
 }
 
 impl Workflow {
+    fn with_operation<T>(
+        &self,
+        task: &str,
+        op: &str,
+        write: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let db = self.db.lock().map_err(err)?;
+        ensure_operation(&db, task, op)?;
+        write(&db)
+    }
     fn check_flow(&self, task: &str, op: &str) -> Result<(), String> {
         let db = self.db.lock().map_err(err)?;
         crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
@@ -253,11 +263,12 @@ impl Workflow {
     fn save_session(
         &self,
         task: &str,
+        op: &str,
         target: &Target,
         cwd: &str,
         expected: Option<&str>,
     ) -> Result<Option<String>, String> {
-        crate::tasks::ensure_active(&*self.db.lock().map_err(err)?, task)?;
+        ensure_operation(&*self.db.lock().map_err(err)?, task, op)?;
         let id = self.herdr.session_id(target)?;
         if expected.is_some() && id.as_deref() != expected {
             return Err("flow.session_mismatch".into());
@@ -267,7 +278,7 @@ impl Workflow {
                 return Err("flow.session_invalid".into());
             }
             let db = self.db.lock().map_err(err)?;
-            crate::tasks::ensure_active(&db, task)?;
+            ensure_operation(&db, task, op)?;
             db.execute("INSERT INTO task_sessions(task_id,codex_session_id,cwd,updated_at) VALUES (?1,?2,?3,?4) ON CONFLICT(task_id) DO UPDATE SET codex_session_id=excluded.codex_session_id,cwd=excluded.cwd,updated_at=excluded.updated_at",params![task,id,cwd,now()]).map_err(err)?;
         }
         Ok(id)
@@ -329,18 +340,17 @@ impl Workflow {
                     if live.agent != "codex" {
                         return Err("flow.codex_required".into());
                     }
-                    self.save_session(task, &live, &cwd, None)?;
+                    self.save_session(task, op, &live, &cwd, None)?;
                     self.activate(task, op, &live)?;
                     return Ok(Outcome::default());
                 }
                 if saved.is_none() {
                     return Err("flow.session_missing".into());
                 }
-                self.db
-                    .lock()
-                    .map_err(err)?
-                    .execute("DELETE FROM task_bindings WHERE task_id=?1", [task])
-                    .map_err(err)?;
+                self.with_operation(task, op, |db| {
+                    db.execute("DELETE FROM task_bindings WHERE task_id=?1", [task])
+                        .map_err(err)
+                })?;
             } else if b.state == "repair" && saved.is_none() {
                 return Err("binding.repair_required".into());
             }
@@ -348,7 +358,11 @@ impl Workflow {
                 return Err("dispatch.empty".into());
             }
             let settings = crate::codex_settings::freeze(&*self.db.lock().map_err(err)?, task, op)?;
-            if settings.explicit() {
+            settings.validate()?;
+            // SSH helpers and Herdr's panes can resolve different Codex environments.
+            // Let Herdr launch remote tasks with the frozen arguments even when the
+            // helper cannot run `codex debug models`; keep the local preflight.
+            if settings.explicit() && self.herdr.machine_id() == crate::machines::LOCAL_ID {
                 progress("checking_model")?;
                 self.herdr.codex_catalog(&cwd)?.validate(&settings)?;
                 self.check_flow(task, op)?;
@@ -391,15 +405,14 @@ impl Workflow {
                     error
                 })?;
             self.reserve_target(task, op, &live)?;
-            self.save_session(task, &live, &cwd, saved.as_deref())?;
-            self.db
-                .lock()
-                .map_err(err)?
-                .execute(
+            self.save_session(task, op, &live, &cwd, saved.as_deref())?;
+            self.with_operation(task, op, |db| {
+                db.execute(
                     "UPDATE task_bindings SET state='valid' WHERE task_id=?1",
                     [task],
                 )
-                .map_err(err)?;
+                .map_err(err)
+            })?;
             if saved.is_none() {
                 progress("dispatching")?;
                 self.dispatch_inner(
@@ -410,7 +423,7 @@ impl Workflow {
                     Some(op),
                 )?;
                 // Some integrations only report an ID after the first prompt.
-                let _ = self.save_session(task, &live, &cwd, None);
+                let _ = self.save_session(task, op, &live, &cwd, None);
             }
             self.activate(task, op, &live)?;
             Ok(Outcome::default())
@@ -432,14 +445,9 @@ impl Workflow {
             return Ok(Outcome::default());
         }
         // Completion is a business decision, independent from external cleanup success.
-        self.db
-            .lock()
-            .map_err(err)?
-            .execute(
-                "UPDATE tasks SET status='done',completed_at=CASE WHEN status='done' THEN completed_at ELSE ?2 END,updated_at=?2 WHERE id=?1",
-                params![task, now()],
-            )
-            .map_err(err)?;
+        self.with_operation(task, op, |db| {
+            db.execute("UPDATE tasks SET status='done',completed_at=CASE WHEN status='done' THEN completed_at ELSE ?2 END,updated_at=?2 WHERE id=?1", params![task, now()]).map_err(err)
+        })?;
         let mut close_attempted = false;
         let result = (|| {
             if let Some(target) = self.binding(task)?.target {
@@ -450,7 +458,7 @@ impl Workflow {
                         return Err("flow.codex_required".into());
                     }
                     // Refresh from this exact live occupant; an old saved ID is not sufficient.
-                    self.save_session(task, &live, &cwd, None)?
+                    self.save_session(task, op, &live, &cwd, None)?
                         .ok_or("flow.session_missing")?;
                     close_attempted = true;
                     self.check_flow(task, op)?;
@@ -460,11 +468,10 @@ impl Workflow {
                         return Err("flow.close_pending".into());
                     }
                 }
-                self.db
-                    .lock()
-                    .map_err(err)?
-                    .execute("DELETE FROM task_bindings WHERE task_id=?1", [task])
-                    .map_err(err)?;
+                self.with_operation(task, op, |db| {
+                    db.execute("DELETE FROM task_bindings WHERE task_id=?1", [task])
+                        .map_err(err)
+                })?;
             }
             Ok::<_, String>(())
         })();
@@ -475,14 +482,13 @@ impl Workflow {
             }
             Err(error) => {
                 // Keep ownership, but allow a deliberate cleanup retry or reconnect to this task.
-                self.db
-                    .lock()
-                    .map_err(err)?
-                    .execute(
+                self.with_operation(task, op, |db| {
+                    db.execute(
                         "UPDATE task_bindings SET state='valid' WHERE task_id=?1",
                         [task],
                     )
-                    .map_err(err)?;
+                    .map_err(err)
+                })?;
                 self.end_flow(
                     op,
                     if close_attempted { "unknown" } else { "failed" },
@@ -531,7 +537,7 @@ impl Workflow {
             if let Some(target) = b.target.as_ref() {
                 let (_, cwd, _) = self.project_context(task)?;
                 if self
-                    .save_session(task, target, &cwd, flow.session_id.as_deref())?
+                    .save_session(task, op, target, &cwd, flow.session_id.as_deref())?
                     .is_none()
                 {
                     return Err("flow.session_missing".into());

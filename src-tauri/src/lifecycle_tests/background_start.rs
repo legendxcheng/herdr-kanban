@@ -1,6 +1,80 @@
 use super::*;
 
 #[test]
+fn ssh_configured_start_and_resume_do_not_require_a_catalog() {
+    let (app, fake) = fixture_on(true);
+    let app = Arc::new(app);
+    fake.0.lock().unwrap().catalog_error = true;
+    let settings = crate::codex_settings::Settings {
+        model: Some("test-model".into()),
+        effort: Some("high".into()),
+    };
+    crate::codex_settings::save(&app.db.lock().unwrap(), "a", &settings, false).unwrap();
+    set_prompt(&app, "a", "send once");
+    app.submit_start("a", &op(), Arc::new(|_| {})).unwrap();
+    assert_eq!(await_start(&app, "a").state.as_deref(), Some("succeeded"));
+    let session = saved(&app, "a");
+    assert!(session.is_some());
+    app.complete_task("a", &op()).unwrap();
+    app.submit_start("a", &op(), Arc::new(|_| {})).unwrap();
+    assert_eq!(await_start(&app, "a").state.as_deref(), Some("succeeded"));
+    assert_eq!(saved(&app, "a"), session);
+    let state = fake.0.lock().unwrap();
+    assert!(state.catalog_directories.is_empty());
+    assert_eq!(state.settings, vec![settings.clone(), settings]);
+    assert_eq!(state.sent, vec!["send once"]);
+}
+
+#[test]
+fn ssh_catalog_bypass_preserves_start_failure_without_sending_or_fallback() {
+    let (app, fake) = fixture_on(true);
+    let settings = crate::codex_settings::Settings {
+        model: Some("test-model".into()),
+        effort: None,
+    };
+    crate::codex_settings::save(&app.db.lock().unwrap(), "a", &settings, false).unwrap();
+    {
+        let mut state = fake.0.lock().unwrap();
+        state.catalog_error = true;
+        state.prepare_error = true;
+    }
+    assert_eq!(
+        app.start_task("a", "never send", &op()).unwrap_err(),
+        "timeout"
+    );
+    assert_eq!(
+        view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+        Some("unknown")
+    );
+    let state = fake.0.lock().unwrap();
+    assert!(state.catalog_directories.is_empty());
+    assert_eq!(state.settings, vec![settings]);
+    assert!(state.sent.is_empty());
+    assert_eq!(state.created, 1);
+}
+
+#[test]
+fn ssh_catalog_bypass_still_rejects_malformed_settings_before_pane_creation() {
+    let (app, fake) = fixture_on(true);
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO task_codex_settings(task_id,model) VALUES ('a','bad model')",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        app.start_task("a", "never send", &op()).unwrap_err(),
+        "model.invalid_settings"
+    );
+    let state = fake.0.lock().unwrap();
+    assert!(state.catalog_directories.is_empty());
+    assert_eq!(state.created, 0);
+    assert!(state.sent.is_empty());
+}
+
+#[test]
 fn catalog_cache_is_directory_scoped_and_offline_choices_cannot_start_unvalidated() {
     let (app, fake) = fixture();
     app.db

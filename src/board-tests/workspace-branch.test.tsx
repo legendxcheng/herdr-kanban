@@ -48,7 +48,7 @@ it("Herdr 离线时焦点和手动刷新仍读取本地分支", async () => {
   await screen.findByText(/同步失败/);
   await waitFor(() => expect(label().textContent).toBe(state.head));
   state.head = "feature/manual-refresh";
-  fireEvent.click(screen.getByRole("button", { name: "同步工作空间" }));
+  fireEvent.click(screen.getByRole("button", { name: "重试连接" }));
   await waitFor(() => expect(label().textContent).toBe(state.head));
 });
 

@@ -8,6 +8,11 @@ export function flowUnresolved(task: Task) {
   return flowPending(task) || task.flow?.state === "unknown" || !!task.binding?.operation;
 }
 
+export function canResetTask(task: Task) {
+  return !task.archived_at && !flowPending(task) && task.binding?.state !== "pending"
+    && (["failed", "unknown"].includes(task.flow?.state ?? "") || task.binding?.state === "unknown");
+}
+
 export function taskColumn(task: Task): TaskStatus {
   return task.flow?.kind === "start" && flowUnresolved(task)
     ? task.flow.requested_status ?? task.status : task.status;

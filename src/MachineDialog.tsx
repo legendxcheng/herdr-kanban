@@ -53,6 +53,12 @@ export function MachineDialog({ machines, onChanged, onClose, onConnected }: {
       throw e;
     }
   }
+  function enroll(configureKey: boolean) {
+    void run(async () => {
+      const result = await api.enrollMachine(target.trim(), session.trim(), configureKey);
+      if (alive.current) setOperation(result);
+    });
+  }
   useEffect(() => {
     if (!operation || operation.state !== "waiting") return;
     let active = true;
@@ -107,10 +113,9 @@ export function MachineDialog({ machines, onChanged, onClose, onConnected }: {
       </div>
       <div className="dialog-section"><label htmlFor="machine-target">{tr("machine.ssh_alias")}</label><input id="machine-target" placeholder="devpc" value={target} disabled={busy || waiting} onChange={e => setTarget(e.target.value)} />
         <label htmlFor="machine-session">{tr("machine.session")}</label><input id="machine-session" value={session} disabled={busy || waiting} onChange={e => setSession(e.target.value)} />
-        <button className="btn-secondary" disabled={busy || waiting || !target.trim() || !session.trim()} onClick={() => void run(async () => {
-          const result = await api.enrollMachine(target.trim(), session.trim());
-          if (alive.current) setOperation(result);
-        })}>{tr("machine.enroll")}</button>
+        <p className="hint">{tr("machine.enroll_help")}</p>
+        <button className="btn-primary" disabled={busy || waiting || !target.trim() || !session.trim()} onClick={() => enroll(false)}>{tr("machine.connect_existing")}</button>
+        <button className="btn-secondary" disabled={busy || waiting || !target.trim() || !session.trim()} onClick={() => enroll(true)}>{tr("machine.enroll")}</button>
       </div>
       {waiting && <p role="status">{tr("machine.enroll_waiting")}</p>}
       {busy && <p role="status">{tr("machine.connecting")}</p>}

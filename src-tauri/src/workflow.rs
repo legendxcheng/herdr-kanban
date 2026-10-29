@@ -52,6 +52,31 @@ pub(crate) fn ensure_project_target(
 }
 
 pub trait Herdr: Send + Sync {
+    fn workspace_terminal_live(
+        &self,
+        _target: &crate::workspace_terminal::Target,
+    ) -> Result<bool, String> {
+        Err("terminal.unsupported".into())
+    }
+    fn find_workspace_terminal(
+        &self,
+        _workspace: &str,
+        _operation: &str,
+    ) -> Result<Option<crate::workspace_terminal::Target>, String> {
+        Err("terminal.unsupported".into())
+    }
+    fn create_workspace_terminal(
+        &self,
+        _workspace: &str,
+        _cwd: &str,
+        _operation: &str,
+        _check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<crate::workspace_terminal::Target, SendError> {
+        Err(SendError {
+            message: "terminal.unsupported".into(),
+            uncertain: false,
+        })
+    }
     fn idle_panes(&self, _workspace: &str) -> Result<Vec<crate::idle_cleanup::IdlePane>, String> {
         Err("flow.unsupported".into())
     }
@@ -321,6 +346,12 @@ pub fn binding(conn: &Connection, task: &str) -> Result<Binding, String> {
 }
 
 pub fn pane_owner(conn: &Connection, target: &Target) -> Result<Option<String>, String> {
+    if crate::workspace_terminal::owns(conn, target)? {
+        return Ok(Some("workspace-terminal".into()));
+    }
+    if crate::task_reset::quarantined(conn, target)? {
+        return Ok(Some("retired-execution".into()));
+    }
     conn.query_row(
         "SELECT task_id FROM task_bindings WHERE session=?1 AND pane_id=?2 AND machine_id=?3",
         params![target.session, target.pane_id, target.machine_id],
@@ -331,6 +362,9 @@ pub fn pane_owner(conn: &Connection, target: &Target) -> Result<Option<String>, 
 }
 fn ensure_available(conn: &Connection, target: &Target, task: &str) -> Result<(), String> {
     crate::idle_cleanup::ensure_unclaimed(conn, target, None)?;
+    if crate::lifecycle::pane_allocation::quarantines(conn, target)? {
+        return Err("binding.occupied".into());
+    }
     if pane_owner(conn, target)?
         .as_deref()
         .is_some_and(|owner| owner != task)
@@ -343,6 +377,7 @@ fn ensure_available(conn: &Connection, target: &Target, task: &str) -> Result<()
 
 impl Workflow {
     pub fn repair(&self, task: &str, pane: &str) -> Result<(), String> {
+        let epoch = crate::task_reset::epoch(&*self.db.lock().map_err(err)?, task)?;
         let workspace = self.workspace(task)?;
         let target = self
             .herdr
@@ -353,6 +388,7 @@ impl Workflow {
         let mut conn = self.db.lock().map_err(err)?;
         let tx = conn.transaction().map_err(err)?;
         crate::lifecycle::ensure_idle(&tx, task, None)?;
+        crate::task_reset::check_epoch(&tx, task, epoch)?;
         ensure_project_target(&tx, task, &target, self.herdr.session())?;
         if binding(&tx, task)?.operation.is_some() {
             return Err("dispatch.verify_required".into());
@@ -407,6 +443,20 @@ impl Workflow {
         operation: &str,
         lifecycle: Option<&str>,
     ) -> Result<DispatchRecord, String> {
+        let epoch = crate::task_reset::epoch(&*self.db.lock().map_err(err)?, task)?;
+        self.dispatch_at_epoch(task, pane, prompt, operation, lifecycle, epoch)
+    }
+
+    pub(crate) fn dispatch_at_epoch(
+        &self,
+        task: &str,
+        pane: &str,
+        prompt: &str,
+        operation: &str,
+        lifecycle: Option<&str>,
+        epoch: i64,
+    ) -> Result<DispatchRecord, String> {
+        crate::task_reset::check_epoch(&*self.db.lock().map_err(err)?, task, epoch)?;
         if prompt.trim().is_empty() {
             return Err("dispatch.empty".into());
         }
@@ -447,6 +497,10 @@ impl Workflow {
             let mut conn = self.db.lock().map_err(err)?;
             let tx = conn.transaction().map_err(err)?;
             crate::lifecycle::ensure_idle(&tx, task, lifecycle)?;
+            crate::task_reset::check_epoch(&tx, task, epoch)?;
+            if let Some(lifecycle) = lifecycle {
+                crate::lifecycle::ensure_operation(&tx, task, lifecycle)?;
+            }
             ensure_project_target(&tx, task, &target, self.herdr.session())?;
             let b = binding(&tx, task)?;
             if lifecycle.is_none() && crate::codex_settings::read(&tx, task)?.explicit() {
@@ -508,7 +562,7 @@ impl Workflow {
                 params![op.id,task,op.workspace,json,prompt,op.created_at,op.had_binding]).map_err(|_|"dispatch.verify_required".to_string())?;
             tx.commit().map_err(err)?;
         }
-        crate::tasks::ensure_active(&*self.db.lock().map_err(err)?, task)?;
+        crate::task_reset::check_dispatch(&*self.db.lock().map_err(err)?, task, operation)?;
         match self.herdr.send_checking_receipt(
             &target,
             prompt,
@@ -516,6 +570,7 @@ impl Workflow {
                 let db = self.db.lock().map_err(err)?;
                 crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
                 crate::tasks::ensure_active(&db, task)?;
+                crate::task_reset::check_dispatch(&db, task, operation)?;
                 crate::images::verify_operation(&db, operation)
             },
             &|| self.dispatch_receipt(&op).map(|receipt| receipt.is_some()),
@@ -628,6 +683,7 @@ impl Workflow {
         let mut conn = self.db.lock().map_err(err)?;
         let tx = conn.transaction().map_err(err)?;
         crate::tasks::ensure_active(&tx, &op.task_id)?;
+        crate::task_reset::check_dispatch(&tx, &op.task_id, &op.id)?;
         ensure_project_target(&tx, &op.task_id, &op.target, self.herdr.session())?;
         let current = binding(&tx, &op.task_id)?;
         if !current

@@ -128,7 +128,7 @@ describe("workspace 导航同步", () => {
     await screen.findByText(/同步失败/);
     expect(names()).toEqual([other.name]);
     cached = [];
-    fireEvent.click(screen.getByRole("button", { name: "同步工作空间" }));
+    fireEvent.click(screen.getByRole("button", { name: "重试连接" }));
     await waitFor(() => expect(names()).toEqual([]));
     await act(async () => { reject(new Error("herdr.unavailable")); });
     expect(names()).toEqual([]);

@@ -8,6 +8,7 @@ try {
  $targetParts=$config.target.Split('@')
  if ($targetParts.Count -gt 2 -or $targetParts[-1] -notmatch '^[A-Za-z0-9][A-Za-z0-9_.:-]*$') { throw 'Invalid SSH target' }
  if ($config.session -notmatch '^[A-Za-z0-9_.-]+$') { throw 'Invalid Herdr session' }
+ if ($config.configure_key -eq $true) {
  $sshDir=Join-Path $env:USERPROFILE '.ssh'
  $resultError='machine.key_setup_failed'
  $keyFile=Join-Path $sshDir ('herdr_kanban_'+$config.key_id)
@@ -35,7 +36,7 @@ if(-not $exists -and $isAdmin){
 }
 '@
  $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($remote.Replace('__PUBLIC_KEY__',$publicKey)))
- Write-Host 'Enter your SSH password in this terminal. Kanban does not receive or store it.' -ForegroundColor Cyan
+ Write-Host 'Configuring a dedicated SSH key. If SSH asks for a password, enter it here; Kanban does not receive or store it.' -ForegroundColor Cyan
  $resultError='machine.authorization_failed'
  & ssh -o ConnectTimeout=30 -- $config.target powershell -NoLogo -NoProfile -EncodedCommand $encoded
  if($LASTEXITCODE -ne 0){throw 'SSH authorization failed or timed out. Retry onboarding.'}
@@ -72,12 +73,18 @@ if(-not $exists -and $isAdmin){
  $resultError='machine.key_verification_failed'
  & ssh -o BatchMode=yes -o ConnectTimeout=15 -- $config.target hostname
  if($LASTEXITCODE -ne 0){throw 'SSH configuration verification failed; Herdr registration was not started'}
+ } else {
+  Write-Host 'Checking your existing SSH configuration. Kanban will not provision a new key.' -ForegroundColor Cyan
+  $resultError='machine.ssh_connection_failed'
+  & ssh -o BatchMode=yes -o ConnectTimeout=15 -- $config.target hostname
+  if($LASTEXITCODE -ne 0){throw 'Existing SSH connection failed. Check the target, network and authentication, or choose Configure SSH key in Kanban.'}
+ }
  $resultError='machine.profile_setup_failed'
  & $config.herdr machine add $config.target --remote-session $config.session --label $config.target
  if($LASTEXITCODE -ne 0){throw 'Herdr machine setup did not complete'}
  $resultState='succeeded'
  $resultError=''
- Write-Host 'Authorization complete. Return to Kanban for connection verification.' -ForegroundColor Green
+ Write-Host 'Remote computer setup complete. Return to Kanban for connection verification.' -ForegroundColor Green
 }catch{Write-Host $_.Exception.Message -ForegroundColor Red}
 finally {
  if($config -and $config.result -and $config.operation_id) {

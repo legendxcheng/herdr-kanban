@@ -133,7 +133,13 @@ pub(crate) fn quarantines(db: &rusqlite::Connection, target: &Target) -> Result<
             let before: Vec<PaneIdentity> =
                 serde_json::from_str(&before).map_err(|e| e.to_string())?;
             if !before.iter().any(|p| p.terminal_id == target.terminal_id) {
-                return Ok(true);
+                // A later explicit create can prove ownership of its own new terminal;
+                // an unresolved old create must not quarantine every future task.
+                let known: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM pane_allocations WHERE session=?1 AND workspace=?2 AND machine_id=?3 AND resolved=1 AND json_extract(target_json,'$.terminal_id')=?4)",
+                    params![target.session,target.workspace_id,target.machine_id,target.terminal_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+                if !known {
+                    return Ok(true);
+                }
             }
         }
     }

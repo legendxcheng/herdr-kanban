@@ -110,8 +110,8 @@ body {
 .project-machine-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-machine-status { width: 5px; height: 5px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
 .machine-online .project-machine-status { color: var(--success); }
-.machine-offline { color: var(--danger); }
-.machine-syncing, .machine-disabled { color: var(--warning); }
+.machine-offline .project-machine-status { color: var(--danger); }
+.machine-syncing .project-machine-status, .machine-disabled .project-machine-status { color: var(--warning); }
 .project-name { display: block; flex: 1; min-width: 0; font-weight: 500; font-size: 14px; color: var(--n8); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-meta { display: flex; align-items: center; gap: 6px; min-width: 0; height: 18px; }
 .project-meta .project-ws { flex: 1; min-width: 0; }

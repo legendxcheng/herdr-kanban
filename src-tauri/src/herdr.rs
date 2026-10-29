@@ -29,6 +29,8 @@ mod codex_receipt;
 mod codex_submit;
 #[path = "herdr_idle_cleanup.rs"]
 mod idle_cleanup;
+#[path = "herdr_workspace_terminal.rs"]
+mod workspace_terminal;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -130,6 +132,28 @@ fn field<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
         .ok_or_else(|| "herdr.invalid_response".into())
 }
 impl Herdr for Cli {
+    fn workspace_terminal_live(
+        &self,
+        target: &crate::workspace_terminal::Target,
+    ) -> Result<bool, String> {
+        self.shell_live(target)
+    }
+    fn find_workspace_terminal(
+        &self,
+        workspace: &str,
+        operation: &str,
+    ) -> Result<Option<crate::workspace_terminal::Target>, String> {
+        self.shell_find(workspace, operation)
+    }
+    fn create_workspace_terminal(
+        &self,
+        workspace: &str,
+        cwd: &str,
+        operation: &str,
+        check: &dyn Fn() -> Result<(), String>,
+    ) -> Result<crate::workspace_terminal::Target, SendError> {
+        self.shell_create(workspace, cwd, operation, check)
+    }
     fn machine_id(&self) -> &str {
         self.remote
             .as_ref()

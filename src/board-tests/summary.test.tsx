@@ -45,6 +45,38 @@ async function enterSummary() {
 }
 function summaries(tasks: Task[]): Task[] { return tasks.map(t => ({ ...t, status: taskColumn(t) })); }
 
+it("shares identity colors between sidebar and summary across rename, reorder, hide and offline refresh", async () => {
+  stored = [task("本机颜色", project), task("远端颜色", remote), task("同源颜色", remote, "done")];
+  snapshot();
+  render(<App />); await enterSummary();
+  const sidebar = (id: string, selector: string) => document.querySelector<HTMLElement>(`[data-project-id="${id}"] ${selector}`)!;
+  const source = (name: string, selector: string) => open(name).closest(".task-card")!.querySelector<HTMLElement>(selector)!;
+  const machineColor = sidebar(remote.id, ".project-machine-name").style.color;
+  const workspaceColor = sidebar(remote.id, ".project-name").style.color;
+  expect(machineColor).not.toBe(""); expect(workspaceColor).not.toBe("");
+  expect(source("远端颜色", ".machine-source").style.color).toBe(machineColor);
+  expect(source("远端颜色", ".summary-workspace").style.color).toBe(workspaceColor);
+  expect(source("同源颜色", ".summary-workspace").style.color).toBe(workspaceColor);
+  expect(source("本机颜色", ".summary-workspace").style.color).not.toBe(workspaceColor);
+  expect(source("本机颜色", ".machine-source").style.color).not.toBe(machineColor);
+
+  projects = [project]; fireEvent(window, new Event("focus"));
+  await waitFor(() => expect(document.querySelector(`[data-project-id="${remote.id}"]`)).toBeNull());
+  projects = [{ ...remote, name: "改名 Workspace" }, project];
+  const oldMachineName = machines[0].name;
+  try {
+    machines[0].name = "改名电脑";
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(sidebar(remote.id, ".project-name")?.textContent).toBe("改名 Workspace"));
+    offline = true; fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(sidebar(remote.id, ".project-machine")?.className).toContain("machine-offline"));
+    expect(sidebar(remote.id, ".project-machine-name").style.color).toBe(machineColor);
+    expect(sidebar(remote.id, ".project-name").style.color).toBe(workspaceColor);
+    expect(source("远端颜色", ".machine-source").style.color).toBe(machineColor);
+    expect(source("远端颜色", ".summary-workspace").style.color).toBe(workspaceColor);
+  } finally { machines[0].name = oldMachineName; }
+});
+
 it("汇总跨电脑同名 Workspace，三列保持后端全局优先级顺序，查看不连接或启动 Agent", async () => {
   stored = [task("紧急远端", remote, "todo", "urgent"), task("优先本机", project, "todo", "high"), task("一般远端", remote), task("正在启动", remote), task("已完成", project, "done")];
   stored[3].flow = { kind: "start", state: "pending", requested_status: "in_progress", operation_id: "op", session_id: null, pane_id: null, error: "" };

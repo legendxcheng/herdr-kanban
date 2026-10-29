@@ -17,7 +17,8 @@
 .summary-card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; width: 100%; }
 .summary-card .task-name { overflow-wrap: anywhere; min-width: 0; white-space: normal; }
 .summary-card .task-priority { flex-shrink: 0; }
-.summary-card-source { display: block; margin-bottom: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; min-width: 0; color: var(--text-muted); font-size: 12px; }
-.summary-card-source .machine-source { margin: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.summary-card-source { display: flex; align-items: baseline; margin-bottom: 7px; overflow: hidden; white-space: nowrap; width: 100%; min-width: 0; color: var(--text-muted); font-size: 12px; }
+.summary-card-source .machine-source { margin: 0; flex: 0 1 auto; min-width: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.summary-source-separator { flex: 0 0 auto; white-space: pre; }
 .summary-workspace { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .summary-board .col-title { margin: 0; }

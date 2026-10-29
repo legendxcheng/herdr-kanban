@@ -9,6 +9,7 @@ use tauri::State;
 pub fn enroll_machine(
     target: String,
     session: Option<String>,
+    configure_key: Option<bool>,
 ) -> Result<crate::machine_enrollment::EnrollmentStatus, String> {
     transport::alias(&target)?;
     let session = session.unwrap_or_else(|| "default".into());
@@ -31,7 +32,7 @@ pub fn enroll_machine(
         include_str!("../../scripts/enroll-windows-machine.ps1"),
     )
     .map_err(|e| e.to_string())?;
-    std::fs::write(&settings,serde_json::to_vec(&serde_json::json!({"target":target,"session":session,"key_id":&key_id[..16],"herdr":crate::herdr::Cli::from_env().executable,"operation_id":operation_id,"result":dir.join("result.json")})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
+    std::fs::write(&settings,serde_json::to_vec(&serde_json::json!({"target":target,"session":session,"configure_key":configure_key.unwrap_or(false),"key_id":&key_id[..16],"herdr":crate::herdr::Cli::from_env().executable,"operation_id":operation_id,"result":dir.join("result.json")})).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?;
     let mut command = std::process::Command::new("powershell");
     command
         .args([

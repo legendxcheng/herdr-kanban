@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct State {
+    remote: bool,
     panes: BTreeMap<String, (Target, Option<String>)>,
     created: usize,
     prepared: Vec<Option<String>>,
@@ -55,6 +56,13 @@ fn target(id: &str) -> Target {
     }
 }
 impl Herdr for Fake {
+    fn machine_id(&self) -> &str {
+        if self.0.lock().unwrap().remote {
+            "ssh-test"
+        } else {
+            crate::machines::LOCAL_ID
+        }
+    }
     fn codex_catalog(&self, cwd: &str) -> Result<crate::codex_catalog::Catalog, String> {
         let mut state = self.0.lock().unwrap();
         state.catalog_directories.push(cwd.into());
@@ -156,7 +164,10 @@ impl Herdr for Fake {
             return Err("timeout".into());
         }
         s.created += 1;
-        let t = target(&format!("created-{}", s.created));
+        let mut t = target(&format!("created-{}", s.created));
+        if s.remote {
+            t.machine_id = "ssh-test".into();
+        }
         s.panes.insert(t.pane_id.clone(), (t.clone(), None));
         let lost = s.lost_create_response;
         drop(s);
@@ -282,13 +293,21 @@ impl Herdr for Fake {
     }
 }
 fn fixture() -> (Workflow, Arc<Fake>) {
+    fixture_on(false)
+}
+
+fn fixture_on(remote: bool) -> (Workflow, Arc<Fake>) {
     let db = Connection::open_in_memory().unwrap();
     crate::db::init(&db).unwrap();
-    db.execute_batch("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) VALUES ('p1','P1','.','workspace','now'),('p2','P2','.','workspace','now');
-        INSERT INTO tasks(id,project_id,name,status,created_at,updated_at) VALUES ('a','p1','A','todo','now','now'),('b','p2','B','todo','now','now');").unwrap();
+    if remote {
+        db.execute("INSERT INTO machines(id,name,kind,session) VALUES ('ssh-test','SSH test','ssh','default')", []).unwrap();
+    }
+    db.execute("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at,machine_id) VALUES ('p1','P1','.','workspace','now',?1),('p2','P2','.','workspace','now',?1)", [if remote { "ssh-test" } else { crate::machines::LOCAL_ID }]).unwrap();
+    db.execute_batch("INSERT INTO tasks(id,project_id,name,status,created_at,updated_at) VALUES ('a','p1','A','todo','now','now'),('b','p2','B','todo','now','now');").unwrap();
     // Historical duplicate association fixture keeps testing cross-project pane ownership.
     db.execute_batch("DROP INDEX project_workspace_identity; UPDATE projects SET herdr_session='default',workspace_id='w1',sync_status='ready';").unwrap();
     let fake = Arc::new(Fake::default());
+    fake.0.lock().unwrap().remote = remote;
     (
         Workflow {
             db: Arc::new(Mutex::new(db)),
@@ -340,3 +359,4 @@ mod allocation;
 mod background_start;
 mod completion;
 mod recovery;
+mod reset;

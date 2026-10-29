@@ -55,9 +55,14 @@ impl Bounds {
 }
 
 pub type Status = Arc<dyn Fn(Output) + Send + Sync>;
+#[derive(Clone, PartialEq)]
+pub enum Owner {
+    Task(String),
+    Workspace(String),
+}
 pub struct View {
     id: String,
-    task: String,
+    owner: Owner,
     bounds: Mutex<Bounds>,
     stopped: AtomicBool,
     ready: AtomicBool,
@@ -104,13 +109,25 @@ impl NativeTerminalManager {
         bounds: Bounds,
         status: Status,
     ) -> Result<Arc<View>, String> {
+        self.select_owner(id, Owner::Task(task), bounds, status)
+    }
+    pub fn select_owner(
+        &self,
+        id: String,
+        owner: Owner,
+        bounds: Bounds,
+        status: Status,
+    ) -> Result<Arc<View>, String> {
         bounds.validate()?;
-        if id.is_empty() || task.is_empty() {
+        let owner_id = match &owner {
+            Owner::Task(id) | Owner::Workspace(id) => id,
+        };
+        if id.is_empty() || owner_id.is_empty() {
             return Err("terminal.stale".into());
         }
         let view = Arc::new(View {
             id,
-            task,
+            owner,
             bounds: Mutex::new(bounds),
             stopped: AtomicBool::new(false),
             ready: AtomicBool::new(false),
@@ -148,7 +165,10 @@ impl NativeTerminalManager {
     }
     pub fn close_task(&self, task: &str) {
         if let Ok(mut slot) = self.slot.lock() {
-            if slot.as_ref().is_some_and(|v| v.task == task) {
+            if slot
+                .as_ref()
+                .is_some_and(|v| v.owner == Owner::Task(task.into()))
+            {
                 if let Some(view) = slot.take() {
                     view.stop("terminal.closed");
                 }
@@ -156,7 +176,7 @@ impl NativeTerminalManager {
         }
         if let Ok(mut sessions) = self.sessions.lock() {
             sessions.retain(|_, session| {
-                if session.selected().0.task == task {
+                if session.selected().0.owner == Owner::Task(task.into()) {
                     session.stop("terminal.closed");
                     false
                 } else {
@@ -188,31 +208,73 @@ impl NativeTerminalManager {
         let result = (|| {
             use crate::workflow::Herdr;
             view.check()?;
-            let target = session::target(&app, &view.task)?;
-            let mut cli = app.herdr.terminal_client()?;
-            if target.machine_id != crate::machines::LOCAL_ID {
-                let machine =
-                    crate::machines::get(&*app.db.lock().map_err(err)?, &target.machine_id)?;
-                if machine.disabled {
-                    return Err("machine.disabled".into());
+            let routed;
+            let shell;
+            let target;
+            let mut cli;
+            let _shell_connection;
+            match &view.owner {
+                Owner::Workspace(project) => {
+                    routed = app.for_project(project)?;
+                    _shell_connection = Some(crate::remote_control::Scope::enter());
+                    shell = Some(routed.ensure_workspace_terminal(project, &|| view.check())?);
+                    target = None;
+                    cli = routed.herdr.terminal_client()?;
+                    if !cli.workspace_terminal_live(shell.as_ref().unwrap())? {
+                        return Err("workspace_terminal.missing".into());
+                    }
                 }
-                search.validate_target(&app.db, &machine, &target)?;
-                // Setup may have published a newer helper under its own hash.
-                cli.remote = Some(crate::machines::get(
-                    &*app.db.lock().map_err(err)?,
-                    &target.machine_id,
-                )?);
-                cli.session = target.session.clone();
-            } else {
-                if cli.session != target.session {
-                    return Err("binding.identity_changed".into());
+                Owner::Task(task) => {
+                    _shell_connection = None;
+                    routed = app.clone();
+                    target = Some(session::target(&app, task)?);
+                    shell = None;
+                    cli = app.herdr.terminal_client()?;
                 }
-                cli.validate(&target.workspace_id, &target)?;
             }
+            if let Some(target) = &target {
+                if target.machine_id != crate::machines::LOCAL_ID {
+                    let machine =
+                        crate::machines::get(&*app.db.lock().map_err(err)?, &target.machine_id)?;
+                    if machine.disabled {
+                        return Err("machine.disabled".into());
+                    }
+                    search.validate_target(&app.db, &machine, &target)?;
+                    // Setup may have published a newer helper under its own hash.
+                    cli.remote = Some(crate::machines::get(
+                        &*app.db.lock().map_err(err)?,
+                        &target.machine_id,
+                    )?);
+                    cli.session = target.session.clone();
+                } else {
+                    if cli.session != target.session {
+                        return Err("binding.identity_changed".into());
+                    }
+                    cli.validate(&target.workspace_id, &target)?;
+                }
+            }
+            let check_target = || -> Result<(), String> {
+                match (&view.owner, &target, &shell) {
+                    (Owner::Task(task), Some(target), _)
+                        if session::target(&app, task)?.same_identity(target) =>
+                    {
+                        Ok(())
+                    }
+                    (Owner::Workspace(project), _, Some(shell))
+                        if routed.saved_workspace_terminal(project)? == *shell =>
+                    {
+                        Ok(())
+                    }
+                    _ => Err("binding.identity_changed".into()),
+                }
+            };
+            let pane_id = target
+                .as_ref()
+                .map(|t| &t.pane_id)
+                .or_else(|| shell.as_ref().map(|t| &t.pane_id))
+                .ok_or("terminal.stale")?;
             view.check()?;
-            if !session::target(&app, &view.task)?.same_identity(&target) {
-                return Err("binding.identity_changed".into());
-            }
+            check_target()?;
             let _gate = view.open_gate.lock().map_err(err)?;
             view.check()?;
             let key = session::key(&cli);
@@ -233,7 +295,7 @@ impl NativeTerminalManager {
                             }
                         }
                     }
-                    let session = session::Session::new(view.clone(), target.pane_id.clone());
+                    let session = session::Session::new(view.clone(), pane_id.clone());
                     sessions.insert(key, session.clone());
                     (session, true)
                 }
@@ -244,7 +306,7 @@ impl NativeTerminalManager {
                     return Err(error);
                 }
             } else {
-                session.select(view.clone(), target.pane_id.clone())?;
+                session.select(view.clone(), pane_id.clone())?;
             }
             let deadline = Instant::now() + Duration::from_secs(15);
             while !(session.window_found.load(Ordering::Acquire)
@@ -259,8 +321,13 @@ impl NativeTerminalManager {
                 thread::sleep(Duration::from_millis(10));
             }
             view.check()?;
-            if !session::target(&app, &view.task)?.same_identity(&target) {
-                return Err("binding.identity_changed".into());
+            check_target()?;
+            if let Some(shell) = &shell {
+                if !cli.workspace_terminal_live(shell)? {
+                    return Err("workspace_terminal.missing".into());
+                }
+                view.check()?;
+                check_target()?;
             }
             view.ready.store(true, Ordering::Release);
             Ok(())
@@ -524,6 +591,26 @@ mod tests {
         native.bounds("b", bounds()).unwrap();
         native.close_task("task-b");
         assert!(second.stopped.load(Ordering::Acquire));
+    }
+    #[test]
+    fn task_cleanup_cannot_close_workspace_view_and_stale_close_is_ignored() {
+        let native = NativeTerminalManager::default();
+        let shell = native
+            .select_owner(
+                "shell".into(),
+                Owner::Workspace("same-id".into()),
+                bounds(),
+                Arc::new(|_| {}),
+            )
+            .unwrap();
+        native.close_task("same-id");
+        assert!(!shell.stopped.load(Ordering::Acquire));
+        let task = native
+            .select("task".into(), "same-id".into(), bounds(), Arc::new(|_| {}))
+            .unwrap();
+        assert!(shell.stopped.load(Ordering::Acquire));
+        native.close("shell");
+        assert!(!task.stopped.load(Ordering::Acquire));
     }
     #[test]
     fn launches_official_client_with_font_hooks_and_normal_user_config() {

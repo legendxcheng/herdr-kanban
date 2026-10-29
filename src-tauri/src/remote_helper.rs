@@ -244,13 +244,12 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
         ),
         "codex_catalog" => Ok(json!(crate::codex_catalog::local(text("cwd")?)?)),
         "preflight" => {
+            // Enrollment verifies the Herdr connection, not every tool that a
+            // future task might run. Codex catalog/start errors belong to those
+            // operations and must not disable an otherwise reachable machine.
             cli.workspaces()?;
-            let mut codex = std::process::Command::new("cmd");
-            codex.args(["/d", "/c", "codex", "--version"]);
-            let version = crate::remote_transport::run(codex, Vec::new(), 15)
-                .map_err(|e| format!("machine.codex_unavailable: {e}"))?;
             Ok(
-                json!({"platform":std::env::consts::OS,"architecture":std::env::consts::ARCH,"user":std::env::var("USERNAME").unwrap_or_default(),"host":std::env::var("COMPUTERNAME").unwrap_or_default(),"codex":String::from_utf8_lossy(&version).trim(),"session":cli.session,"version":1}),
+                json!({"platform":std::env::consts::OS,"architecture":std::env::consts::ARCH,"user":std::env::var("USERNAME").unwrap_or_default(),"host":std::env::var("COMPUTERNAME").unwrap_or_default(),"session":cli.session,"version":1}),
             )
         }
         "same_directory" => Ok(json!(match (
@@ -346,6 +345,59 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn preflight_checks_herdr_without_requiring_codex() {
+        use std::os::windows::process::CommandExt;
+        const CHILD: &str = "KANBAN_PREFLIGHT_TEST_ROOT";
+        if let Some(root) = std::env::var_os(CHILD) {
+            let root = std::path::PathBuf::from(root);
+            let mut cli = crate::herdr::Cli::from_env();
+            cli.executable = root.join("herdr.cmd");
+            let result = execute(&cli, &json!({"method":"preflight"}));
+            assert!(result.is_ok(), "{result:?}");
+            assert_eq!(result.unwrap()["platform"], "windows");
+            assert!(
+                !root.join("codex-called").exists(),
+                "connection must not probe Codex"
+            );
+            std::fs::write(root.join("herdr-failed"), "").unwrap();
+            assert!(execute(&cli, &json!({"method":"preflight"})).is_err());
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("kanban-preflight-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("herdr.cmd"), "@echo off\r\nif exist \"%~dp0herdr-failed\" exit /b 1\r\necho {\"result\":{\"workspaces\":[]}}\r\n").unwrap();
+        std::fs::write(
+            root.join("codex.cmd"),
+            "@echo off\r\necho called>\"%~dp0codex-called\"\r\nexit /b 1\r\n",
+        )
+        .unwrap();
+        let system =
+            std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap()).join("System32");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "remote_helper::tests::preflight_checks_herdr_without_requiring_codex",
+                "--nocapture",
+            ])
+            .env(CHILD, &root)
+            .env(
+                "PATH",
+                std::env::join_paths([root.clone(), system]).unwrap(),
+            )
+            .env_remove("KANBAN_HERDR_SESSION_FILE")
+            .creation_flags(0x08000000)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     #[test]
     fn control_requires_identity_and_session_before_execution_and_discovery_rejects_writes() {
         let base = json!({"version":2,"id":3,"host_identity":"host","session":"session",

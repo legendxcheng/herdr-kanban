@@ -485,6 +485,7 @@ impl crate::workflow::Workflow {
         json: &str,
         operation: &str,
     ) -> Result<crate::models::DispatchRecord, String> {
+        let epoch = crate::task_reset::epoch(&*self.db.lock().map_err(error)?, task)?;
         let previous = {
             let db = self.db.lock().map_err(error)?;
             tasks::ensure_active(&db, task)?;
@@ -524,12 +525,13 @@ impl crate::workflow::Workflow {
                 return Err("image.task_changed".into());
             }
             let tx = db.unchecked_transaction().map_err(error)?;
+            crate::task_reset::check_epoch(&tx, task, epoch)?;
             pin_prompt(&tx, task, operation, json)?;
             tx.execute("INSERT OR IGNORE INTO image_prompt_snapshots(operation_id,task_id,prompt_json,prompt_text) VALUES(?1,?2,?3,?4)",params![operation,task,json,resolved]).map_err(error)?;
             tx.commit().map_err(error)?;
             prompt_snapshot(&db, task, operation, json)?.ok_or("image.missing")?
         };
-        self.dispatch(task, pane, &prompt, operation)
+        self.dispatch_at_epoch(task, pane, &prompt, operation, None, epoch)
     }
 }
 

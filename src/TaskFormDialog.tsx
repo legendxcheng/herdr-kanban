@@ -186,7 +186,7 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, u
         </div>
         {unavailable && <p role="alert" className="error">{tr("summary.project_unavailable")}</p>}
         {readOnly ? <p>{tr("model.startup")}: {codexSettings.model ?? tr("model.default")} · {codexSettings.effort ?? tr("model.default")}</p>
-          : <CodexSettingsSelect projectId={project.id} value={codexSettings} disabled={saving || settingsLoading} locked={settingsLocked}
+          : <CodexSettingsSelect projectId={project.id} remote={!!project.machine_id && project.machine_id !== "local"} value={codexSettings} disabled={saving || settingsLoading} locked={settingsLocked}
             onChange={settings => { settingsEdited.current = true; setCodexSettings(settings); }} onValid={setSettingsValid} />}
         {error && <p role="alert" className="error">{error}</p>}
       </div>

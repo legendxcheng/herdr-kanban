@@ -119,8 +119,8 @@ it("observes terminal cancellation without declaring a successful connection", a
   });
   render(<MachineDialog machines={[]} onChanged={()=>{}} onClose={()=>{}} onConnected={connected} />);
   fireEvent.change(screen.getByLabelText("SSH 别名"),{target:{value:"devpc"}});
-  fireEvent.click(screen.getByRole("button",{name:"打开 Windows 密码接入终端"}));
-  expect((await screen.findByRole("alert")).textContent).toContain("授权终端已关闭");
+  fireEvent.click(screen.getByRole("button",{name:"配置 SSH 密钥"}));
+  expect((await screen.findByRole("alert")).textContent).toContain("接入终端已关闭");
   expect(connected).not.toHaveBeenCalled();
   expect(vi.mocked(invoke).mock.calls.some(([cmd])=>cmd==="connect_machine")).toBe(false);
   expect(document.querySelector('input[type="password"]')).toBeNull();

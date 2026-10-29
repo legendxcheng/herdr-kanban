@@ -51,6 +51,7 @@ mod prompt_reference;
 mod skill_discovery;
 mod start;
 mod task_overview;
+mod task_reset;
 mod task_summary;
 mod task_titles;
 mod tasks;
@@ -61,6 +62,7 @@ mod title_process;
 mod title_prompt;
 mod work_commands;
 mod workflow;
+mod workspace_terminal;
 
 use commands::DbState;
 use rusqlite::Connection;
@@ -168,6 +170,7 @@ pub fn run() {
             commands::update_task,
             commands::update_task_status,
             commands::delete_task,
+            commands::reset_task,
             commands::archive_task,
             commands::archive_completed_tasks,
             commands::delete_completed_tasks,
@@ -184,6 +187,7 @@ pub fn run() {
             work_commands::resolve_dispatch,
             work_commands::repair_binding,
             work_commands::terminal_open,
+            work_commands::workspace_terminal_open,
             work_commands::terminal_close,
             work_commands::terminal_bounds,
             commands::pick_folder,

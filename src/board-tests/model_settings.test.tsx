@@ -7,6 +7,24 @@ import { TaskFormDialog } from "../TaskFormDialog";
 
 const catalog = { models: [{ id: "test-model", name: "Test Model", efforts: ["low", "high"] }], source: "cli_catalog", cached: false, error: null };
 
+it.each([false, true])("SSH 目录查询失败仍可保存已有配置（缓存：%s）", async cached => {
+  const base = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((cmd, args, options) => {
+    if (cmd === "last_codex_settings") return Promise.resolve({ model: "test-model", effort: "high" });
+    if (cmd === "codex_model_catalog") return cached
+      ? Promise.resolve({ ...catalog, cached: true, error: "model.catalog_unavailable" })
+      : Promise.reject("model.catalog_unavailable");
+    return base(cmd, args, options);
+  });
+  render(<TaskFormDialog project={{ ...project, machine_id: "remote" }} onClose={() => {}} onSaved={() => {}} />);
+  await screen.findByText(/可保留当前选择并启动/);
+  expect((screen.getByRole("combobox", { name: "AI 模型" }) as HTMLSelectElement).value).toBe("test-model");
+  expect((screen.getByRole("combobox", { name: "思考强度" }) as HTMLSelectElement).value).toBe("high");
+  fireEvent.paste(screen.getByRole("textbox", { name: "提示词" }), { clipboardData: { files: [], getData: (type: string) => type === "text/plain" ? "remote task" : "" } });
+  fireEvent.click(screen.getByRole("button", { name: "添加任务" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("create_task", expect.objectContaining({ codexSettings: { model: "test-model", effort: "high" } })));
+});
+
 it("切换执行项目后忽略旧目录迟到结果，保留继承的无效选择", async () => {
   let resolve!: (value: typeof catalog) => void;
   const old = new Promise<typeof catalog>(yes => { resolve = yes; });

@@ -18,6 +18,7 @@ function Test-SelectedKey([string]$target) {
 # are replaced. Config selection uses the actual Windows OpenSSH parser.
 function ssh {
     if ($args -contains '-EncodedCommand') {
+        Assert-True (-not $global:kanbanTestReuse) 'Existing authentication must not write remote authorized keys'
         $global:LASTEXITCODE = 0
     } elseif ($args -contains '-i') {
         $global:LASTEXITCODE = 0
@@ -29,15 +30,16 @@ function ssh {
         $global:LASTEXITCODE = if ($selected -and -not $global:kanbanTestrejectImplicit) { 0 } else { 255 }
     }
 }
+function ssh-keygen { throw 'Unexpected key generation in enrollment regression' }
 function Invoke-TestHerdr {
     $global:kanbanTestherdrCalls++
     Assert-True (Test-SelectedKey $global:kanbanTesttarget) 'Herdr would reconnect without the dedicated key'
-    $global:LASTEXITCODE = 0
+    $global:LASTEXITCODE = if ($global:kanbanTestHerdrFailure) { 1 } else { 0 }
 }
 
 try {
     New-Item -ItemType Directory -Path $testRoot | Out-Null
-    foreach ($case in @('user-ip', 'user-dns', 'alias', 'user-alias', 'legacy-retry', 'legacy-lf', 'already-corrected', 'edited-entry', 'implicit-failure')) {
+    foreach ($case in @('user-ip', 'user-dns', 'alias', 'user-alias', 'legacy-retry', 'legacy-lf', 'already-corrected', 'edited-entry', 'implicit-failure', 'existing', 'existing-default', 'existing-failure', 'existing-herdr-failure')) {
         try {
             $caseRoot = Join-Path $testRoot $case
             $env:USERPROFILE = $caseRoot
@@ -49,12 +51,17 @@ try {
                 'user-dns' { 'Administrator@remote.example.test' }
                 default { 'Administrator@100.69.126.63' }
             }
-            $global:kanbanTestkeyPath = Join-Path $sshDirectory 'herdr_kanban_testkey'
+            $global:kanbanTestReuse = $case.StartsWith('existing')
+            $keyName = if ($global:kanbanTestReuse) { 'existing-custom-key' } else { 'herdr_kanban_testkey' }
+            $global:kanbanTestkeyPath = Join-Path $sshDirectory $keyName
             [IO.File]::WriteAllText($global:kanbanTestkeyPath, 'test-only placeholder; never used for authentication')
             [IO.File]::WriteAllText($global:kanbanTestkeyPath + '.pub', 'ssh-ed25519 AAAA herdr-kanban')
             $global:kanbanTestconfigPath = Join-Path $sshDirectory 'config'
             $prefix = "# User configuration must survive unchanged`r`nHost devpc`r`n    HostName 100.69.126.63`r`n    User Administrator`r`nHost unrelated`r`n    User someone`r`n"
             $existing = $prefix
+            if ($global:kanbanTestReuse) {
+                $existing += "`r`nHost 100.69.126.63`r`n    IdentityFile `"$($global:kanbanTestkeyPath.Replace('\', '/'))`"`r`n"
+            }
             if ($case -in @('legacy-retry', 'legacy-lf', 'already-corrected', 'edited-entry')) {
                 $oldHost = if ($case -eq 'already-corrected') { '100.69.126.63' } else { $global:kanbanTesttarget }
                 $existing += "`r`n# Herdr Kanban testkey`r`nHost $oldHost`r`n    IdentityFile `"$($global:kanbanTestkeyPath.Replace('\', '/'))`"`r`n"
@@ -64,14 +71,25 @@ try {
             [IO.File]::WriteAllText($global:kanbanTestconfigPath, $existing)
             $settingsPath = Join-Path $caseRoot 'settings.json'
             $resultPath = Join-Path $caseRoot 'result.json'
-            @{ target=$global:kanbanTesttarget; session='default'; key_id='testkey'; herdr='Invoke-TestHerdr'; operation_id=$case; result=$resultPath } |
-                ConvertTo-Json | Set-Content -LiteralPath $settingsPath -Encoding UTF8
+            $settings = @{ target=$global:kanbanTesttarget; session='default'; key_id='testkey'; herdr='Invoke-TestHerdr'; operation_id=$case; result=$resultPath }
+            if ($case -ne 'existing-default') { $settings.configure_key = -not $global:kanbanTestReuse }
+            $settings | ConvertTo-Json | Set-Content -LiteralPath $settingsPath -Encoding UTF8
             $global:kanbanTestherdrCalls = 0
             $global:kanbanTestimplicitChecks = 0
-            $global:kanbanTestrejectImplicit = $case -eq 'implicit-failure'
+            $global:kanbanTestrejectImplicit = $case -in @('implicit-failure', 'existing-failure')
+            $global:kanbanTestHerdrFailure = $case -eq 'existing-herdr-failure'
             & $enrollScript -Settings $settingsPath
             $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-            if ($case -eq 'edited-entry') {
+            if ($global:kanbanTestReuse) {
+                $expectedError = switch ($case) { 'existing-failure' { 'machine.ssh_connection_failed' }; 'existing-herdr-failure' { 'machine.profile_setup_failed' }; default { '' } }
+                $expectedState = if ($expectedError) { 'failed' } else { 'succeeded' }
+                Assert-True ($result.state -eq $expectedState -and $result.error -eq $expectedError) "Existing authentication result was $($result.state): $($result.error)"
+                Assert-True ($global:kanbanTestimplicitChecks -eq 1) 'Expected one existing authentication check'
+                $expectedHerdrCalls = if ($case -eq 'existing-failure') { 0 } else { 1 }
+                Assert-True ($global:kanbanTestherdrCalls -eq $expectedHerdrCalls) 'Unexpected Herdr registration after authentication check'
+                Assert-True ([IO.File]::ReadAllText($global:kanbanTestconfigPath) -ceq $existing) 'Existing SSH configuration changed'
+                Assert-True (-not (Test-Path (Join-Path $sshDirectory 'herdr_kanban_testkey'))) 'Existing authentication created a dedicated key'
+            } elseif ($case -eq 'edited-entry') {
                 Assert-True ($result.state -eq 'failed' -and $result.error -eq 'machine.ssh_config_failed') 'Edited entry must require manual inspection'
                 Assert-True ([IO.File]::ReadAllText($global:kanbanTestconfigPath) -ceq $existing) 'Edited entry was overwritten'
                 Assert-True ($global:kanbanTestherdrCalls -eq 0) 'Herdr must not start after config failure'
@@ -110,4 +128,4 @@ try {
     }
 }
 if ($failures.Count) { throw ($failures -join "`n") }
-Write-Host 'All 9 enrollment regression cases passed.'
+Write-Host 'All 13 enrollment regression cases passed.'

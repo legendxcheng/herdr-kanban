@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "./api";
-import type { Task } from "./types";
+import type { Project, Task } from "./types";
 import { tr, useLocalizedMessage } from "./i18n";
 import { preparationLabel } from "./taskFlow";
 import { terminalBounds } from "./nativeTerminalBounds";
 import { Icon } from "./Icon";
 
-export function TerminalPanel({ task, machineName, onRepair, maximized = false, onToggleMaximized }: {
+export function TerminalPanel({ task, workspace, machineName, onRepair, maximized = false, onToggleMaximized }: {
   task: Task | null;
+  workspace?: Project;
   machineName?: string;
   onRepair?: () => void;
   maximized?: boolean;
@@ -22,9 +23,9 @@ export function TerminalPanel({ task, machineName, onRepair, maximized = false, 
   const preparation = task ? preparationLabel(task) : null;
   useEffect(() => {
     setError("");
-    if (!task || !host.current) { setState("terminal.empty"); return; }
-    if (preparation) { setState(preparation); return; }
-    if (bindingState !== "valid") { setState("binding.repair_required"); return; }
+    if ((!task && !workspace) || !host.current) { setState("terminal.empty"); return; }
+    if (!workspace && preparation) { setState(preparation); return; }
+    if (!workspace && bindingState !== "valid") { setState("binding.repair_required"); return; }
     const connectionId = crypto.randomUUID();
     let active = true;
     let ended = false;
@@ -65,7 +66,8 @@ export function TerminalPanel({ task, machineName, onRepair, maximized = false, 
     window.addEventListener("resize", update);
     document.addEventListener("visibilitychange", update);
     const initial = terminalBounds(host.current);
-    void api.openTerminal(task.id, connectionId, initial, packet => {
+    const open = workspace ? api.openWorkspaceTerminal : api.openTerminal;
+    void open(workspace?.id ?? task!.id, connectionId, initial, packet => {
       if (active && !ended && packet.kind === "closed") fail(packet.message);
     }).then(() => {
       if (!active || ended) { void api.closeTerminal(connectionId).catch(() => {}); return; }
@@ -80,12 +82,14 @@ export function TerminalPanel({ task, machineName, onRepair, maximized = false, 
       void api.closeTerminal(connectionId).catch(() => {});
     };
   // Reconnect only when the selected identity/state changes, not on list refreshes.
-  }, [task?.id, identity, bindingState, attempt, preparation]);
+  }, [task?.id, identity, bindingState, attempt, preparation, workspace?.id, workspace?.machine_id, workspace?.herdr_session, workspace?.workspace_id]);
+
+  const title = workspace ? tr("workspace_terminal.title", { workspace: workspace.name }) : task?.name ?? tr("terminal.label");
 
   return <aside className={`terminal-panel${maximized ? " terminal-panel-maximized" : ""}`} aria-label={tr("terminal.label")}>
     <header className="terminal-header">
-      <strong title={task ? `${machineName ?? tr("machine.local")} · ${task.name}` : undefined}>{task?.name ?? tr("terminal.label")}</strong>
-      {(machineName || task) && <span className="terminal-machine" title={machineName ?? tr("machine.local")}>{machineName ?? tr("machine.local")}</span>}
+      <strong title={task || workspace ? `${machineName ?? tr("machine.local")} · ${title}` : undefined}>{title}</strong>
+      {(machineName || task || workspace) && <span className="terminal-machine" title={machineName ?? tr("machine.local")}>{machineName ?? tr("machine.local")}</span>}
       <span role="status">{tr(state)}</span>
       {onToggleMaximized && <button type="button" className="btn-icon terminal-size-toggle"
         aria-label={tr(maximized ? "terminal.restore" : "terminal.maximize")}
@@ -93,11 +97,11 @@ export function TerminalPanel({ task, machineName, onRepair, maximized = false, 
         <Icon name={maximized ? "restore" : "maximize"} />
       </button>}
     </header>
-    {!task && <p className="terminal-hint">{tr("terminal.empty")}</p>}
-    {task && state !== "terminal.connected" && <div className="terminal-feedback">
+    {!task && !workspace && <p className="terminal-hint">{tr("terminal.empty")}</p>}
+    {(task || workspace) && state !== "terminal.connected" && <div className="terminal-feedback">
       {error && <p role="alert">{machineName ?? tr("machine.local")} · {error}</p>}
       {!preparation && state !== "terminal.connecting" && <div className="task-actions">
-        {bindingState === "valid" && <button className="btn-secondary" onClick={() => setAttempt((n) => n + 1)}>{tr("terminal.reconnect")}</button>}
+        {(bindingState === "valid" || workspace) && <button className="btn-secondary" onClick={() => setAttempt((n) => n + 1)}>{tr("terminal.reconnect")}</button>}
         {onRepair && <button className="btn-ghost" onClick={onRepair}>{tr("binding.repair")}</button>}
       </div>}
     </div>}

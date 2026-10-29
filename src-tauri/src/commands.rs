@@ -170,6 +170,40 @@ pub async fn update_task_status(
 }
 
 #[tauri::command]
+pub fn reset_task(
+    state: State<DbState>,
+    terminals: State<Arc<crate::native_terminal::NativeTerminalManager>>,
+    id: String,
+    expected_epoch: i64,
+    flow_id: Option<String>,
+    dispatch_id: Option<String>,
+    request_id: String,
+) -> Result<Task, String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    let changed = crate::task_reset::reset(
+        &mut conn,
+        &id,
+        expected_epoch,
+        flow_id.as_deref(),
+        dispatch_id.as_deref(),
+        &request_id,
+    )?;
+    // Only close this application's view, never the external Agent or pane.
+    if changed {
+        terminals.close_task(&id);
+    }
+    let project: String = conn
+        .query_row("SELECT project_id FROM tasks WHERE id=?1", [&id], |r| {
+            r.get(0)
+        })
+        .map_err(|_| "task.missing")?;
+    crate::tasks::list(&conn, &project)?
+        .into_iter()
+        .find(|task| task.id == id)
+        .ok_or_else(|| "task.missing".into())
+}
+
+#[tauri::command]
 pub fn archive_task(
     state: State<DbState>,
     terminals: State<Arc<crate::native_terminal::NativeTerminalManager>>,

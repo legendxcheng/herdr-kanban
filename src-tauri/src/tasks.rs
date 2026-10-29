@@ -18,7 +18,7 @@ pub fn list_visible(db: &Connection, projects: &[String]) -> Result<Vec<Task>, S
 
 fn list_scope(db: &Connection, scope: &str, visible_only: bool) -> Result<Vec<Task>, String> {
     let mut stmt = db.prepare("SELECT t.id,t.project_id,t.name,t.status,t.prompt_json,t.prompt_snapshot,
-        t.dispatched_at,t.dispatched_to,t.created_at,t.updated_at,t.priority FROM tasks t
+        t.dispatched_at,t.dispatched_to,t.created_at,t.updated_at,t.priority,t.execution_epoch FROM tasks t
         WHERE t.project_id IN (SELECT value FROM json_each(?1)) AND t.archived_at IS NULL
         AND (?2=0 OR EXISTS (SELECT 1 FROM projects p JOIN project_visibility v ON v.project_id=p.id
             WHERE p.id=t.project_id AND v.visible=1 AND (p.workspace_id IS NULL OR p.sync_status!='missing')))
@@ -27,6 +27,7 @@ fn list_scope(db: &Connection, scope: &str, visible_only: bool) -> Result<Vec<Ta
         .query_map(params![scope, visible_only], |row| {
             let priority: String = row.get(10)?;
             Ok(Task {
+                execution_epoch: row.get(11)?,
                 codex_settings: Default::default(),
                 codex_settings_editable: false,
                 id: row.get(0)?,
@@ -71,6 +72,7 @@ pub fn create(
 ) -> Result<Task, String> {
     let now = chrono::Utc::now().to_rfc3339();
     let task = Task {
+        execution_epoch: 0,
         codex_settings: Default::default(),
         codex_settings_editable: true,
         id: uuid::Uuid::new_v4().to_string(),

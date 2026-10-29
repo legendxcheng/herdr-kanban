@@ -9,7 +9,7 @@ import type {
 // Projects
 export const listMachines = () => invoke<Machine[]>("list_machines");
 export const savedMachines = () => invoke<SavedMachine[]>("saved_machines");
-export const enrollMachine = (target: string, session: string) => invoke<EnrollmentStatus>("enroll_machine", { target, session });
+export const enrollMachine = (target: string, session: string, configureKey = false) => invoke<EnrollmentStatus>("enroll_machine", { target, session, configureKey });
 export const enrollmentStatus = (operationId: string) => invoke<EnrollmentStatus>("enrollment_status", { operationId });
 export const workspaceChoices = (machineId: string) => invoke<WorkspaceChoices>("workspace_choices", { machineId });
 export const addExistingWorkspaces = (machineId: string, session: string, workspaceIds: string[]) => invoke<void>("add_existing_workspaces", { machineId, session, workspaceIds });
@@ -65,6 +65,10 @@ export const completeTask = (taskId: string, operationId: string) =>
 export const recoverLifecycle = (taskId: string, operationId: string) =>
   invoke<void>("recover_lifecycle", { taskId, operationId });
 export const deleteTask = (id: string) => invoke<void>("delete_task", { id });
+export const resetTask = (task: Task, requestId: string) => invoke<Task>("reset_task", {
+  id: task.id, expectedEpoch: task.execution_epoch ?? 0,
+  flowId: task.flow?.operation_id ?? null, dispatchId: task.binding?.operation?.id ?? null, requestId,
+});
 export const archiveTask = (id: string) => invoke<void>("archive_task", { id });
 export interface BatchTaskResult {
   succeeded: string[];
@@ -107,6 +111,11 @@ export const openTerminal = (taskId: string, connectionId: string, bounds: Termi
   return invoke<string>("terminal_open", { taskId, connectionId, bounds, output });
 };
 export const closeTerminal = (connectionId: string) => invoke<void>("terminal_close", { connectionId });
+export const openWorkspaceTerminal = (projectId: string, connectionId: string, bounds: TerminalBounds, onOutput: (packet: TerminalOutput) => void) => {
+  const output = new Channel<TerminalOutput>();
+  output.onmessage = onOutput;
+  return invoke<string>("workspace_terminal_open", { projectId, connectionId, bounds, output });
+};
 export const setTerminalBounds = (connectionId: string, bounds: TerminalBounds) => invoke<void>("terminal_bounds", { connectionId, bounds });
 
 // Native folder picker (returns null if cancelled)
