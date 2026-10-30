@@ -190,17 +190,19 @@ pub(crate) fn init_before_machines(conn: &Connection) -> Result<()> {
     crate::task_reset::init(conn)?;
     crate::workspace_terminal::init(conn)?;
     // Keep the original creation outcome and identity as evidence after dismissal.
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS workspace_operation_dismissals (
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS workspace_operation_dismissals (
         operation_id TEXT PRIMARY KEY REFERENCES workspace_operations(id),
         dismissed_at TEXT NOT NULL);
-        INSERT OR IGNORE INTO schema_migrations(version) VALUES(17);")?;
+        INSERT OR IGNORE INTO schema_migrations(version) VALUES(17);",
+    )?;
     Ok(())
 }
 
 /// Only called once when opening the application, never during a live command.
 pub fn recover_interrupted(conn: &Connection) -> Result<()> {
     crate::idle_cleanup::recover(conn)?;
-    conn.execute("UPDATE task_title_requests SET state='interrupted',error='title.interrupted' WHERE state IN ('pending','running')", [])?;
+    crate::task_titles::recover_at(conn, chrono::Utc::now().timestamp_millis())?;
     conn.execute("DELETE FROM image_drafts", [])?;
     let _ = crate::images::release_abandoned_preparations(conn, true);
     // Reclamation cannot prevent opening otherwise usable task data.

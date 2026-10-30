@@ -168,6 +168,7 @@ pub fn run() {
             commands::board_tasks,
             commands::task_overview,
             commands::create_task,
+            commands::retry_task_title,
             commands::last_codex_settings,
             commands::codex_model_catalog,
             commands::update_task,

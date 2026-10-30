@@ -47,6 +47,7 @@ export interface WorkspaceOperation { machine_id?: string; id: string; session: 
 export interface ProjectSnapshot { session: string; projects: Project[]; workspaces: HerdrWorkspace[]; operations: WorkspaceOperation[] }
 
 export interface Task {
+  title_generation?: { id: string; state: "pending" | "running" | "retry_wait" | "failed" | "interrupted" | "invalidated" | "succeeded"; attempts: number; next_attempt_ms: number; error: string } | null;
   execution_epoch?: number;
   codex_settings?: CodexSettings;
   codex_settings_editable?: boolean;

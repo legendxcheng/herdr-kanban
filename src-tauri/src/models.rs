@@ -65,6 +65,8 @@ impl TaskPriority {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Task {
     #[serde(default)]
+    pub title_generation: Option<crate::task_titles::TitleState>,
+    #[serde(default)]
     pub execution_epoch: i64,
     pub codex_settings: crate::codex_settings::Settings,
     pub codex_settings_editable: bool,

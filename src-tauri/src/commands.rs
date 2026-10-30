@@ -18,6 +18,15 @@ pub fn list_projects(state: State<DbState>) -> Result<Vec<Project>, String> {
 // ── Tasks ─────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
+pub fn retry_task_title(
+    titles: State<crate::task_titles::TaskTitles>,
+    id: String,
+    request_id: String,
+) -> Result<(), String> {
+    titles.retry(&id, &request_id)
+}
+
+#[tauri::command]
 pub fn list_tasks(state: State<DbState>, project_id: String) -> Result<Vec<Task>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     crate::tasks::list(&conn, &project_id)

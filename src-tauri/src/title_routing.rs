@@ -124,17 +124,28 @@ mod tests {
         calls: Arc<Mutex<Vec<String>>>,
         fail: bool,
     }
+    impl Probe {
+        fn assert_database_available(&self) {
+            // Another title worker may briefly own the lock. A lock held across
+            // this model call would remain unavailable until the deadline.
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while self.db.try_lock().is_err() {
+                assert!(
+                    Instant::now() < deadline,
+                    "no database lock during model call"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
     impl Backend for Probe {
         fn local(&self, _: &str, _: &AtomicBool) -> Result<String, String> {
-            assert!(
-                self.db.try_lock().is_ok(),
-                "no database lock during model call"
-            );
+            self.assert_database_available();
             self.calls.lock().unwrap().push("local".into());
             Ok("Local title".into())
         }
         fn remote(&self, machine: &Machine, _: &str, _: &AtomicBool) -> Result<String, String> {
-            assert!(self.db.try_lock().is_ok());
+            self.assert_database_available();
             self.calls.lock().unwrap().push(machine.id.clone());
             if self.fail {
                 Err("title.unavailable".into())

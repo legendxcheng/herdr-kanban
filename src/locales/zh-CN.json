@@ -416,5 +416,18 @@
   "reset.confirm": "放弃本次执行并退回",
   "reset.stale": "任务状态已变化，请关闭弹窗并重新操作。",
   "reset.running": "任务正在启动或派发，请等待结果后再退回。",
-  "reset.not_failed": "任务已不处于失败或待核实状态，请刷新后重试。"
+  "reset.not_failed": "任务已不处于失败或待核实状态，请刷新后重试。",
+  "title.retry": "重试标题",
+  "title.failed": "标题生成失败，已保留摘要。",
+  "title.generating": "正在生成标题",
+  "title.waiting": "等待第 {attempt}/4 次标题生成，预计 {time} 重试",
+  "title.stale": "标题或任务状态已变化，请刷新后重试。",
+  "title.worker_failed": "标题服务暂不可用，请重启应用后重试。",
+  "title.input": "当前任务没有可用于生成标题的文字或引用。",
+  "title.timeout": "标题生成超时。",
+  "title.cli_failed": "标题生成程序调用失败，请检查执行电脑的 Codex 登录和网络。",
+  "title.generation_failed": "标题生成未成功。",
+  "title.invalid_output": "未能获得有效标题。",
+  "title.unavailable": "执行电脑上找不到可用的 Codex。",
+  "title.interrupted": "上次标题生成被中断。"
 }

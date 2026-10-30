@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-30。自动标题增加持久化退避重试、重启续跑及卡片手动重试。schema 19 保存尝试次数和下次执行时间，取消排队 60 秒即失败；通过请求 ID、编辑版本和尝试次数拒绝迟到结果。旧失败记录仅由用户手动重试，已有手动修改和开发派发不受影响。实现见 6.2.4，验证见[标题重试验证](docs/verification/2026-10-30-title-retry.md)。
+
 更新日期：2026-10-30。SSH Prompt 提交支持临时只读观察错误的有界恢复：整次提交最多重试两次，仅明确失败的观察可重建控制连接，写入结果不确定时仍停止。新增逐步输入日志和未发起 Enter／Enter 结果待核实提示，无数据库迁移及新增 IPC。规格为 GitHub #44，实现见 6.4.1、6.6.3，验证及交付边界见[SSH 提交恢复验收](docs/verification/2026-10-30-ssh-submit-recovery.md)。
 
 更新日期：2026-10-30。自动标题跟随任务所属执行电脑：本地调用本机 Codex，SSH 任务通过身份校验后的 helper 调用远端 Codex；失败保留摘要且不回退本机。增加 npm 入口解析、可取消的部署/请求时限及稳定错误码；无数据库迁移和前端 IPC 变化。实现见 6.2.4，验证及真实 SSH 阻碍见[标题机器路由验证](docs/verification/2026-10-30-title-machine-routing.md)。
@@ -223,7 +225,7 @@ herdr-kanban/
 │     ├─ title_routing.rs          按 Project 归属冻结标题执行电脑、SSH helper 调用及返回身份复核
 │     ├─ title_executable.rs       执行电脑的 Codex 入口解析；npm 经 node + 官方 JS 入口运行
 │     ├─ title_cli.rs / title_process.rs  最小 Codex 配置、结构化结果、有界进程及后代清理
-│     ├─ title_tests.rs / title_process_tests.rs  真实 SQLite、可控生成器/进程及显式 CLI live 验收
+│     ├─ title_tests.rs / title_retry_tests.rs / title_process_tests.rs  真实 SQLite、退避/重启/迁移/竞态、可控生成器/进程及显式 CLI live 验收
 │     ├─ task_overview.rs / task_overview_tests.rs  跨项目列计数、今日完成聚合及迁移/日界线验证
 │     ├─ task_summary.rs / task_summary_tests.rs  可见 Workspace 未归档任务摘要、跨项目优先级排序与启动状态投影
 │     ├─ completed_task_tests.rs   批量范围、后台启动投影、部分失败回滚、归档重开与异常删除回归
@@ -428,6 +430,7 @@ flowchart TD
 | `id`、`project_id` | 卡片主键及所属项目；SQL 声明项目外键 |
 | `execution_epoch` | 当前执行代次；默认 0，每次明确放弃执行并退回 Todo 时递增，防止重置前的派发准备跨代提交 |
 | `name`、`status` | 名称与 `todo / in_progress / done` 三态 |
+| `title_generation` | 可空标题请求投影：id、state、attempts、next_attempt_ms、error；创建和任务列表返回，独立于开发生命周期 |
 | `prompt_json` | Tiptap 文档的 JSON 字符串；新建表单直接提交正文，旧 IPC 调用省略 promptJson 时兼容 `"{}"` |
 | `prompt_snapshot` | 最近一次成功派发时实际发送的文本，可为空；历史快照不重写 |
 | `dispatched_at`、`dispatched_to` | 最近一次派发时间与 `workspace/pane_id`，可为空 |
@@ -458,7 +461,7 @@ flowchart TD
 | `task_working_directories` | 按任务保存首次启动/派发目录；同步项目目录不覆盖历史上下文 |
 | `workspace_terminals` | schema 18：按 machine/session/workspace 唯一保存普通 shell 的创建操作 ID、初始 cwd、完整 pane/terminal/Tab 身份及 creating/ready/failed 状态；独立于任务和 Project 删除生命周期，未知结果保留创建意图 |
 | `schema_migrations` | 当前 18；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用，10 加完成时间与生命周期索引，11 加标题请求与失效触发器，12 加执行电脑身份和隔离约束，13 加显示偏好，14 补机器连接元数据，15 加任务配置、最近偏好、配置快照及目录缓存，16 加任务执行代次、重置历史及旧目标隔离，17 加 Workspace 创建记录移除标记，18 加 Workspace 普通终端；初始化可重复执行 |
-| `task_title_requests` | task_id 主键并级联删除，唯一请求 UUID、最多 2000 字符输入快照、created_ms、edit_version、状态及稳定错误码；pending/running 与开发生命周期独立，重启转 interrupted，不重试 |
+| `task_title_requests` | task_id 主键并级联删除，唯一请求 UUID、最多 2000 字符输入快照、created_ms、edit_version、状态及稳定错误码；schema 19 新增 attempts、next_attempt_ms 和到期索引，pending/running/retry_wait 与开发生命周期独立；新请求重启续跑，旧失败/中断记录仅手动重试 |
 | `prompt_images`、`image_drafts` | 图片 ID、项目归属、名称、MIME、字节数、尺寸及内容摘要；草稿按项目/可选任务独立持有，重启释放未保存草稿 |
 | `draft_image_refs`、`task_image_refs`、`operation_image_refs` | 分别保护可撤销的草稿、已保存正文和已受理操作；归档保留引用，删除不抹除已有启动/派发证据 |
 | `image_prompt_snapshots` | 手动图片派发的操作 ID、正文及展开文本；重试同一操作使用同一快照，无实际操作记录的孤儿准备在任务删除/应用重开后释放 |
@@ -680,17 +683,21 @@ IPC 使用后台线程执行本地事务。每个去重后的 ID 都在自己的
 
 `TaskFormDialog → create_task → TaskTitles` 负责保存；应用启动注册两个后台 worker。`title_prompt` 从第一段有效普通文字生成最多 40 个 Unicode 字符的摘要；无普通文字时使用引用名称，纯图片直接使用本地化“图片任务”，不调用模型。输入快照保留文字和引用显示名称，最多 2000 字符，不读取文件/技能正文或上传图片。
 
-`title_cli → title_process` 直接启动独立 `codex exec`，固定 `gpt-6-luna`、low、Standard；最小配置、临时工作目录、短标题指令和 JSON Schema，禁用开发工具、技能上下文、插件及 hook。复用 CLI 登录，不修改全局配置或正常开发模型。可用 `KANBAN_CODEX_EXECUTABLE` 指定测试执行程序；显式错误路径不回退。进程上限 30 秒、队列等待上限 60 秒，stdout/stderr 各限制 64 KiB；Windows Job Object／Unix 进程组清理后代。最多两路，不自动重试或换模型。
+`title_cli → title_process` 直接启动独立 `codex exec`，固定 `gpt-6-luna`、low、Standard；最小配置、临时工作目录、短标题指令和 JSON Schema，禁用开发工具、技能上下文、插件及 hook。复用 CLI 登录，不修改全局配置或正常开发模型。可用 `KANBAN_CODEX_EXECUTABLE` 指定测试执行程序；显式错误路径不回退。进程上限 30 秒，stdout/stderr 各限制 64 KiB；Windows Job Object／Unix 进程组清理后代。最多两路，不换模型。2026-10-30 的重试修正取消队列等待 60 秒直接失败；临时超时、进程调用失败、I/O 和无效输出在 10 秒、30 秒、120 秒退避后重试，含首次共最多 4 次。机器停用、身份变化、入口不可用、工具/容量违规等不自动重试；通用 CLI 失败未细分登录与网络错误，因此同样受 4 次上限约束。
 
 2026-10-30 起，worker 将保存的 project_id 交给 `title_routing::RoutedTitles`，在短数据库锁内解析机器，释放锁后调用模型。本地沿用上述 CLI；SSH 使用独立的一次性 JSON 请求 `task_title`，先确保当前 helper 并核对 profile/主机身份，再在远端以 SSH 登录用户的 Codex 身份生成标题，不占用开发 pane。返回后再次核对机器身份和停用状态；远端失败不调用本机。标题模型仍独立于任务开发模型，远端只接收已有的限长文字/引用名称快照，不发送本机登录凭据。
 
-`title_executable` 在执行电脑上优先使用显式入口，其次已安装的 Codex EXE、PATH 和用户 npm 目录；npm 的 `codex.cmd` 通过同目录官方 `codex.js` 与 node.exe 作为独立参数运行，不将提示词拼入 shell。SSH 准备与调用的总预算为 240 秒（首次可能上传 helper），单次标题传输最多 55 秒，远端模型进程仍限制 30 秒。退出可取消部署、等待部署锁及本机 SSH 子进程；已进入远端的模型由远端自身时限和 Job Object 收尾，不承诺跨机瞬时取消。两路 worker 及 60 秒排队上限保持不变，慢远端占满 worker 时其他排队请求仍可能超时保留摘要。
+`title_executable` 在执行电脑上优先使用显式入口，其次已安装的 Codex EXE、PATH 和用户 npm 目录；npm 的 `codex.cmd` 通过同目录官方 `codex.js` 与 node.exe 作为独立参数运行，不将提示词拼入 shell。SSH 准备与调用的总预算为 240 秒（首次可能上传 helper），单次标题传输最多 55 秒，远端模型进程仍限制 30 秒。退出可取消部署、等待部署锁及本机 SSH 子进程；已进入远端的模型由远端自身时限和 Job Object 收尾，不承诺跨机瞬时取消。两路 worker 保持；慢远端可能延迟其他任务，但排队不会因此转失败。退避中的请求持久化等待，不占 worker。
 
-部署的小型身份/哈希元数据作为 Base64 数据放入编码 PowerShell 脚本，绕开 Windows PowerShell 5 在 SSH 下读取 Console.In 的挂起；标题正文仍走 helper stdin JSON。失败请求保留 `title.*` / `machine.*` 稳定错误码，不持久化原始 stderr；旧失败请求不补跑。当前验证和真实 SSH 尚未完成的边界见[标题机器路由验证](docs/verification/2026-10-30-title-machine-routing.md)。
+部署的小型身份/哈希元数据作为 Base64 数据放入编码 PowerShell 脚本，绕开 Windows PowerShell 5 在 SSH 下读取 Console.In 的挂起；标题正文仍走 helper stdin JSON。失败请求保留 `title.*` / `machine.*` 稳定错误码，不持久化原始 stderr；旧失败请求不自动补跑，可通过卡片“重试标题”重新读取当前正文并创建新请求。机器路由最初一轮验证和真实 SSH 边界见[标题机器路由验证](docs/verification/2026-10-30-title-machine-routing.md)。
 
-生成结果仅在请求仍 running 的短事务中写回；名称/正文修改及归档触发请求 invalidated，编辑版本递增；删除外键级联移除请求。主动改名即使与临时值相同也撤销旧请求。输出去引号后空白、控制字符、Unicode 行/段分隔符或结构错误保留摘要；正常单行标题去除外围引号并截至 40 字符。请求状态不参与启动、派发或删除互斥，旧任务不批量起名。
+生成结果仅在 task_id、请求 UUID、编辑版本、尝试次数匹配且请求仍 running、任务未归档的短事务中写回；名称/正文修改及归档使 pending/running/retry_wait/failed/interrupted 请求 invalidated，编辑版本递增；删除外键级联移除请求。主动改名即使与临时值相同也撤销旧请求。输出去引号后空白、控制字符、Unicode 行/段分隔符或结构错误保留摘要；正常单行标题去除外围引号并截至 40 字符。请求状态不参与启动、派发或删除互斥，旧任务不批量起名。
 
-`task-title-changed` 只携带 project_id，前端按当前项目读取任务；与现有启动事件共用合并查询、焦点及 2 秒兜底刷新，不抢选择或重连终端。退出取消工作并回收子进程；启动恢复将残余 pending/running 标为 interrupted，保留任务和摘要，不重新调用。`images::save_task_in` 在调用者事务内保存图片，确保生成意图与附件一起提交。
+`task-title-changed` 只携带 project_id，前端按当前项目读取任务；与现有启动事件共用合并查询、焦点及 2 秒兜底刷新，不抢选择或重连终端。退出取消工作并回收子进程；启动恢复保留 pending 和 retry_wait 的计划，将残余 running 按已消耗尝试次数转为 retry_wait；已达 4 次则 failed。正常退出的取消也按同一预算退避，反复重启不会重置次数。schema 19 首次升级将旧 pending/running 标为 interrupted，旧 failed/interrupted 保持手动恢复，避免自动采用无法证明未修改的旧输入。`images::save_task_in` 在调用者事务内保存图片，确保生成意图与附件一起提交。
+
+新增 IPC `retry_task_title(id, requestId)`：仅受理未归档任务的当前 failed/interrupted 请求，按当前正文重建输入并更换 UUID、递增版本、重置本轮预算；重复请求合并到已经 pending/running/retry_wait 的任务，不新增模型调用。手动改名或正文编辑已撤销的请求不能被旧按钮恢复。`TaskCard` 在三列共用紧凑标题工具区显示等待状态/次数或“重试标题”按钮，沿用 `task-title-changed` 和轮询刷新；不切换终端、不发送开发提示词。
+
+本次重试验证见[标题重试验证](docs/verification/2026-10-30-title-retry.md)。以下为 2026-10-25 初版历史验收，队列超时与重启不重试规则已由本次修正替代：
 
 前端 128 项、Rust 132 项常规测试通过，9 项 live 默认忽略；真实 CLI 三种输入已另行运行。原生 WebView2 + Rust/SQLite 的创建返回约 78 ms，后台刷新、编辑冲突、项目隔离和关闭重开通过，另以真实 CLI 通过桌面命名链路。20 个排队任务验证最高并发为 2、超时保留摘要；真实 Herdr 在标题等待期间启动并取得实际 Codex 回复，测试 Workspace 已清理。完整验收与未覆盖项见[自动标题验收记录](docs/verification/2026-10-25-task-auto-title.md)。
 

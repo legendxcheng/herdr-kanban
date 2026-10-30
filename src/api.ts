@@ -41,6 +41,7 @@ export const boardTasks = (projectIds: string[]) => invoke<Task[]>("board_tasks"
 export const taskSummary = (projectIds: string[]) => invoke<TaskSummary[]>("task_summary", { projectIds });
 export const createTask = (projectId: string, priority: TaskPriority, promptJson: string, draftId?: string, codexSettings?: CodexSettings) =>
   invoke<Task>("create_task", { projectId, priority, promptJson, draftId, locale: document.documentElement.lang, ...(codexSettings ? { codexSettings } : {}) });
+export const retryTaskTitle = (id: string, requestId: string) => invoke<void>("retry_task_title", { id, requestId });
 export const updateTask = (id: string, name: string | undefined, promptJson: string, priority: TaskPriority, draftId?: string, codexSettings?: CodexSettings) =>
   invoke<void>("update_task", { id, name, promptJson, priority, draftId, ...(codexSettings ? { codexSettings } : {}) });
 export const lastCodexSettings = () => invoke<CodexSettings>("last_codex_settings");

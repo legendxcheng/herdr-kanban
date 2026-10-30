@@ -416,5 +416,18 @@
   "reset.confirm": "Discard execution and return",
   "reset.stale": "The task has changed. Close this dialog and try again.",
   "reset.running": "The task is starting or dispatching. Wait for the result before returning it to Todo.",
-  "reset.not_failed": "The task is no longer failed or awaiting verification. Refresh and try again."
+  "reset.not_failed": "The task is no longer failed or awaiting verification. Refresh and try again.",
+  "title.retry": "Retry title",
+  "title.failed": "Title generation failed; summary retained.",
+  "title.generating": "Generating title",
+  "title.waiting": "Waiting for title attempt {attempt}/4; retry at {time}",
+  "title.stale": "The title or task changed. Refresh and try again.",
+  "title.worker_failed": "Title service unavailable. Restart the app and try again.",
+  "title.input": "This task has no text or references to summarize.",
+  "title.timeout": "Title generation timed out.",
+  "title.cli_failed": "Title generation failed. Check Codex sign-in and network on the execution computer.",
+  "title.generation_failed": "Title generation did not complete.",
+  "title.invalid_output": "No valid title was returned.",
+  "title.unavailable": "Codex is unavailable on the execution computer.",
+  "title.interrupted": "The previous title attempt was interrupted."
 }

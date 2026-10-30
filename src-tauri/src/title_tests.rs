@@ -3,6 +3,9 @@ use crate::{db, tasks};
 use std::sync::mpsc;
 use std::time::Instant;
 
+#[path = "title_retry_tests.rs"]
+mod retry;
+
 struct Gate {
     started: mpsc::Sender<String>,
     answer: Mutex<mpsc::Receiver<Result<String, String>>>,
@@ -25,11 +28,20 @@ fn failure_codes_are_retained_but_diagnostic_text_is_not_persisted() {
         let task = service.create(new_task("fallback")).unwrap();
         let conn = db.lock().unwrap();
         conn.execute(
-            "UPDATE task_title_requests SET state='running' WHERE task_id=?1",
+            "UPDATE task_title_requests SET state='pending' WHERE task_id=?1",
             [&task.id],
         )
         .unwrap();
-        finish(&conn, &task.id, Err(error.into())).unwrap();
+        let job = take_next_at(&conn, chrono::Utc::now().timestamp_millis())
+            .unwrap()
+            .unwrap();
+        finish_at(
+            &conn,
+            &job,
+            Err(error.into()),
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .unwrap();
         let actual: (String,String) = conn.query_row("SELECT t.name,r.error FROM tasks t JOIN task_title_requests r ON r.task_id=t.id WHERE t.id=?1", [&task.id], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
         assert_eq!(actual, ("fallback".into(), expected.into()));
     }
@@ -426,7 +438,7 @@ fn deleted_and_archived_tasks_never_return_from_a_late_result() {
 }
 
 #[test]
-fn shutdown_and_recovery_keep_tasks_without_retrying_generation() {
+fn shutdown_and_recovery_resume_queued_tasks_and_preserve_retry_budget() {
     let db = database();
     let (started, input) = mpsc::channel();
     let (_answer, response) = mpsc::channel();
@@ -443,7 +455,13 @@ fn shutdown_and_recovery_keep_tasks_without_retrying_generation() {
     service.shutdown();
     db::recover_interrupted(&db.lock().unwrap()).unwrap();
     let restarted = TaskTitles::new(db.clone(), generator, Arc::new(|_| {}));
-    assert!(input.recv_timeout(Duration::from_millis(150)).is_err());
+    assert_eq!(
+        input.recv_timeout(Duration::from_secs(2)).unwrap(),
+        "排队中"
+    );
+    let state = view(&db.lock().unwrap(), &first.id).unwrap().unwrap();
+    assert_eq!(state.state, "retry_wait");
+    assert_eq!(state.attempts, 1);
     let saved = tasks::list(&db.lock().unwrap(), "p").unwrap();
     assert_eq!(saved.len(), 3);
     assert!(saved.iter().any(|t| t.id == first.id && t.name == "运行中"));

@@ -31,6 +31,8 @@ interface TaskCardProps {
 export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, removing, onComplete, onStart, onFlowRecover, onViewPrompt, onReset }: TaskCardProps) {
   const archivingRef = useRef(false);
   const deletingRef = useRef(false);
+  const retryingTitleRef = useRef(false);
+  const [retryingTitle, setRetryingTitle] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useLocalizedMessage();
@@ -49,6 +51,13 @@ export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEd
     : preparation || busy ? "task.compact_preparing" : null;
   const toggleDetails = () => setDetailsOpen(open => !open);
   const sourceLabel = source ? `${source.machineName} · ${source.workspaceName}` : "";
+  const titleState = task.title_generation;
+  const titleFailed = titleState && ["failed", "interrupted"].includes(titleState.state);
+  const titlePending = titleState && ["pending", "running", "retry_wait"].includes(titleState.state);
+  const titleStatus = titleState?.state === "retry_wait"
+    ? tr("title.waiting", { attempt: titleState.attempts + 1, time: new Date(titleState.next_attempt_ms).toLocaleTimeString() })
+    : titleFailed ? tr("title.failed") : tr("title.generating");
+  const titleError = titleState?.error === "machine.timeout" ? tr("title.timeout") : errorText(titleState?.error ?? "");
   const sourceContent = source && <>
     <span className="machine-source" style={{ color: identityColor("machine", source.machineId) }}>{source.machineName}</span>
     <span className="summary-source-separator"> · </span>
@@ -71,6 +80,19 @@ export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEd
       setArchiveError(String(error));
     } finally {
       archivingRef.current = false; setArchiving(false);
+    }
+  }
+
+  async function handleTitleRetry() {
+    if (!titleFailed || !titleState || retryingTitleRef.current || removing || deleting || archiving) return;
+    retryingTitleRef.current = true; setRetryingTitle(true);
+    try {
+      await api.retryTaskTitle(task.id, titleState.id);
+      onChanged();
+    } catch (error) {
+      notify({ error: String(error) }, "error");
+    } finally {
+      retryingTitleRef.current = false; setRetryingTitle(false);
     }
   }
 
@@ -102,6 +124,11 @@ export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEd
           <span className="task-name" title={task.name}>{task.name}</span>
         </div>
         <div className="task-tools" {...controls}>
+        {titleFailed && <button className="btn-ghost" onClick={handleTitleRetry} disabled={retryingTitle || deleting || removing || archiving}
+          aria-label={tr("title.retry")} title={`${titleStatus} ${titleError} · ${tr("title.retry")}`}>
+          {retryingTitle && <span className="spinner" />}{tr("title.retry")}
+        </button>}
+        {titlePending && <span role="status" aria-label={titleStatus} title={titleStatus}><Icon name="progress" /></span>}
         {compact && (hasModel || source) && <button className="btn-icon" onClick={toggleDetails}
           aria-label={tr("task.details")} title={tr("task.details")} aria-expanded={detailsOpen} aria-controls={detailsId}><Icon name="info" /></button>}
         <fieldset disabled={controlsDisabled} className="task-tools">
