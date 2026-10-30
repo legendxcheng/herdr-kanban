@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-30。自动标题跟随任务所属执行电脑：本地调用本机 Codex，SSH 任务通过身份校验后的 helper 调用远端 Codex；失败保留摘要且不回退本机。增加 npm 入口解析、可取消的部署/请求时限及稳定错误码；无数据库迁移和前端 IPC 变化。实现见 6.2.4，验证及真实 SSH 阻碍见[标题机器路由验证](docs/verification/2026-10-30-title-machine-routing.md)。
+
 更新日期：2026-10-30。Codex 启动遇到确认的更新选择页时自动发送一次 Esc（Skip），等待同一进程交互就绪后继续原流程；其他弹窗、身份变化及不确定结果不自动回答或重放。无 IPC／数据库迁移。285 项 Rust 常规测试及真实本机 0.165.0 更新页跳过验证通过，运行中的安装版未替换；实现见 6.6.4，证据及边界见[更新提示 Skip 验证](docs/verification/2026-10-30-codex-startup-update-skip.md)。
 
 更新日期：2026-10-29。SSH 任务新建与精确恢复跳过模型目录预检，保留配置格式检查并将冻结的模型／思考强度直接传给 Herdr；本地启动仍查询目录校验。远端目录或缓存继续用于表单选择，查询失败提示可保留已有配置启动。无 IPC／数据库迁移，恢复与未知结果不重发。实现见 6.2.7，测试和真实 SSH 未覆盖边界见[SSH 模型预检修正](docs/verification/2026-10-29-ssh-model-preflight.md)。
@@ -216,6 +218,8 @@ herdr-kanban/
 │     ├─ codex_catalog.rs          执行环境目录查询、机器/目录缓存与配置能力校验
 │     ├─ model_acceptance.rs       显式 opt-in 的本机/SSH 真实模型启动与精确恢复验收
 │     ├─ title_prompt.rs           正文/引用名称摘要、输入限长及纯图片兜底
+│     ├─ title_routing.rs          按 Project 归属冻结标题执行电脑、SSH helper 调用及返回身份复核
+│     ├─ title_executable.rs       执行电脑的 Codex 入口解析；npm 经 node + 官方 JS 入口运行
 │     ├─ title_cli.rs / title_process.rs  最小 Codex 配置、结构化结果、有界进程及后代清理
 │     ├─ title_tests.rs / title_process_tests.rs  真实 SQLite、可控生成器/进程及显式 CLI live 验收
 │     ├─ task_overview.rs / task_overview_tests.rs  跨项目列计数、今日完成聚合及迁移/日界线验证
@@ -669,11 +673,17 @@ IPC 使用后台线程执行本地事务。每个去重后的 ID 都在自己的
 
 验证与边界见 [任务概况验收记录](docs/verification/2026-10-25-kanban-task-overview.md)。本次没有增加真实 Herdr 的查询或写操作；真实 Agent 派发/恢复与安装包升级需单独验收。
 
-### 6.2.4 自动任务标题（2026-10-25，GitHub #1）
+### 6.2.4 自动任务标题（2026-10-30 更新，GitHub #1）
 
 `TaskFormDialog → create_task → TaskTitles` 负责保存；应用启动注册两个后台 worker。`title_prompt` 从第一段有效普通文字生成最多 40 个 Unicode 字符的摘要；无普通文字时使用引用名称，纯图片直接使用本地化“图片任务”，不调用模型。输入快照保留文字和引用显示名称，最多 2000 字符，不读取文件/技能正文或上传图片。
 
 `title_cli → title_process` 直接启动独立 `codex exec`，固定 `gpt-6-luna`、low、Standard；最小配置、临时工作目录、短标题指令和 JSON Schema，禁用开发工具、技能上下文、插件及 hook。复用 CLI 登录，不修改全局配置或正常开发模型。可用 `KANBAN_CODEX_EXECUTABLE` 指定测试执行程序；显式错误路径不回退。进程上限 30 秒、队列等待上限 60 秒，stdout/stderr 各限制 64 KiB；Windows Job Object／Unix 进程组清理后代。最多两路，不自动重试或换模型。
+
+2026-10-30 起，worker 将保存的 project_id 交给 `title_routing::RoutedTitles`，在短数据库锁内解析机器，释放锁后调用模型。本地沿用上述 CLI；SSH 使用独立的一次性 JSON 请求 `task_title`，先确保当前 helper 并核对 profile/主机身份，再在远端以 SSH 登录用户的 Codex 身份生成标题，不占用开发 pane。返回后再次核对机器身份和停用状态；远端失败不调用本机。标题模型仍独立于任务开发模型，远端只接收已有的限长文字/引用名称快照，不发送本机登录凭据。
+
+`title_executable` 在执行电脑上优先使用显式入口，其次已安装的 Codex EXE、PATH 和用户 npm 目录；npm 的 `codex.cmd` 通过同目录官方 `codex.js` 与 node.exe 作为独立参数运行，不将提示词拼入 shell。SSH 准备与调用的总预算为 240 秒（首次可能上传 helper），单次标题传输最多 55 秒，远端模型进程仍限制 30 秒。退出可取消部署、等待部署锁及本机 SSH 子进程；已进入远端的模型由远端自身时限和 Job Object 收尾，不承诺跨机瞬时取消。两路 worker 及 60 秒排队上限保持不变，慢远端占满 worker 时其他排队请求仍可能超时保留摘要。
+
+部署的小型身份/哈希元数据作为 Base64 数据放入编码 PowerShell 脚本，绕开 Windows PowerShell 5 在 SSH 下读取 Console.In 的挂起；标题正文仍走 helper stdin JSON。失败请求保留 `title.*` / `machine.*` 稳定错误码，不持久化原始 stderr；旧失败请求不补跑。当前验证和真实 SSH 尚未完成的边界见[标题机器路由验证](docs/verification/2026-10-30-title-machine-routing.md)。
 
 生成结果仅在请求仍 running 的短事务中写回；名称/正文修改及归档触发请求 invalidated，编辑版本递增；删除外键级联移除请求。主动改名即使与临时值相同也撤销旧请求。输出去引号后空白、控制字符、Unicode 行/段分隔符或结构错误保留摘要；正常单行标题去除外围引号并截至 40 字符。请求状态不参与启动、派发或删除互斥，旧任务不批量起名。
 

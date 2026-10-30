@@ -30,7 +30,7 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
 }
 
 pub trait TitleGenerator: Send + Sync {
-    fn generate(&self, input: &str, stop: &AtomicBool) -> Result<String, String>;
+    fn generate(&self, project: &str, input: &str, stop: &AtomicBool) -> Result<String, String>;
 }
 
 pub struct NewTask {
@@ -68,7 +68,7 @@ impl TaskTitles {
                         if let Some((task, input, project)) = job {
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    generator.generate(&input, &stop)
+                                    generator.generate(&project, &input, &stop)
                                 }))
                                 .unwrap_or_else(|_| Err("title.worker_failed".into()));
                             if let Ok(db) = db.lock() {
@@ -247,8 +247,19 @@ fn finish(db: &Connection, task: &str, result: Result<String, String>) -> Result
                 .map_err(err)?;
             }
         }
-        Err(_) => {
-            tx.execute("UPDATE task_title_requests SET state='failed',error='title.generation_failed' WHERE task_id=?1 AND state='running'", [task]).map_err(err)?;
+        Err(error) => {
+            // Store only stable codes, never CLI stderr, prompts or credentials.
+            let code = if (error.starts_with("title.") || error.starts_with("machine."))
+                && error.len() <= 80
+                && error
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b == b'.' || b == b'_')
+            {
+                error.as_str()
+            } else {
+                "title.generation_failed"
+            };
+            tx.execute("UPDATE task_title_requests SET state='failed',error=?2 WHERE task_id=?1 AND state='running'", params![task, code]).map_err(err)?;
         }
     }
     tx.commit().map_err(err)

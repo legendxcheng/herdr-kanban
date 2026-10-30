@@ -213,6 +213,10 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
         .as_str()
         .ok_or("machine.invalid_request")?
     {
+        "task_title" => Ok(json!(
+            crate::title_cli::CodexTitleGenerator::from_env()
+                .generate(text("input")?, &std::sync::atomic::AtomicBool::new(false))?
+        )),
         "cli_output" => {
             let args: Vec<String> = serde_json::from_value(request["args"].clone())
                 .map_err(|_| "machine.invalid_request")?;
@@ -345,6 +349,16 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn title_input_is_bounded_before_starting_codex() {
+        let cli = crate::herdr::Cli::from_env();
+        for input in ["".to_string(), "x".repeat(2001)] {
+            assert_eq!(
+                execute(&cli, &json!({"method":"task_title","input":input})).unwrap_err(),
+                "title.input"
+            );
+        }
+    }
     #[cfg(windows)]
     #[test]
     fn preflight_checks_herdr_without_requiring_codex() {

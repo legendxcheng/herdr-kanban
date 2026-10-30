@@ -8,13 +8,39 @@ struct Gate {
     answer: Mutex<mpsc::Receiver<Result<String, String>>>,
 }
 struct NoTitle;
+
+#[test]
+fn failure_codes_are_retained_but_diagnostic_text_is_not_persisted() {
+    let db = database();
+    let service = TaskTitles::new(db.clone(), Arc::new(NoTitle), Arc::new(|_| {}));
+    service.shutdown();
+    for (error, expected) in [
+        ("title.timeout", "title.timeout"),
+        ("machine.identity_changed", "machine.identity_changed"),
+        (
+            "title.cli_failed: sensitive diagnostic",
+            "title.generation_failed",
+        ),
+    ] {
+        let task = service.create(new_task("fallback")).unwrap();
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "UPDATE task_title_requests SET state='running' WHERE task_id=?1",
+            [&task.id],
+        )
+        .unwrap();
+        finish(&conn, &task.id, Err(error.into())).unwrap();
+        let actual: (String,String) = conn.query_row("SELECT t.name,r.error FROM tasks t JOIN task_title_requests r ON r.task_id=t.id WHERE t.id=?1", [&task.id], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+        assert_eq!(actual, ("fallback".into(), expected.into()));
+    }
+}
 impl TitleGenerator for NoTitle {
-    fn generate(&self, _: &str, _: &AtomicBool) -> Result<String, String> {
+    fn generate(&self, _: &str, _: &str, _: &AtomicBool) -> Result<String, String> {
         Err("unused".into())
     }
 }
 impl TitleGenerator for Gate {
-    fn generate(&self, input: &str, stop: &AtomicBool) -> Result<String, String> {
+    fn generate(&self, _: &str, input: &str, stop: &AtomicBool) -> Result<String, String> {
         self.started.send(input.into()).unwrap();
         loop {
             if stop.load(Ordering::Acquire) {

@@ -58,8 +58,10 @@ mod tasks;
 #[cfg(test)]
 mod terminal;
 mod title_cli;
+mod title_executable;
 mod title_process;
 mod title_prompt;
+mod title_routing;
 mod work_commands;
 mod workflow;
 mod workspace_terminal;
@@ -104,7 +106,7 @@ pub fn run() {
             let handle = app.handle().clone();
             app.manage(task_titles::TaskTitles::new(
                 conn.clone(),
-                Arc::new(title_cli::CodexTitleGenerator::from_env()),
+                Arc::new(title_routing::RoutedTitles::new(conn.clone())),
                 Arc::new(move |project_id| {
                     let _ = handle.emit(
                         "task-title-changed",

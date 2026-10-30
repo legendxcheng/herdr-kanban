@@ -1,7 +1,52 @@
 //! SSH carries a versioned JSON request on stdin; paths and prompts are never shell text.
 use base64::Engine;
 use serde::{Serialize, de::DeserializeOwned};
-use std::{process::Command, sync::atomic::AtomicBool, time::Duration};
+use std::{
+    process::Command,
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
+};
+
+/// One deadline covers setup and the request; cancellation never resends work.
+pub(crate) struct Budget<'a> {
+    pub stop: &'a AtomicBool,
+    pub deadline: Instant,
+}
+impl Budget<'_> {
+    pub fn check(&self) -> Result<(), String> {
+        if self.stop.load(Ordering::Acquire) {
+            return Err("machine.cancelled".into());
+        }
+        if Instant::now() >= self.deadline {
+            return Err("machine.timeout".into());
+        }
+        Ok(())
+    }
+    pub fn run(&self, command: Command, input: Vec<u8>, seconds: u64) -> Result<Vec<u8>, String> {
+        self.check()?;
+        crate::title_process::run_with_limit(
+            command,
+            input,
+            self.stop,
+            self.deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(seconds)),
+            20 * 1024 * 1024,
+            false,
+        )
+        .map_err(|e| e.replacen("title.", "machine.", 1))
+    }
+    pub fn verify_profile(&self, machine: &crate::machines::Machine) -> Result<(), String> {
+        if machine.disabled {
+            return Err("machine.disabled".into());
+        }
+        let mut command = Command::new(crate::herdr::Cli::from_env().executable);
+        command.args(["machine", "list", "--json"]);
+        let profiles = serde_json::from_slice(&self.run(command, Vec::new(), 45)?)
+            .map_err(|_| "machine.invalid_response")?;
+        match_profile(machine, profiles)
+    }
+}
 
 pub fn run(command: Command, input: Vec<u8>, seconds: u64) -> Result<Vec<u8>, String> {
     crate::title_process::run_with_limit(
@@ -76,7 +121,17 @@ pub fn verify_profile(machine: &crate::machines::Machine) -> Result<(), String> 
     if machine.disabled {
         return Err("machine.disabled".into());
     }
-    let profile = saved_profiles()?
+    match_profile(machine, saved_profiles()?)
+}
+
+fn match_profile(
+    machine: &crate::machines::Machine,
+    profiles: Vec<crate::machines::SavedMachine>,
+) -> Result<(), String> {
+    if machine.disabled {
+        return Err("machine.disabled".into());
+    }
+    let profile = profiles
         .into_iter()
         .find(|p| Some(&p.id) == machine.profile_id.as_ref())
         .ok_or("machine.profile_missing")?;
@@ -87,6 +142,25 @@ pub fn verify_profile(machine: &crate::machines::Machine) -> Result<(), String> 
         return Err("machine.identity_changed".into());
     }
     Ok(())
+}
+
+/// Dedicated one-shot transport, independent of task-control and search queues.
+pub(crate) fn request_with_budget<T: DeserializeOwned>(
+    machine: &crate::machines::Machine,
+    request: impl Serialize,
+    budget: &Budget<'_>,
+) -> Result<T, String> {
+    let input = serde_json::to_vec(&serde_json::json!({"version":1,"host_identity":machine.host_identity,"session":machine.session,"request":request})).map_err(|_| "machine.invalid_request")?;
+    let bytes = budget.run(helper_command(machine, false)?, input, 55)?;
+    let response: Envelope =
+        serde_json::from_slice(&bytes).map_err(|_| "machine.invalid_response")?;
+    if response.version != 1 || Some(&response.host_identity) != machine.host_identity.as_ref() {
+        return Err("machine.identity_changed".into());
+    }
+    if let Some(error) = response.error {
+        return Err(error);
+    }
+    serde_json::from_value(response.result).map_err(|_| "machine.invalid_response".into())
 }
 
 #[derive(serde::Deserialize)]
@@ -158,6 +232,47 @@ pub fn request<T: DeserializeOwned>(
 
 #[cfg(all(test, windows))]
 mod tests {
+    #[test]
+    fn title_transport_budget_cancels_processes_and_bounds_the_total_deadline() {
+        use super::*;
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let signal = stop.clone();
+        let worker = std::thread::spawn(move || {
+            let budget = Budget {
+                stop: &signal,
+                deadline: Instant::now() + Duration::from_secs(30),
+            };
+            let mut command = Command::new("powershell.exe");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep 30",
+            ]);
+            budget.run(command, vec![], 55)
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        let start = Instant::now();
+        stop.store(true, Ordering::Release);
+        assert_eq!(worker.join().unwrap().unwrap_err(), "machine.cancelled");
+        assert!(start.elapsed() < Duration::from_secs(3));
+        let stop = AtomicBool::new(false);
+        let budget = Budget {
+            stop: &stop,
+            deadline: Instant::now() + Duration::from_millis(100),
+        };
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep 30",
+        ]);
+        assert_eq!(
+            budget.run(command, vec![], 55).unwrap_err(),
+            "machine.timeout"
+        );
+    }
     #[test]
     #[ignore = "requires an explicitly selected SSH machine and its deployed release GUI helper"]
     fn release_gui_helper_returns_preflight_envelope() {
