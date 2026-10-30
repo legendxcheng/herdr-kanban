@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn enter_stage_errors_preserve_unknown_binding_and_operation_without_replay() {
+    for code in [
+        "dispatch.enter_not_sent_verify_required: before_enter: machine.timeout",
+        "dispatch.enter_unknown_verify_required: enter: machine.timeout",
+    ] {
+        let (app, external) = fixture();
+        *external.uncertain.lock().unwrap() = true;
+        *external.send_error_message.lock().unwrap() = Some(code.into());
+        assert_eq!(app.dispatch("a", "w1:p1", "Once", "op").unwrap_err(), code);
+        assert_eq!(app.binding("a").unwrap().state, "unknown");
+        let evidence: String = app
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT evidence FROM dispatch_operations WHERE id='op'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(evidence, code);
+        assert!(app.dispatch("a", "w1:p1", "Once", "op").is_err());
+        assert_eq!(*external.sent.lock().unwrap(), vec!["Once"]);
+    }
+}
+
+#[test]
 fn unconfirmed_submission_stays_unknown_without_blocking_another_pane_or_replaying() {
     let (app, external) = fixture();
     *external.uncertain.lock().unwrap() = true;

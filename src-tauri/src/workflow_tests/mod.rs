@@ -128,5 +128,6 @@ fn fixture() -> (Workflow, Arc<FakeHerdr>) {
 
 mod dispatch_recovery;
 mod live;
+mod ssh_submit;
 mod ownership;
 mod task_mutations;

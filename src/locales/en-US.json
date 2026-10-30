@@ -125,6 +125,8 @@
   "dispatch.pending": "Dispatch pending · Refresh",
   "dispatch.verify_required": "Verify the dispatch result from the task card before retrying",
   "dispatch.submit_verify_required": "Prompt submission was not confirmed; inspect the target terminal and verify the dispatch",
+  "dispatch.enter_not_sent_verify_required": "Input stopped before requesting Enter; the prompt may remain in the composer. Inspect the terminal and verify",
+  "dispatch.enter_unknown_verify_required": "Enter was requested but submission is unconfirmed. Inspect the terminal and verify before dispatching again",
   "dispatch.evidence_required": "Enter verification evidence",
   "dispatch.required": "Use the start or dispatch workflow to enter development",
   "binding.repair_required": "Repair this task binding first",

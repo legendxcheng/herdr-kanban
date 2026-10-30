@@ -125,6 +125,8 @@
   "dispatch.pending": "派发进行中 · 刷新",
   "dispatch.verify_required": "派发结果待核实，请关闭派发窗口后从卡片核实结果",
   "dispatch.submit_verify_required": "未确认提示词已提交，请查看目标终端并核实派发结果",
+  "dispatch.enter_not_sent_verify_required": "输入流程中断，尚未发起 Enter 提交；正文可能留在输入框，请查看目标终端并核实",
+  "dispatch.enter_unknown_verify_required": "已发起 Enter，但提交结果尚未确认；请查看目标终端并核实，不要重复派发",
   "dispatch.evidence_required": "请填写核实依据",
   "dispatch.required": "进入开发中必须通过启动或派发流程",
   "binding.repair_required": "请先修复任务绑定",

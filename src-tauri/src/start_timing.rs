@@ -35,7 +35,7 @@ impl Timing {
     }
 }
 
-fn append(path: &std::path::Path, row: &Value) -> std::io::Result<()> {
+pub(crate) fn append(path: &std::path::Path, row: &Value) -> std::io::Result<()> {
     static LOCK: Mutex<()> = Mutex::new(());
     let _lock = LOCK
         .lock()

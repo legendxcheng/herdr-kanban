@@ -563,6 +563,10 @@ impl Workflow {
             tx.commit().map_err(err)?;
         }
         crate::task_reset::check_dispatch(&*self.db.lock().map_err(err)?, task, operation)?;
+        let _control = crate::remote_control::Scope::enter_if_absent();
+        let database = self.db.lock().ok().and_then(|db| db.path()
+            .filter(|p| !p.is_empty()).map(std::path::PathBuf::from));
+        let _trace = crate::dispatch_trace::Scope::enter(&op.id, &target, database);
         match self.herdr.send_checking_receipt(
             &target,
             prompt,
@@ -578,12 +582,12 @@ impl Workflow {
             Ok(()) => match self.finish(&op, true, "") {
                 Ok(()) => Ok(record(&op)),
                 Err(_) => {
-                    self.mark_unknown(&op.id);
+                    self.mark_unknown(&op.id, None);
                     Err("dispatch.verify_required".into())
                 }
             },
             Err(error) if error.uncertain => {
-                self.mark_unknown(&op.id);
+                self.mark_unknown(&op.id, Some(&error.message));
                 if let Ok(Some(receipt)) = self.dispatch_receipt(&op) {
                     self.finish_result(
                         &op,
@@ -595,7 +599,9 @@ impl Workflow {
                     .map_err(|_| "dispatch.verify_required".to_string())?;
                     return Ok(record(&op));
                 }
-                Err(if error.message == "dispatch.submit_verify_required" {
+                Err(if error.message == "dispatch.submit_verify_required"
+                    || error.message.starts_with("dispatch.enter_not_sent_verify_required:")
+                    || error.message.starts_with("dispatch.enter_unknown_verify_required:") {
                     error.message
                 } else {
                     format!("dispatch.verify_required: {}", error.message)
@@ -607,11 +613,11 @@ impl Workflow {
             }
         }
     }
-    fn mark_unknown(&self, id: &str) {
+    fn mark_unknown(&self, id: &str, diagnostic: Option<&str>) {
         if let Ok(conn) = self.db.lock() {
             let _ = conn.execute(
-                "UPDATE dispatch_operations SET state='unknown' WHERE id=?1 AND state='pending' AND EXISTS(SELECT 1 FROM tasks WHERE id=dispatch_operations.task_id)",
-                [id],
+                "UPDATE dispatch_operations SET state='unknown',evidence=COALESCE(?2,evidence) WHERE id=?1 AND state='pending' AND EXISTS(SELECT 1 FROM tasks WHERE id=dispatch_operations.task_id)",
+                params![id, diagnostic],
             );
         }
     }

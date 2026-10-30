@@ -27,6 +27,7 @@ fn peer(mode: &str) -> Connection {
             $request=[Text.Encoding]::UTF8.GetString($reader.ReadBytes($size)) | ConvertFrom-Json
             $sequence++
             if ($env:KANBAN_CONTROL_TEST_MODE -eq 'lost') { exit }
+            if ($env:KANBAN_CONTROL_TEST_MODE -eq 'slow') { Start-Sleep 60; exit }
             $session=$request.session
             $id=$request.id
             if ($env:KANBAN_CONTROL_TEST_MODE -eq 'session') { $session='other-session' }
@@ -78,6 +79,7 @@ fn lost_reply_or_wrong_identity_never_reconnects_or_replays() {
                 .is_err()
         );
         assert!(session.connection.is_none());
+        assert!(!session.recover_observation());
         assert_eq!(
             session
                 .request(&machine(), json!({"method":"mutation"}))
@@ -88,11 +90,94 @@ fn lost_reply_or_wrong_identity_never_reconnects_or_replays() {
 }
 
 #[test]
+fn only_failed_observation_can_reconnect_after_eof_or_timeout() {
+    for mode in ["lost", "slow"] {
+        let mut session = session(mode);
+        let read = json!({"method":"cli_output","args":["agent","get","w1:p1"]});
+        let timeout = if mode == "lost" {
+            Duration::from_secs(5)
+        } else {
+            Duration::from_millis(800)
+        };
+        let result = session.request_connecting(&machine(), read.clone(), timeout, |_| {
+            panic!("already connected")
+        });
+        assert_eq!(
+            result.unwrap_err(),
+            if mode == "lost" {
+                "machine.connection_failed"
+            } else {
+                "machine.timeout"
+            }
+        );
+        assert!(session.connection.is_none());
+        assert!(session.failed);
+        assert!(session.recover_observation());
+        // Recovery preserves the frozen machine metadata before constructing any child.
+        let mut changed = machine();
+        changed.host_identity = Some("other-host".into());
+        assert_eq!(
+            session
+                .request_connecting(&changed, read.clone(), Duration::from_secs(3), |_| panic!(
+                    "wrong host must not connect"
+                ))
+                .unwrap_err(),
+            "machine.identity_changed"
+        );
+        let reply = session
+            .request_connecting(&machine(), read, Duration::from_secs(3), |_| {
+                Ok(peer("echo"))
+            })
+            .unwrap();
+        assert_eq!(
+            reply["sequence"], 1,
+            "new child only receives the new observation"
+        );
+        assert_eq!(
+            session
+                .request(&machine(), json!({"method":"mutation"}))
+                .unwrap()["sequence"],
+            2
+        );
+    }
+}
+
+#[test]
+fn wrong_identity_or_protocol_during_a_read_cannot_be_recovered() {
+    for mode in ["session", "id"] {
+        let mut session = session(mode);
+        assert!(
+            session
+                .request(
+                    &machine(),
+                    json!({"method":"cli_output","args":["agent","get","pane"]})
+                )
+                .is_err()
+        );
+        assert!(!session.recover_observation());
+    }
+    for args in [
+        json!(["agent", "send-keys", "pane", "enter"]),
+        json!(["pane", "send-text", "pane", "body"]),
+        json!(["agent", "get", "pane", "extra"]),
+    ] {
+        let mut session = session("lost");
+        assert!(
+            session
+                .request(&machine(), json!({"method":"cli_output","args":args}))
+                .is_err()
+        );
+        assert!(!session.recover_observation());
+    }
+}
+
+#[test]
 fn scope_is_thread_local_pins_all_machine_fields_and_drops_on_unwind() {
     assert!(request(&machine(), json!({})).is_none());
     let result = std::panic::catch_unwind(|| {
         let _scope = Scope::enter();
         ACTIVE.with(|slot| *slot.borrow_mut() = Some(session("echo")));
+        assert!(Scope::enter_if_absent().is_none());
         request(&machine(), json!({})).unwrap().unwrap();
         let mut changed = machine();
         changed.helper_name = Some("another-version".into());

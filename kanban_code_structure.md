@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-30。SSH Prompt 提交支持临时只读观察错误的有界恢复：整次提交最多重试两次，仅明确失败的观察可重建控制连接，写入结果不确定时仍停止。新增逐步输入日志和未发起 Enter／Enter 结果待核实提示，无数据库迁移及新增 IPC。规格为 GitHub #44，实现见 6.4.1、6.6.3，验证及交付边界见[SSH 提交恢复验收](docs/verification/2026-10-30-ssh-submit-recovery.md)。
+
 更新日期：2026-10-30。自动标题跟随任务所属执行电脑：本地调用本机 Codex，SSH 任务通过身份校验后的 helper 调用远端 Codex；失败保留摘要且不回退本机。增加 npm 入口解析、可取消的部署/请求时限及稳定错误码；无数据库迁移和前端 IPC 变化。实现见 6.2.4，验证及真实 SSH 阻碍见[标题机器路由验证](docs/verification/2026-10-30-title-machine-routing.md)。
 
 更新日期：2026-10-30。Codex 启动遇到确认的更新选择页时自动发送一次 Esc（Skip），等待同一进程交互就绪后继续原流程；其他弹窗、身份变化及不确定结果不自动回答或重放。无 IPC／数据库迁移。285 项 Rust 常规测试及真实本机 0.165.0 更新页跳过验证通过，运行中的安装版未替换；实现见 6.6.4，证据及边界见[更新提示 Skip 验证](docs/verification/2026-10-30-codex-startup-update-skip.md)。
@@ -257,6 +259,7 @@ herdr-kanban/
 │     ├─ herdr_codex.rs            Codex 默认自动审批、新建、精确恢复、身份读取及提交路由
 │     ├─ codex_receipt.rs          有界只读会话证据：精确消息、时间窗口、会话与进程身份复核
 │     ├─ herdr_codex_submit.rs     Windows 正文/粘贴边界/候选关闭/单次 Enter 与有界提交核验
+│     ├─ dispatch_trace.rs         按派发操作逐步记录输入请求/确认/失败及观察恢复，不记录正文
 │     ├─ codex_process.rs          Windows 进程写锁观测、恢复启动证据及会话切换拒绝
 │     ├─ shared_tab.rs             查找唯一 kanban Tab、选择分屏位置及真实拓扑回归
 │     ├─ pane_allocation.rs        同 workspace 分配互斥、创建前快照与未知结果隔离
@@ -852,6 +855,12 @@ sequenceDiagram
 
 实际发送顺序为 `pane send-text` 正文 → 单独发送 Right → 等待 300ms → 单独发送 Escape 关闭末尾技能候选 → 等待 100ms → 单独发送一次 Enter。`send-text` 是原始终端输入；2026-10-28 起，含 CR、LF 或 Tab 的正文在传输时添加 bracketed paste 边界，避免 Codex 将换行当作按键而丢弃；边界不写入派发快照或参与回执正文匹配。每个后续写入前重新检查任务有效性和完整目标身份；不增加第二个 Enter，也不叠加 `agent prompt`。提示词正文和 `$技能名` 保持原样。
 
+2026-10-30（#44）状态观察共享整次提交最多两次重试，每次间隔 300ms，仅处理 `machine.timeout`、`machine.connection_failed`、`herdr.timeout`、`herdr.unavailable`。每次重新执行完整任务及目标身份检查；busy、身份变化、协议错误、删除或重置直接停止。次数限制不替代每次 CLI/SSH 原有截止时间，因此不是整次提交的 600ms 总时限。正文及按键调用不进入重试。
+
+`Workflow::dispatch_at_epoch` 为自动/手动派发设置 `dispatch_trace::Scope`；`dispatch-input.jsonl` 位于数据库同目录，正文/Right/Escape/Enter 分别记录 requested、acknowledged 或 failed，另外记录观察重试和受理核验结果。requested 表示已进入该步骤，不证明远端已收到；acknowledged 表示传输回执，不证明模型已受理。记录操作 ID、机器/session、pane/terminal/进程身份和耗时，仅保留稳定错误码，不写正文、标题或外部错误正文；沿用 2 MiB 上限的尽力写入，日志失败不改变派发结果。
+
+正文之后停止且尚未发起 Enter 时返回 `dispatch.enter_not_sent_verify_required`，Enter 已发起后遇错返回 `dispatch.enter_unknown_verify_required`；原核验窗口耗尽仍使用 `dispatch.submit_verify_required`。中英文提示区分阶段，错误阶段/原因保存到既有派发 evidence，自动启动沿用生命周期 error 显示，手动派发沿用弹窗反馈。两类情况均保留 unknown 和独占，允许精确回执补确认；不因此重发历史正文或按键。
+
 原有 10 秒状态确认期间继续探测精确回执；状态窗口结束后，增加最多 30 秒、每 500ms 一次的只读回执补查（最多 61 次探测，各 CLI 请求仍有独立超时）。此阶段不再凭迟到状态序号单独认定成功，不重复正文或回车；每次回执读取前后检查任务操作、目标及会话，删除、重置或身份变化会中止。命中证据仍交给 Workflow 重新核验并事务提交；耗尽窗口则保留 unknown 和原核实入口。自动启动的后台线程在补查期间保持 dispatching，手动派发也共用该逻辑；没有新增 IPC、数据库迁移或后台无限轮询。历史已丢失换行的正文不做宽松匹配，仍需原有人工确认入口。
 
 Enter 前重新采集该目标的 `state_change_seq`，随后每约 200ms 查询一次，核验窗口最多 10 秒；每次 CLI 调用仍受独立请求超时约束。同一身份的序号必须增加，且当前状态为 working/blocked/idle/done 才确认受理，兼容很快结束的轮次；原有 idle/done 和 unknown 均不能单独证明提交。状态确认及上述回执补查均未确认，或遇到其他发送后不确定结果时，先保留 unknown，工作流随后再尝试只读会话证据补确认：`codex_receipt.rs` 核对实时目标身份和 Codex 会话，读取 `CODEX_HOME`（未设置时使用用户 `.codex`）下对应会话日志；仅接受派发操作创建之后、核验之前且正文完全一致的唯一用户消息。文件头必须匹配会话 UUID，已有保存会话不得变化；读取前后复核身份。扫描最多 10 万项/2 秒，只读取文件头及末尾 16 MiB；缺失、截断、歧义、旧消息或证据不可读均不能推断成功。证据成立才提交 sent 和会话；否则保留独占与核实入口，任何路径都不重发。`/quit` 属于准备流程的退出命令，不等待新一轮状态，改由调用方核验原进程退出及 shell 就绪。
@@ -958,7 +967,9 @@ Windows 进程查询可能先观察到 shell，而 Herdr 的 Agent 注册状态�
 
 `start.rs` 在应用持有的同步启动线程内建立 `remote_control::Scope`。作用域覆盖提示词序列化、pane 分配、Codex 准备、派发和会话确认；`remote_transport::request` 在此作用域内惰性连接 `--control-stream-v1` helper，后续请求共用同一 SSH 子进程。作用域固定机器配置及 helper 版本，每帧验证主机身份、session 和递增请求 ID。成功、失败和 unwind 都回收连接；连接只在一次操作内复用，不跨任务保留，也不与查询、原生查看或后台轮询共用队列。
 
-控制协议与只读 `--search-stream-v1` 分开入口，但共用有界帧读写。控制入口执行既有 JSON 方法并保留 CLI 的 uncertain 标记；完整业务拒绝与传输错误分离，原有明确 `agent_pane_busy` 重试继续有效。传输失败立即丢弃连接并锁定该操作后续请求为失败，不重连、不退回单次 SSH、不重放；任务保留既有待核实语义。创建、启动及每个输入步骤之间的本地任务检查、实时进程身份检查、输入稳定间隔与提交回执确认均保留。
+控制协议与只读 `--search-stream-v1` 分开入口，但共用有界帧读写。控制入口执行既有 JSON 方法并保留 CLI 的 uncertain 标记；完整业务拒绝与传输错误分离，原有明确 `agent_pane_busy` 重试继续有效。传输失败立即丢弃连接并锁定后续请求。2026-10-30（#44）增加严格例外：失败请求必须是参数形状精确匹配的 `cli_output(agent get pane)` 或 `cli_output(pane process-info --pane target)`，且是明确临时错误，才允许提交观察器在有界重试时解除只读故障锁定并重连；新连接再次核验冻结机器配置、profile、helper、主机及 session。写入回执丢失、错误请求 ID、身份/协议错误仍不可恢复，不退回单次 SSH或重放写入。创建、启动及每个输入步骤之间的本地任务检查、实时进程身份检查、输入稳定间隔与提交回执确认均保留。
+
+手动派发在提交阶段通过 `Scope::enter_if_absent` 建立相同的私有控制连接；已有自动启动作用域直接沿用，不替换连接或清除其失败锁定。测试专用的一次只读回复丢弃注入仅编入测试二进制，正式应用无故障注入入口。
 
 `Cli::available` 和 `Cli::targets` 分别通过 `available_targets` / `targets` 一次请求在远端调用原有检查算法，避免每个 pane 的进程、目录和状态检查各占一次网络往返；返回后恢复已核验的执行机器 ID。本地占用/创建隔离/预占事务仍由 Kanban 执行，发送前重新核验，扫描结果不当作发送授权。不新增数据库迁移或前端 IPC。
 

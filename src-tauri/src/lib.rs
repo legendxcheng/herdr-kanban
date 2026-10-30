@@ -31,6 +31,7 @@ mod remote_transport;
 mod search_connection;
 mod search_wire;
 mod start_timing;
+mod dispatch_trace;
 
 pub fn remote_helper_main() -> i32 {
     remote_helper::run()

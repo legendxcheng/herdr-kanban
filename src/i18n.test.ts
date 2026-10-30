@@ -47,3 +47,12 @@ it("ships matching keys and placeholders in the complete catalogs", () => {
     expect(en[key].match(/\{[^}]+\}/g) ?? []).toEqual(zh[key].match(/\{[^}]+\}/g) ?? []);
   }
 });
+it("distinguishes Enter not requested from an unconfirmed Enter request", () => {
+  for (const locale of ["zh-CN", "en-US"] as const) {
+    setLocale(locale);
+    const catalog = locale === "zh-CN" ? zh : en;
+    for (const key of ["dispatch.enter_not_sent_verify_required", "dispatch.enter_unknown_verify_required"] as const) {
+      expect(errorText(`${key}: before_enter: machine.timeout`)).toBe(`${catalog[key]}: before_enter: machine.timeout`);
+    }
+  }
+});
