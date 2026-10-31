@@ -120,6 +120,9 @@ it("切换 Workspace 前保护草稿，确认后释放面板且不遗留 inert",
   expect(board.storedTask.name).toBe("跨项目草稿");
   expect(root.inert).toBe(false);
   expect(screen.queryByRole("complementary", { name: "编辑任务" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /^测试项目/ }));
+  await screen.findByRole("complementary", { name: "编辑任务" });
+  expect(title().value).toBe("跨项目草稿");
   app.unmount(); root.remove();
 });
 

@@ -28,6 +28,7 @@ export const board = {} as { storedTask: Task; availableAgents: HerdrAgent[]; ex
 export const sendPrompt = vi.fn<(input: Record<string, string>) => Promise<void>>();
 
 beforeEach(() => {
+  localStorage.clear();
   // jsdom has no text-range geometry; focused Tiptap pastes request it.
   Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
   Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: () => new DOMRect() });

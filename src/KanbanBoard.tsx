@@ -19,6 +19,7 @@ import { machineLabel } from "./WorkspaceAddDialog";
 import "./taskSummary.css";
 import { CreateTaskDialog } from "./CreateTaskDialog";
 import { IdleCleanupButton } from "./IdleCleanupButton";
+import { readWorkspaceTaskSelection, rememberWorkspaceTaskSelection } from "./workspaceTaskSelection";
 
 interface KanbanBoardProps {
   project: Project;
@@ -112,9 +113,15 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
   const taskRequest = useRef<{ scope: string; sequence: number; promise: Promise<Task[] | undefined> } | null>(null);
   const mounted = useRef(true);
   const pendingTaskSelection = useRef(initialTaskId);
+  const restoreWorkspaceSelection = useRef(!!project);
   const defaultSelectionSuppressed = useRef(summary || !!initialTaskId);
   const [locatedTaskId, setLocatedTaskId] = useState<string | null>(null);
   const agentStatuses = new Map(tasks.map(task => [task.id, taskAgentStatus(task, agents[task.project_id] ?? [], busyTasks.has(task.id))]));
+  const activeTaskId = selectedTodo?.id ?? selectedTask?.id ?? null;
+  useEffect(() => {
+    // Initial/failed reads and ordinary shells must not erase the remembered task.
+    if (project && hasLoaded && !shellWorkspace) rememberWorkspaceTaskSelection(project.id, activeTaskId);
+  }, [project?.id, hasLoaded, shellWorkspace, activeTaskId]);
   useEffect(() => {
     if (!workspaceRef.current) return;
     const observer = new ResizeObserver(() => {
@@ -155,6 +162,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
         setHasLoaded(true);
         setReadError("");
         if (pendingTaskSelection.current) {
+          restoreWorkspaceSelection.current = false;
           // Consume the request only on a successful fresh read. Never briefly connect the first task.
           const target = t.find(task => task.id === pendingTaskSelection.current);
           pendingTaskSelection.current = undefined;
@@ -163,6 +171,15 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
           setEditingTaskId(target && taskColumn(target) === "done" ? target.id : null);
           setLocatedTaskId(target?.id ?? null);
           if (!target) notify({ key: "summary.unavailable" }, "error");
+        } else if (restoreWorkspaceSelection.current && project) {
+          restoreWorkspaceSelection.current = false;
+          const rememberedId = readWorkspaceTaskSelection(project.id);
+          const target = t.find(task => task.id === rememberedId && task.project_id === project.id
+            && !task.archived_at && taskColumn(task) !== "done");
+          // Restore only after a successful read; never connect the default task first.
+          setSelectedTodoId(target && taskColumn(target) === "todo" ? target.id : null);
+          setSelectedTaskId(target && taskColumn(target) === "in_progress" ? target.id
+            : t.find(task => task.project_id === project.id && !task.archived_at && taskColumn(task) === "in_progress")?.id ?? null);
         } else {
           setSelectedTodoId(current => t.some(task => task.id === current && taskColumn(task) === "todo") ? current : null);
           setSelectedTaskId((current) => t.some((task) => task.id === current && taskColumn(task) === "in_progress")
@@ -287,8 +304,10 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
     if (!project) return;
     const selection = ++selectionSequence.current;
     const selectionScope = scope;
-    if (editorRef.current && !await leaveTodo()) return;
+    if (await editorRef.current?.requestLeave() === false) return;
     if (!mounted.current || selectionScope !== scopeRef.current || selection !== selectionSequence.current) return;
+    // Clear the editor and show the shell together, without recording the hidden task.
+    setSelectedTodoId(null);
     setShellProjectId(project.id);
   }
 

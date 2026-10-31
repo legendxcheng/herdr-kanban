@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-31。单 Workspace 按稳定 Project ID 保存上次任务选择，切换回来及应用重新加载后优先恢复 Todo 编辑面板或 InProgress 终端；无记录或原任务已完成、删除、归档时回退首条 InProgress。普通终端和 All Tasks 不覆盖该记录，首次读取失败及过时响应不清空偏好。无 IPC／数据库迁移；303 项前端测试及生产构建通过，真实桌面重启／Herdr 验收和打包安装未执行。实现及验证范围见 3.2。
+
 更新日期：2026-10-30。自动标题增加持久化退避重试、重启续跑及卡片手动重试。schema 19 保存尝试次数和下次执行时间，取消排队 60 秒即失败；通过请求 ID、编辑版本和尝试次数拒绝迟到结果。旧失败记录仅由用户手动重试，已有手动修改和开发派发不受影响。实现见 6.2.4，验证见[标题重试验证](docs/verification/2026-10-30-title-retry.md)。
 
 更新日期：2026-10-30。SSH Prompt 提交支持临时只读观察错误的有界恢复：整次提交最多重试两次，仅明确失败的观察可重建控制连接，写入结果不确定时仍停止。新增逐步输入日志和未发起 Enter／Enter 结果待核实提示，无数据库迁移及新增 IPC。规格为 GitHub #44，实现见 6.4.1、6.6.3，验证及交付边界见[SSH 提交恢复验收](docs/verification/2026-10-30-ssh-submit-recovery.md)。
@@ -178,6 +180,7 @@ herdr-kanban/
 │  ├─ WorkspaceRecovery.tsx        未决 workspace 创建核实与显式认领
 │  ├─ board-tests/                 按导航、表单、删除归档、状态、选择、派发与后台启动分组的组件回归；fixtures 隔离每个用例
 │  ├─ KanbanBoard.tsx              卡片加载、三列、拖拽及弹层协调
+│  ├─ workspaceTaskSelection.ts    按 Project ID 持久化上次任务选择，存储异常时保留本次会话记录
 │  ├─ TaskCard.tsx                 紧凑卡片、优先级及编辑/完成/删除/归档入口
 │  ├─ agentStatus.tsx              实时身份匹配、状态语义及卡片状态圆点
 │  ├─ useAgentStatus.ts            前台 3 秒查询、焦点刷新、合并请求及迟到结果隔离
@@ -292,7 +295,7 @@ herdr-kanban/
 3. 连接包装为 `Arc<Mutex<Connection>>`，CRUD 与 Workflow 共享。外部 Herdr 请求不持有数据库锁。
 4. 注册插件、业务命令、Workflow、LocalHerdrStartup 和 NativeTerminalManager，再启动 Tauri 窗口；销毁窗口时关闭专用 WezTerm/Herdr 客户端，保留后台 server 与 Agent。
 5. [main.tsx](src/main.tsx) 挂载 `App`；读取项目缓存，首次本机在线同步前检查并按需启动所选 Herdr session（见 6.1.5），自动选择列表中的第一个有效项目。
-6. `KanbanBoard` 按项目 ID 加载卡片，由后端按 Project ID 解析稳定 workspace ID 查询 Agent；卡片成功加载后自动选择第一张开发中任务，已有有效选择则保留。加载期间及没有项目时也保留右侧空终端。
+6. `KanbanBoard` 按项目 ID 加载卡片，由后端按 Project ID 解析稳定 workspace ID 查询 Agent；首次成功加载后优先恢复该 Workspace 上次选中的 Todo／开发中任务，无有效记录时选择第一张开发中任务。后续刷新保留有效选择，加载期间及没有项目时也保留右侧空终端。
 
 数据库初始化发生在窗口启动前。创建目录、连接和建表失败使用 `expect` 终止，没有恢复界面。数据库命令通过一把 Mutex 串行访问同一连接。
 
@@ -378,7 +381,7 @@ flowchart TD
 | [DispatchDialog.tsx](src/DispatchDialog.tsx) | Agent 列表、选中 pane、loading、错误、预览文本 | 重新查 Agent、序列化引用、派发 |
 | [Toast.tsx](src/Toast.tsx) | 通知数组及自增 ID | 模块级 `_notify` 指向容器回调，3 秒后删除通知 |
 
-没有 Redux、Zustand 或查询缓存层。操作回调通知父组件重新查询。`KanbanBoard.initialLoading` 只覆盖首次查询，最新有效请求结束后关闭；成功返回空列表同样结束加载，首次失败保留原错误通知并结束占位。后续轮询、焦点刷新及操作后的查询均不重置此状态，标题、工具栏与三列保留原 DOM，删除最后一张任务后仍可使用新建入口。请求代次阻止迟到列表覆盖新结果。App 用 Project ID 作为 KanbanBoard 的 key，切项目销毁旧任务选择、弹窗和终端连接，并重新进入该项目的首次加载。`board-tests/refresh.test.tsx` 覆盖慢请求、空列表、失败恢复、删除最后一项及切项目迟到响应；本次自动化与桌面验证见[验收记录](docs/verification/2026-10-26-empty-board-refresh.md)。
+没有 Redux、Zustand 或查询缓存层。操作回调通知父组件重新查询。`KanbanBoard.initialLoading` 只覆盖首次查询，最新有效请求结束后关闭；成功返回空列表同样结束加载，首次失败保留原错误通知并结束占位。后续轮询、焦点刷新及操作后的查询均不重置此状态，标题、工具栏与三列保留原 DOM，删除最后一张任务后仍可使用新建入口。请求代次阻止迟到列表覆盖新结果。App 用 Project ID 作为 KanbanBoard 的 key，切项目卸载旧看板、弹窗和查看连接，目标项目重新首次加载后恢复自己的持久化任务选择（见 3.2）。`board-tests/refresh.test.tsx` 覆盖慢请求、空列表、失败恢复、删除最后一项及切项目迟到响应；原加载行为的自动化与桌面验证见[验收记录](docs/verification/2026-10-26-empty-board-refresh.md)。
 
 表单草稿只存在内存里，任务编辑没有自动保存。Todo 右侧编辑在用户切换任务/Workspace、隐藏当前 Workspace、关闭面板及启动/派发前提示处理未保存修改；刷新或退出应用仍不持久化未保存草稿。其他状态编辑弹窗沿用原取消行为。“保存提示词”和“派发提示词”是两个独立动作，派发读取卡片中已保存的 `prompt_json`。
 
@@ -399,6 +402,16 @@ flowchart TD
 看板使用原生 `draggable`、`dataTransfer` 与 React 拖放事件，没有使用已经安装的 `@dnd-kit/*`。`draggingIdRef` 是拖放时的首选任务 ID 来源，代码注释说明这是对 WebView2 中 `getData()` 可能为空的兼容措施。
 
 `@tiptap/extension-mention` 也没有用于当前引用链路；项目采用自定义 `MentionNode` 与 `MentionPopover`。前端 opener 包和 Rust opener/shell 插件存在，但业务调用 Herdr 用的是 Rust `std::process::Command`，不是 shell 插件 API。
+
+### 3.2 Workspace 上次任务选择（2026-10-31）
+
+`workspaceTaskSelection.ts` 使用 `localStorage["kanban.workspaceTaskSelection.v1:" + projectId]` 保存任务 ID 或 null，仅属于本机 WebView 的显示偏好。Project ID 区分不同电脑及同名 Workspace；改名、排序、隐藏后重新显示不改变键。存储无法读取时使用内存记录，写入失败时优先保留本次会话的新选择，不用旧存储覆盖；存储异常期间不保证跨进程恢复。清除 WebView 偏好会清除持久化记录，无数据库迁移或新增 IPC。
+
+`TaskBoard.load` 仅在首次成功且仍有效的任务查询中恢复记录，核验任务的 Project 归属、未归档及 `taskColumn` 投影。Todo 恢复右侧编辑面板，InProgress 恢复任务终端；准备中或绑定待修复的任务仍保留选择，沿用现有准备／修复显示，不跳到其他任务或重新派发。无记录、任务已完成／删除／归档时回退首条 InProgress，没有则显示空终端；已完成任务弹窗不自动重开。显式 `initialTaskId` 仍优先于记忆，后续刷新保持原有效选择及失效回退规则。首次失败保留恢复意图和存储，重试成功后再处理；不先连接默认任务再切回记忆任务。
+
+加载完成后的可见 Todo／任务终端选择变化写入偏好，包括关闭 Todo 后返回终端、启动选中及失效回退。普通终端显示时不写入任务记录，Todo 离开确认通过后同批清空编辑选择并显示普通终端，避免中间状态覆盖记忆。All Tasks 不读写单 Workspace 偏好。切换 Workspace 仍沿用 Todo 草稿确认；记忆只保存任务 ID，不保存未提交正文、弹窗、终端尺寸或当前 Workspace 导航选择。
+
+验证：`workspaceTaskSelection.test.ts` 覆盖偏好模块重新加载、Project 隔离、损坏数据、读写异常与旧存储不能覆盖本次选择；`board-tests/selection_memory.test.tsx` 覆盖 A/B/A 往返、App 重新挂载、Todo 恢复／关闭、任务失效、同名跨机身份、准备中／待修复状态、空列表、首次失败后慢速重试、旧 Workspace 迟到结果、普通终端和 All Tasks 隔离。原 Todo 草稿切换用例增加返回 Workspace 后恢复已保存任务断言，fixtures 每例清空 localStorage。2026-10-31 全量 `npm test` 为 42 个文件、303 项通过；`npm run build`（含 TypeScript）通过，保留既有大 chunk 提示。测试使用 jsdom 与模拟 Tauri IPC，模块重新加载及 App 重新挂载不等同于真实桌面进程重启；本次未执行原生 WebView2／真实 Herdr 验收、Rust 回归或打包安装。
 
 ## 4. 数据模型与持久化
 
