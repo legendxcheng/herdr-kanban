@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-31。自动标题切换为看板本机请求 DeepSeek `deepseek-flash`，本地／SSH 项目共用 HTTP 生成器，沿用两路 worker、持久化重试和编辑保护。项目私密文件在编译时内置 Key，正式打包入口验证配置；无数据库迁移或 IPC 变化。规格为 GitHub #45，实现与验证边界见 6.2.4 和[DeepSeek 标题验证](docs/verification/2026-10-31-deepseek-titles.md)。
+
 更新日期：2026-10-31。任务状态后台刷新保留最近观察，焦点切换复用在途请求；查询失败与超过 15 秒的观察明确标为过期，空心圆旁区分查询中、查询失败、绑定异常、会话未找到和未识别状态。新增只读状态快照 IPC，未知或进程检查失败时对原 Agent 有界复查一次，不打开或聚焦终端。无数据库迁移；实现、验证及真实 SSH／桌面未覆盖边界见 6.2.2 和[后台状态验证](docs/verification/2026-10-31-background-agent-status.md)。
 
 更新日期：2026-10-31。单 Workspace 按稳定 Project ID 保存上次任务选择，切换回来及应用重新加载后优先恢复 Todo 编辑面板或 InProgress 终端；无记录或原任务已完成、删除、归档时回退首条 InProgress。普通终端和 All Tasks 不覆盖该记录，首次读取失败及过时响应不清空偏好。无 IPC／数据库迁移；303 项前端测试及生产构建通过，真实桌面重启／Herdr 验收和打包安装未执行。实现及验证范围见 3.2。
@@ -8,7 +10,7 @@
 
 更新日期：2026-10-30。SSH Prompt 提交支持临时只读观察错误的有界恢复：整次提交最多重试两次，仅明确失败的观察可重建控制连接，写入结果不确定时仍停止。新增逐步输入日志和未发起 Enter／Enter 结果待核实提示，无数据库迁移及新增 IPC。规格为 GitHub #44，实现见 6.4.1、6.6.3，验证及交付边界见[SSH 提交恢复验收](docs/verification/2026-10-30-ssh-submit-recovery.md)。
 
-更新日期：2026-10-30。自动标题跟随任务所属执行电脑：本地调用本机 Codex，SSH 任务通过身份校验后的 helper 调用远端 Codex；失败保留摘要且不回退本机。增加 npm 入口解析、可取消的部署/请求时限及稳定错误码；无数据库迁移和前端 IPC 变化。实现见 6.2.4，验证及真实 SSH 阻碍见[标题机器路由验证](docs/verification/2026-10-30-title-machine-routing.md)。
+历史记录（2026-10-30，已由 2026-10-31 DeepSeek 接入替代）：自动标题曾按任务所属电脑调用本地／SSH Codex。旧验证及当时的 SSH 边界见[标题机器路由验证](docs/verification/2026-10-30-title-machine-routing.md)，当前调用链见 6.2.4。
 
 更新日期：2026-10-30。Codex 启动遇到确认的更新选择页时自动发送一次 Esc（Skip），等待同一进程交互就绪后继续原流程；其他弹窗、身份变化及不确定结果不自动回答或重放。无 IPC／数据库迁移。285 项 Rust 常规测试及真实本机 0.165.0 更新页跳过验证通过，运行中的安装版未替换；实现见 6.6.4，证据及边界见[更新提示 Skip 验证](docs/verification/2026-10-30-codex-startup-update-skip.md)。
 
@@ -92,7 +94,7 @@
 
 2026-10-25 中英双语增量：应用仅提供简体中文和 English，侧栏切换即时生效并保存本机偏好；首次使用按系统语言选择中文或英文。覆盖既有界面、错误提示、编辑器和日期；切换保留草稿与终端连接，详见 2.5 节及[双语验收记录](docs/verification/2026-10-25-language-support.md)。更新日期：2026-10-25。
 
-2026-10-25 自动标题增量（GitHub #1）：新建只输入提示词与优先级，先保存摘要标题，再由独立 Codex CLI `gpt-6-luna` 后台命名；编辑冲突、失败兜底、队列限制及退出恢复见 6.2.4。更新日期仍为 2026-10-25；本次验证见[自动标题验收记录](docs/verification/2026-10-25-task-auto-title.md)。
+2026-10-25 自动标题初版（GitHub #1，历史记录）：新建只输入提示词与优先级，先保存摘要标题，再由独立 Codex CLI 后台命名。生成器现已切换 DeepSeek，当前行为见 6.2.4；初版验证见[自动标题验收记录](docs/verification/2026-10-25-task-auto-title.md)。
 
 2026-10-25 独立仓库迁移：应用平铺于仓库根目录，开发技能及其规则文档一并迁移，新增需求指向 `legendxcheng/herdr-kanban`。旧仓库 Issue 与历史验收路径保留来源含义；本次迁移范围及验证见[独立仓库迁移记录](docs/verification/2026-10-25-kanban-repository-migration.md)。
 
@@ -228,9 +230,9 @@ herdr-kanban/
 │     ├─ codex_catalog.rs          执行环境目录查询、机器/目录缓存与配置能力校验
 │     ├─ model_acceptance.rs       显式 opt-in 的本机/SSH 真实模型启动与精确恢复验收
 │     ├─ title_prompt.rs           正文/引用名称摘要、输入限长及纯图片兜底
-│     ├─ title_routing.rs          按 Project 归属冻结标题执行电脑、SSH helper 调用及返回身份复核
+│     ├─ title_deepseek.rs / title_deepseek_tests.rs  本机统一 HTTP 命名、取消/容量/认证错误边界，模拟 HTTP + SQLite 与显式 API live 验证
 │     ├─ title_executable.rs       执行电脑的 Codex 入口解析；npm 经 node + 官方 JS 入口运行
-│     ├─ title_cli.rs / title_process.rs  最小 Codex 配置、结构化结果、有界进程及后代清理
+│     ├─ title_cli.rs / title_process.rs  旧 remote-helper task_title 协议兼容；当前看板自动命名不调用 CLI
 │     ├─ title_tests.rs / title_retry_tests.rs / title_process_tests.rs  真实 SQLite、退避/重启/迁移/竞态、可控生成器/进程及显式 CLI live 验收
 │     ├─ task_overview.rs / task_overview_tests.rs  跨项目列计数、今日完成聚合及迁移/日界线验证
 │     ├─ task_summary.rs / task_summary_tests.rs  可见 Workspace 未归档任务摘要、跨项目优先级排序与启动状态投影
@@ -701,25 +703,27 @@ IPC 使用后台线程执行本地事务。每个去重后的 ID 都在自己的
 
 验证与边界见 [任务概况验收记录](docs/verification/2026-10-25-kanban-task-overview.md)。本次没有增加真实 Herdr 的查询或写操作；真实 Agent 派发/恢复与安装包升级需单独验收。
 
-### 6.2.4 自动任务标题（2026-10-30 更新，GitHub #1）
+### 6.2.4 自动任务标题（2026-10-31 更新，GitHub #1、#45）
 
 `TaskFormDialog → create_task → TaskTitles` 负责保存；应用启动注册两个后台 worker。`title_prompt` 从第一段有效普通文字生成最多 40 个 Unicode 字符的摘要；无普通文字时使用引用名称，纯图片直接使用本地化“图片任务”，不调用模型。输入快照保留文字和引用显示名称，最多 2000 字符，不读取文件/技能正文或上传图片。
 
-`title_cli → title_process` 直接启动独立 `codex exec`，固定 `gpt-6-luna`、low、Standard；最小配置、临时工作目录、短标题指令和 JSON Schema，禁用开发工具、技能上下文、插件及 hook。复用 CLI 登录，不修改全局配置或正常开发模型。可用 `KANBAN_CODEX_EXECUTABLE` 指定测试执行程序；显式错误路径不回退。进程上限 30 秒，stdout/stderr 各限制 64 KiB；Windows Job Object／Unix 进程组清理后代。最多两路，不换模型。2026-10-30 的重试修正取消队列等待 60 秒直接失败；临时超时、进程调用失败、I/O 和无效输出在 10 秒、30 秒、120 秒退避后重试，含首次共最多 4 次。机器停用、身份变化、入口不可用、工具/容量违规等不自动重试；通用 CLI 失败未细分登录与网络错误，因此同样受 4 次上限约束。
+应用启动将 `title_deepseek::DeepSeekTitles` 注入现有 `TitleGenerator`。本地及 SSH 项目统一由看板电脑 POST `https://api.deepseek.com/chat/completions`，固定 `deepseek-flash`、`thinking: disabled`、非流式、JSON object 和最多 128 输出 token。系统指令要求用任务主要语言总结，不执行任务正文指令，不提供工具。只接受 assistant 的单一完整 stop 结果与仅含 title 字符串的 JSON；空白、多行及截断结果继续走失败兜底。
 
-2026-10-30 起，worker 将保存的 project_id 交给 `title_routing::RoutedTitles`，在短数据库锁内解析机器，释放锁后调用模型。本地沿用上述 CLI；SSH 使用独立的一次性 JSON 请求 `task_title`，先确保当前 helper 并核对 profile/主机身份，再在远端以 SSH 登录用户的 Codex 身份生成标题，不占用开发 pane。返回后再次核对机器身份和停用状态；远端失败不调用本机。标题模型仍独立于任务开发模型，远端只接收已有的限长文字/引用名称快照，不发送本机登录凭据。
+命名已移除 `title_routing` 的机器检查和 SSH/helper 调用，取名不再依赖执行电脑在线状态或 Codex 登录，也不回退 CLI。正常开发的模型、路由和派发不变。旧 `remote_helper task_title` 分支及其 CLI/进程模块保留协议兼容，当前看板不会发起该请求。
 
-`title_executable` 在执行电脑上优先使用显式入口，其次已安装的 Codex EXE、PATH 和用户 npm 目录；npm 的 `codex.cmd` 通过同目录官方 `codex.js` 与 node.exe 作为独立参数运行，不将提示词拼入 shell。SSH 准备与调用的总预算为 240 秒（首次可能上传 helper），单次标题传输最多 55 秒，远端模型进程仍限制 30 秒。退出可取消部署、等待部署锁及本机 SSH 子进程；已进入远端的模型由远端自身时限和 Job Object 收尾，不承诺跨机瞬时取消。两路 worker 保持；慢远端可能延迟其他任务，但排队不会因此转失败。退避中的请求持久化等待，不占 worker。
+HTTP 使用 reqwest + Tokio，每个 worker 请求建立可取消的运行时。连接上限 10 秒，整次请求含响应体上限 30 秒；按块读取最多 64 KiB。退出每 25ms 检查取消并丢弃请求，运行时最多等 100ms 收尾 DNS 阻塞任务。生产端点仅允许 HTTPS，关闭重定向和 HTTP 内层自动重试；网络期间不持数据库锁。仍最多两路 worker，队列不因等待 60 秒过期，退避等待不占 worker。
 
-部署的小型身份/哈希元数据作为 Base64 数据放入编码 PowerShell 脚本，绕开 Windows PowerShell 5 在 SSH 下读取 Console.In 的挂起；标题正文仍走 helper stdin JSON。失败请求保留 `title.*` / `machine.*` 稳定错误码，不持久化原始 stderr；旧失败请求不自动补跑，可通过卡片“重试标题”重新读取当前正文并创建新请求。机器路由最初一轮验证和真实 SSH 边界见[标题机器路由验证](docs/verification/2026-10-30-title-machine-routing.md)。
+超时、连接失败、HTTP 429/5xx、服务生成中断和无效输出沿用 10 秒、30 秒、120 秒退避，含首次最多 4 次。缺失/格式错误 Key、401/403 认证失败、402 余额不足、400/422 参数错误、其他拒绝及超大响应不自动重试。新增错误码有中英文提示；响应错误体不读取，不保存原始网络错误或认证头。旧失败请求仍仅由用户手动重试。
+
+`src-tauri/build.rs` 从被 Git 忽略的 `.secrets/deepseek-api-key.txt` 读取裸 Key，写入 OUT_DIR 中的 Rust 常量供编译包含，不通过 Cargo 环境输出回显 Key。文件变化触发重新构建；开发构建允许缺失/空文件，命名返回 `title.key_missing`。`scripts/build-kanban.ps1` 在快照/构建前调用 `check-deepseek-key.ps1` 拒绝缺失、空或格式错误文件。安装后不读私密文件，无新增 IPC 或数据库字段；构建/轮换及产物中的凭据边界见[打包说明](docs/kanban-packaging.md)。
 
 生成结果仅在 task_id、请求 UUID、编辑版本、尝试次数匹配且请求仍 running、任务未归档的短事务中写回；名称/正文修改及归档使 pending/running/retry_wait/failed/interrupted 请求 invalidated，编辑版本递增；删除外键级联移除请求。主动改名即使与临时值相同也撤销旧请求。输出去引号后空白、控制字符、Unicode 行/段分隔符或结构错误保留摘要；正常单行标题去除外围引号并截至 40 字符。请求状态不参与启动、派发或删除互斥，旧任务不批量起名。
 
-`task-title-changed` 只携带 project_id，前端按当前项目读取任务；与现有启动事件共用合并查询、焦点及 2 秒兜底刷新，不抢选择或重连终端。退出取消工作并回收子进程；启动恢复保留 pending 和 retry_wait 的计划，将残余 running 按已消耗尝试次数转为 retry_wait；已达 4 次则 failed。正常退出的取消也按同一预算退避，反复重启不会重置次数。schema 19 首次升级将旧 pending/running 标为 interrupted，旧 failed/interrupted 保持手动恢复，避免自动采用无法证明未修改的旧输入。`images::save_task_in` 在调用者事务内保存图片，确保生成意图与附件一起提交。
+`task-title-changed` 只携带 project_id，前端按当前项目读取任务；与现有启动事件共用合并查询、焦点及 2 秒兜底刷新，不抢选择或重连终端。退出取消在途 HTTP；启动恢复保留 pending 和 retry_wait 的计划，将残余 running 按已消耗尝试次数转为 retry_wait；已达 4 次则 failed。正常退出的取消也按同一预算退避，反复重启不会重置次数。已有待执行请求使用新的 DeepSeek 生成器，旧 failed/interrupted 保持手动恢复。schema 19 的迁移规则不变；本次无数据库迁移。`images::save_task_in` 在调用者事务内保存图片，确保生成意图与附件一起提交。
 
 新增 IPC `retry_task_title(id, requestId)`：仅受理未归档任务的当前 failed/interrupted 请求，按当前正文重建输入并更换 UUID、递增版本、重置本轮预算；重复请求合并到已经 pending/running/retry_wait 的任务，不新增模型调用。手动改名或正文编辑已撤销的请求不能被旧按钮恢复。`TaskCard` 在三列共用紧凑标题工具区显示等待状态/次数或“重试标题”按钮，沿用 `task-title-changed` 和轮询刷新；不切换终端、不发送开发提示词。
 
-本次重试验证见[标题重试验证](docs/verification/2026-10-30-title-retry.md)。以下为 2026-10-25 初版历史验收，队列超时与重启不重试规则已由本次修正替代：
+DeepSeek 接入的实际验证与限制见[DeepSeek 标题验证](docs/verification/2026-10-31-deepseek-titles.md)。原有重试验证见[标题重试验证](docs/verification/2026-10-30-title-retry.md)。以下仅为 2026-10-25 初版历史验收，不代表当前 API 或桌面验收：
 
 前端 128 项、Rust 132 项常规测试通过，9 项 live 默认忽略；真实 CLI 三种输入已另行运行。原生 WebView2 + Rust/SQLite 的创建返回约 78 ms，后台刷新、编辑冲突、项目隔离和关闭重开通过，另以真实 CLI 通过桌面命名链路。20 个排队任务验证最高并发为 2、超时保留摘要；真实 Herdr 在标题等待期间启动并取得实际 Codex 回复，测试 Workspace 已清理。完整验收与未覆盖项见[自动标题验收记录](docs/verification/2026-10-25-task-auto-title.md)。
 

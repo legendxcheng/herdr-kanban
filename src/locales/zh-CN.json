@@ -438,5 +438,17 @@
   "title.generation_failed": "标题生成未成功。",
   "title.invalid_output": "未能获得有效标题。",
   "title.unavailable": "执行电脑上找不到可用的 Codex。",
-  "title.interrupted": "上次标题生成被中断。"
+  "title.interrupted": "上次标题生成被中断。",
+  "title.key_missing": "此版本未配置 DeepSeek API Key，请联系构建维护者。",
+  "title.key_invalid": "DeepSeek API Key 格式无效，请联系构建维护者。",
+  "title.authentication": "DeepSeek 认证失败，请检查构建时使用的 API Key。",
+  "title.insufficient_balance": "DeepSeek 账户余额不足，请充值后重试标题。",
+  "title.bad_request": "DeepSeek 请求参数无效，请更新应用或联系维护者。",
+  "title.rate_limited": "DeepSeek 请求速率或并发已达上限。",
+  "title.service_unavailable": "DeepSeek 服务暂不可用。",
+  "title.network": "无法连接 DeepSeek，请检查网络后重试。",
+  "title.request_rejected": "DeepSeek 拒绝了标题请求。",
+  "title.client_unavailable": "无法初始化标题网络服务，请重启应用后重试。",
+  "title.output_limit": "标题响应超过大小限制，已保留摘要。",
+  "title.cancelled": "标题请求已取消。"
 }

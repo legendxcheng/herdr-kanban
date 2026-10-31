@@ -36,12 +36,29 @@ fn retry_budget_is_bounded_and_permanent_errors_stop_immediately() {
         "machine.identity_changed",
         "machine.disabled",
         "title.unavailable",
+        "title.network",
+        "title.rate_limited",
+        "title.service_unavailable",
+        "title.key_missing",
+        "title.key_invalid",
+        "title.authentication",
+        "title.insufficient_balance",
+        "title.bad_request",
+        "title.request_rejected",
+        "title.output_limit",
     ] {
         let db = database();
         let task = queued(&db);
         let conn = db.lock().unwrap();
         let mut now = 100_000;
-        let expected_attempts = if error == "title.timeout" { 4 } else { 1 };
+        let expected_attempts = if matches!(
+            error,
+            "title.timeout" | "title.network" | "title.rate_limited" | "title.service_unavailable"
+        ) {
+            4
+        } else {
+            1
+        };
         for attempt in 1..=expected_attempts {
             let job = take_next_at(&conn, now).unwrap().unwrap();
             assert_eq!(job.attempt, attempt);

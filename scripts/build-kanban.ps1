@@ -36,6 +36,8 @@ function Invoke-Checked {
 }
 
 try {
+    # Validate before snapshot/build; never print the credential or its contents.
+    & (Join-Path $PSScriptRoot 'check-deepseek-key.ps1') -RepoRoot $repoRoot
     New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
     # Keep concurrent double-clicks from rebuilding/copying the same outputs.
     $buildLock = [IO.File]::Open((Join-Path $releaseRoot '.build.lock'), 'OpenOrCreate', 'ReadWrite', 'None')

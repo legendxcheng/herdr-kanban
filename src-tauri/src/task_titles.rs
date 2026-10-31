@@ -408,6 +408,9 @@ fn finish_at(
                     | "title.io"
                     | "machine.io"
                     | "title.cancelled"
+                    | "title.network"
+                    | "title.rate_limited"
+                    | "title.service_unavailable"
                     | "machine.cancelled"
             );
             let retry = retryable && job.attempt < 4;

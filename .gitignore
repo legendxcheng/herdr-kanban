@@ -26,6 +26,7 @@ dist-ssr
 # Local builds, verification, and private runtime data
 /release/
 /.scratch/
+/.secrets/
 /target/
 *.tsbuildinfo
 coverage/

@@ -438,5 +438,17 @@
   "title.generation_failed": "Title generation did not complete.",
   "title.invalid_output": "No valid title was returned.",
   "title.unavailable": "Codex is unavailable on the execution computer.",
-  "title.interrupted": "The previous title attempt was interrupted."
+  "title.interrupted": "The previous title attempt was interrupted.",
+  "title.key_missing": "This build has no DeepSeek API key. Contact the build maintainer.",
+  "title.key_invalid": "The DeepSeek API key format is invalid. Contact the build maintainer.",
+  "title.authentication": "DeepSeek authentication failed. Check the API key used for this build.",
+  "title.insufficient_balance": "The DeepSeek account has insufficient balance. Top up and retry the title.",
+  "title.bad_request": "DeepSeek rejected the request parameters. Update the app or contact the maintainer.",
+  "title.rate_limited": "DeepSeek request rate or concurrency limit reached.",
+  "title.service_unavailable": "DeepSeek is temporarily unavailable.",
+  "title.network": "Cannot reach DeepSeek. Check the network and retry.",
+  "title.request_rejected": "DeepSeek rejected the title request.",
+  "title.client_unavailable": "Cannot initialize the title network service. Restart the app and retry.",
+  "title.output_limit": "The title response exceeded the size limit; summary retained.",
+  "title.cancelled": "The title request was cancelled."
 }

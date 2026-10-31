@@ -8,6 +8,9 @@
 - Rust MSVC 工具链，包含 `x86_64-pc-windows-msvc` target。
 - Visual Studio Build Tools 的“使用 C++ 的桌面开发”及 Windows 10/11 SDK。
 - 首次构建及缺少缓存时需要网络：npm、Cargo、Tauri 的 NSIS 构建工具可能需要下载。
+- 自动取名使用 DeepSeek：在仓库根目录创建 `.secrets/deepseek-api-key.txt`，只填裸 API Key，不加引号或 `Bearer`。`.secrets/` 已被 Git 忽略；勿提交、截图或复制到 Issue。正式打包入口在构建前检查缺失、空白及格式错误，错误不会回显文件内容。
+
+Key 由 Rust 构建脚本读取并编译进程序，不通过前端、运行时配置或 Cargo 输出传递；用户安装后无需配置。修改或移除私密文件会触发重新构建。普通开发构建允许缺少文件，自动标题保留摘要并提示未配置 Key；真实 API 测试需配置后重新编译。更换/撤销 Key 后须重新构建和分发。私密文件会随源码快照复制到被忽略的 `release/kanban-source/.secrets/`，编译缓存及二进制也包含该凭据，这些产物不应公开分享。安装包只包含内置值，不分发源私密文件；内置 Key 仍可从二进制提取。现有 SSH helper 使用同一二进制，正常远端操作部署 helper 时也会复制含 Key 的程序；标题请求本身仍只在看板电脑发起。
 
 脚本调用 Windows PowerShell 5.1，无需安装 PowerShell 7；启动时检查依赖。先将当前源码镜像到专用的 `release\kanban-source\`（排除 node_modules、dist、target、.git、release 和 .scratch，避免将副本再次复制进自身），在其中使用 `npm ci` 恢复锁定依赖，Tauri Release 构建使用 Cargo `--locked`，不自动升级依赖。构建缓存位于 `release\kanban-build\`，不会覆盖正在运行的 debug 可执行文件或开发目录依赖。上述目录由脚本管理，不要在里面编辑源码。重复双击打包入口会被构建锁拒绝。
 
