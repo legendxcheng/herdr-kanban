@@ -202,6 +202,13 @@ pub trait Herdr: Send + Sync {
         Err("flow.unsupported".into())
     }
     fn targets(&self, workspace: &str) -> Result<Vec<Target>, String>;
+    fn discover_agents(&self, workspace: &str) -> Result<crate::agent_status::Discovery, String> {
+        Ok(crate::agent_status::Discovery {
+            targets: self.targets(workspace)?,
+            failures: vec![],
+            age_ms: 0,
+        })
+    }
     fn validate(&self, workspace: &str, expected: &Target) -> Result<Target, String> {
         self.targets(workspace)?
             .into_iter()

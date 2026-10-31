@@ -74,6 +74,7 @@ beforeEach(() => {
         task.prompt_json = input.promptJson; task.priority = input.priority as Task["priority"]; return;
       }
       case "herdr_list_agents": return board.availableAgents;
+      case "herdr_agent_snapshot": return { agents: board.availableAgents, failures: [] };
       case "complete_task": board.storedTask.status = "done"; return {};
       case "start_task":
         await sendPrompt(input);

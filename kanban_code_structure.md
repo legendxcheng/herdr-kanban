@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-10-31。任务状态后台刷新保留最近观察，焦点切换复用在途请求；查询失败与超过 15 秒的观察明确标为过期，空心圆旁区分查询中、查询失败、绑定异常、会话未找到和未识别状态。新增只读状态快照 IPC，未知或进程检查失败时对原 Agent 有界复查一次，不打开或聚焦终端。无数据库迁移；实现、验证及真实 SSH／桌面未覆盖边界见 6.2.2 和[后台状态验证](docs/verification/2026-10-31-background-agent-status.md)。
+
 更新日期：2026-10-31。单 Workspace 按稳定 Project ID 保存上次任务选择，切换回来及应用重新加载后优先恢复 Todo 编辑面板或 InProgress 终端；无记录或原任务已完成、删除、归档时回退首条 InProgress。普通终端和 All Tasks 不覆盖该记录，首次读取失败及过时响应不清空偏好。无 IPC／数据库迁移；303 项前端测试及生产构建通过，真实桌面重启／Herdr 验收和打包安装未执行。实现及验证范围见 3.2。
 
 更新日期：2026-10-30。自动标题增加持久化退避重试、重启续跑及卡片手动重试。schema 19 保存尝试次数和下次执行时间，取消排队 60 秒即失败；通过请求 ID、编辑版本和尝试次数拒绝迟到结果。旧失败记录仅由用户手动重试，已有手动修改和开发派发不受影响。实现见 6.2.4，验证见[标题重试验证](docs/verification/2026-10-30-title-retry.md)。
@@ -184,6 +186,7 @@ herdr-kanban/
 │  ├─ TaskCard.tsx                 紧凑卡片、优先级及编辑/完成/删除/归档入口
 │  ├─ agentStatus.tsx              实时身份匹配、状态语义及卡片状态圆点
 │  ├─ useAgentStatus.ts            前台 3 秒查询、焦点刷新、合并请求及迟到结果隔离
+│  │                               保留最近观察；独立记录查询错误、单 pane 失败与 15 秒有效期
 │  ├─ PrioritySelect.tsx           创建与编辑共用的三档优先级选择
 │  ├─ CodexSettingsSelect.tsx       按 Project 查询模型目录、保留无效选择、刷新与迟到响应隔离
 │  ├─ TaskFormDialog.tsx           共用 TaskForm：新建/其他状态编辑弹窗、Todo 右侧 TaskEditPanel、未保存修改确认
@@ -233,6 +236,7 @@ herdr-kanban/
 │     ├─ task_summary.rs / task_summary_tests.rs  可见 Workspace 未归档任务摘要、跨项目优先级排序与启动状态投影
 │     ├─ completed_task_tests.rs   批量范围、后台启动投影、部分失败回滚、归档重开与异常删除回归
 │     ├─ agent_status.rs           只读 Agent 发现、完整身份匹配及有效任务归属
+│     ├─ herdr_agent_discovery.rs  后台状态查询、单 Agent 有界复查及逐 pane 错误保留
 │     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
 │     ├─ lifecycle.rs              自动分配、会话记录、完成清理与启动核实
 │     ├─ idle_cleanup.rs / idle_cleanup_tests.rs  清理预览、确认、逐项日志、任务保护及恢复
@@ -542,6 +546,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `read_file_content` | absPath | UTF-8 文件全文 |
 | `read_skill_content` | skillMdPath | UTF-8 SKILL.md 全文 |
 | `herdr_list_agents` | projectId | 后端解析 session + workspace ID，返回 occupied_by、verified_task_id、完整实时 target 和状态；不修改任务或绑定 |
+| `herdr_agent_snapshot` | projectId | 看板后台只读状态快照：返回已核验 agents、逐 pane failures 和观察年龄；不打开或聚焦终端 |
 | `dispatch_to_herdr` | taskId、agentName（pane ID）、promptText、operationId、可选 promptJson | 后端从项目解析 workspace；有图正文由后端冻结、解析及校验，再经原独占派发流程；旧无图文本调用兼容 |
 | `resolve_dispatch` | taskId、operationId、sent、evidence | 人工核实未知结果，不重发 |
 | `repair_binding` | taskId、paneId | 显式验证并替换独占绑定，不重发 |
@@ -670,11 +675,15 @@ IPC 使用后台线程执行本地事务。每个去重后的 ID 都在自己的
 
 ### 6.2.2 实时 Agent 状态与等待反馈置顶（GitHub #15）
 
-`useAgentStatus → herdr_list_agents → Workflow::list_agents → Herdr::targets`：Herdr 外部查询不持 SQLite 锁，返回后再次核对项目关联。pane 占用仍由 `occupied_by` 表示；仅当前项目中未归档、无未决生命周期操作、绑定 valid 且完整身份一致的任务获得 `verified_task_id`。身份比较使用 session、workspace、pane、terminal、Agent 类型和进程标识，不使用标题或历史状态。前端再与当前任务绑定比较，未决操作、清理失败、身份变化、缺失或查询错误显示 unknown。
+`useAgentStatus → herdr_agent_snapshot → Workflow::agent_snapshot → Herdr::discover_agents`：新增只读 IPC 返回 `agents` 与逐 pane 的 `failures`。原 `herdr_list_agents` 派发候选接口保持不变，两者共用任务归属核验。Herdr 外部查询不持 SQLite 锁，返回后再次核对项目关联。pane 占用仍由 `occupied_by` 表示；仅当前项目中未归档、无未决生命周期操作、绑定 valid 且完整身份一致的任务获得 `verified_task_id`。身份比较使用 machine、session、workspace、pane、terminal、Agent 类型和进程标识，不使用标题或历史状态。前端再与当前任务绑定比较，未决操作、清理失败、身份变化、缺失或查询错误显示 unknown。
+
+`herdr_agent_discovery.rs` 在后台读取 Agent 列表并核验进程；沿用项目级并发池，单 Workspace 内顺序检查，状态专用 CLI 子请求限时 1 秒，普通操作原有超时不变。列表状态无法识别或进程检查失败时，仅对该 pane 再读取一次 `agent get` 和进程信息，检查 workspace/pane/terminal/Agent 未被替换。失败保留 pane ID 和错误，不再静默丢弃成“会话未找到”。远端通过同版本 helper 的 `agent_status_targets` 方法执行相同只读流程，并恢复已验证的 machine ID。快照还返回从列表采样开始计量的 `age_ms`；前端取 IPC 发起时间与收到时间减年龄中更早者，避免 SSH 返回延迟把旧结果当成新结果。冷 helper 或慢路由首轮可能保守显示过期，后续轮询继续恢复。查询不打开、聚焦、重连终端或发送输入；仍无法识别时保持未知，不猜测已完成。
 
 任务卡片标题左侧显示 8px 圆点：working 蓝色、blocked 橙色、done 绿色、idle 灰色、unknown 灰色空心；悬停和无障碍名称使用中英翻译键。done 解释为“本轮已结束，待查看”，不修改业务任务状态；idle 是空闲等待输入，blocked 仅表示 Herdr 识别到审批或提问界面，不分析回复中的自然语言。未启动任务显示“未启动”；正常关闭、无活跃绑定的任务显示“会话已关闭”，异常恢复提示继续保留。
 
-当前项目可见时每 3 秒尝试刷新；获得焦点、恢复可见以及任务列表刷新时使旧观察失效并补查。慢请求不重叠，StrictMode 重挂载共享在途请求；隐藏时暂停轮询并清除状态，切项目或卸载不接受旧结果。实时列表不写回 Task/binding/数据库，状态变化不会改变 TerminalPanel 连接身份。查询沿用现有 Herdr CLI 的有界子请求；大量 Agent 或慢进程检查可能延长单轮耗时，不保证严格 3 秒内更新。
+当前项目可见时每 3 秒尝试刷新；焦点切换复用已有查询，不清空状态，也不作废同轮有效响应。任务内容刷新及可见性变化仍隔离旧响应；隐藏时暂停查询并将观察标为过期，切项目或卸载不接受旧结果。在途请求按 Project、machine、session 和 workspace 合并，本机与远端继续使用独立并发池。查询时保留最近观察，更新时间从实际请求开始计算；失败或超过 15 秒后取消旧状态的实时颜色和排序效力，提示“查询失败”／“状态过期”，悬停可见上次状态。失败、绑定变化、会话缺失与 Herdr 未识别分别提示，正常查询自动恢复。更新中的提示只放在悬停文字，避免每三秒挤动标题。实时列表不写回 Task/binding/数据库，状态变化不会改变 TerminalPanel 连接身份。查询沿用现有 Herdr CLI 的有界子请求；大量 Agent 或慢进程检查可能延长单轮耗时，不保证严格 3 秒内更新。
+
+2026-10-31 增量验证：看板组件覆盖未选中任务后台更新、焦点反复切换、失败恢复、过期、跨项目/机器隔离及无额外终端打开；后端覆盖逐 pane 错误、身份变化与仅只读命令的复查。真实本机只读查询确认多条已绑定任务可直接返回 idle/working；旧 Workspace 缺失明确返回错误。未复现截图中同一张卡片点击前后变化，未完成真实 SSH 新快照协议、安装版 WebView2 和打包安装验收。完整结果见[后台状态验证](docs/verification/2026-10-31-background-agent-status.md)。
 
 验证及限制见[状态验收记录](docs/verification/2026-10-24-kanban-agent-status.md)。
 

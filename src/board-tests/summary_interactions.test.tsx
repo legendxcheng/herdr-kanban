@@ -170,8 +170,8 @@ it("汇总隔离跨机器实时状态，手选终端不重发且保持全局优�
     binding: { ...board.storedTask.binding!, target: { ...board.storedTask.binding!.target!, machine_id: "remote" } },
   }];
   const base = vi.mocked(invoke).getMockImplementation()!;
-  vi.mocked(invoke).mockImplementation((cmd, args, opts) => cmd === "herdr_list_agents"
-    ? Promise.resolve([(args as { projectId: string }).projectId === remote.id ? liveAgent(stored[1], "blocked") : liveAgent(stored[0], "working")])
+  vi.mocked(invoke).mockImplementation((cmd, args, opts) => cmd === "herdr_agent_snapshot"
+    ? Promise.resolve({ agents: [(args as { projectId: string }).projectId === remote.id ? liveAgent(stored[1], "blocked") : liveAgent(stored[0], "working")], failures: [] })
     : base(cmd, args, opts));
   await enter();
   await waitFor(() => expect(cardDot("远端待办").getAttribute("data-status")).toBe("blocked"));
@@ -243,11 +243,11 @@ it("四个远端慢查询期间本机状态仍可刷新", async () => {
   bindTask(); stored[0] = { ...board.storedTask, status: "in_progress" };
   const scope = [project, ...Array.from({ length: 4 }, (_, i) => ({ ...remote, id: `remote-${i}` }))];
   const base = vi.mocked(invoke).getMockImplementation()!;
-  const pending: ((value: []) => void)[] = [];
+  const pending: ((value: { agents: []; failures: [] }) => void)[] = [];
   let localStatus = "working";
   vi.mocked(invoke).mockImplementation((cmd, args, opts) => {
-    if (cmd === "herdr_list_agents") return (args as { projectId: string }).projectId === project.id
-      ? Promise.resolve([liveAgent(stored[0], localStatus)]) : new Promise(resolve => { pending.push(resolve); });
+    if (cmd === "herdr_agent_snapshot") return (args as { projectId: string }).projectId === project.id
+      ? Promise.resolve({ agents: [liveAgent(stored[0], localStatus)], failures: [] }) : new Promise(resolve => { pending.push(resolve); });
     return base(cmd, args, opts);
   });
   const view = render(<TaskSummaryBoard projects={scope} />);
@@ -259,7 +259,7 @@ it("四个远端慢查询期间本机状态仍可刷新", async () => {
     await waitFor(() => expect(cardDot(stored[0].name).getAttribute("data-status")).toBe("blocked"));
   } finally {
     view.unmount();
-    while (pending.length) await act(async () => { pending.splice(0).forEach(resolve => resolve([])); });
+    while (pending.length) await act(async () => { pending.splice(0).forEach(resolve => resolve({ agents: [], failures: [] })); });
   }
 });
 

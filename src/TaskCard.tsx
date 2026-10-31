@@ -5,13 +5,14 @@ import { notify } from "./Toast";
 import { Icon } from "./Icon";
 import { errorText, tr, useLocalizedMessage } from "./i18n";
 import { canResetTask, flowPending, flowUnresolved, preparationLabel, taskColumn } from "./taskFlow";
-import { AgentStatusDot, type AgentStatus } from "./agentStatus";
+import { AgentStatusDot, type AgentStatus, type AgentPresentation } from "./agentStatus";
 import { identityColor } from "./identityColors";
 
 interface TaskCardProps {
   task: Task;
   source?: { machineId: string; machineName: string; workspaceId: string; workspaceName: string };
   agentStatus: AgentStatus;
+  agentPresentation?: AgentPresentation;
   onChanged: () => void;
   onRemoved: () => void;
   onEditTask: (id: string | null) => void;
@@ -28,7 +29,7 @@ interface TaskCardProps {
   onReset?: () => void;
 }
 
-export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, removing, onComplete, onStart, onFlowRecover, onViewPrompt, onReset }: TaskCardProps) {
+export function TaskCard({ task, source, agentStatus, agentPresentation, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, removing, onComplete, onStart, onFlowRecover, onViewPrompt, onReset }: TaskCardProps) {
   const archivingRef = useRef(false);
   const deletingRef = useRef(false);
   const retryingTitleRef = useRef(false);
@@ -120,7 +121,7 @@ export function TaskCard({ task, source, agentStatus, onChanged, onRemoved, onEd
         <div className="task-header" role={onSelect ? "button" : undefined} tabIndex={onSelect ? 0 : undefined}
           aria-label={onSelect ? `${tr(taskColumn(task) !== "in_progress" ? "task.view_edit" : "terminal.view")}${task.name}` : undefined} aria-pressed={onSelect ? !!selected : undefined}
           onKeyDown={(event) => { if (onSelect && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onSelect(); } }}>
-          <AgentStatusDot status={agentStatus} />
+          <AgentStatusDot status={agentStatus} presentation={agentPresentation} />
           <span className="task-name" title={task.name}>{task.name}</span>
         </div>
         <div className="task-tools" {...controls}>

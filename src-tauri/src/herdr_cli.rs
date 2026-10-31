@@ -86,18 +86,21 @@ impl Cli {
                 None => Ok(response.stdout),
             };
         }
-        let mut command = self.command_for_args(args)?;
-        command.args(args);
         let timeout = if args.starts_with(&["agent", "start"]) {
             40
         } else {
             12
         };
+        self.local_output(args, Duration::from_secs(timeout))
+    }
+    fn local_output(&self, args: &[&str], timeout: Duration) -> Result<Vec<u8>, SendError> {
+        let mut command = self.command_for_args(args)?;
+        command.args(args);
         crate::title_process::run_with_limit(
             command,
             Vec::new(),
             &std::sync::atomic::AtomicBool::new(false),
-            Duration::from_secs(timeout),
+            timeout,
             4 * 1024 * 1024,
             true,
         )
@@ -168,6 +171,28 @@ impl Cli {
     }
     pub fn request(&self, args: &[&str]) -> Result<Value, SendError> {
         let stdout = self.output(args)?;
+        Self::response(args, &stdout)
+    }
+    /// Executed on the target machine by background discovery only. Slow panes
+    /// must not consume the ordinary command timeout and hold up healthy cards.
+    pub(super) fn status_json(&self, args: &[&str]) -> Result<Value, String> {
+        if self.remote.is_some()
+            || !matches!(
+                args,
+                ["workspace", "list"]
+                    | ["agent", "list"]
+                    | ["agent", "get", _]
+                    | ["pane", "process-info", "--pane", _]
+            )
+        {
+            return Err("herdr.invalid_request".into());
+        }
+        let stdout = self
+            .local_output(args, Duration::from_secs(1))
+            .map_err(|e| e.message)?;
+        Self::response(args, &stdout).map_err(|e| e.message)
+    }
+    fn response(args: &[&str], stdout: &[u8]) -> Result<Value, SendError> {
         // Unlike agent commands, pane send-text intentionally prints nothing
         // after its server acknowledgement. Only this command accepts silence.
         if (args.starts_with(&["pane", "send-text"]) || args.starts_with(&["pane", "close"]))
@@ -175,7 +200,7 @@ impl Cli {
         {
             return Ok(Value::Null);
         }
-        let doc: Value = serde_json::from_slice(&stdout).map_err(|_| SendError {
+        let doc: Value = serde_json::from_slice(stdout).map_err(|_| SendError {
             message: "herdr.invalid_response".into(),
             uncertain: true,
         })?;

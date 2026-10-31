@@ -156,6 +156,9 @@ body {
 .kanban-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(240px, 1fr)); gap: 16px; overflow-x: auto; padding: 2px 2px 8px; }
 
 /* Task Agent status */
+.agent-status-indicator { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.agent-status-note { max-width: 80px; overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--text-muted, #9299a6); white-space: nowrap; }
+.agent-status-note[data-note="query_failed"], .agent-status-note[data-note="binding_mismatch"], .agent-status-note[data-note="stale"] { color: #f5a524; }
 .agent-status-dot {
   display: inline-block;
   width: 8px;

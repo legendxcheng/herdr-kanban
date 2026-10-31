@@ -31,6 +31,8 @@ mod codex_submit;
 mod idle_cleanup;
 #[path = "herdr_workspace_terminal.rs"]
 mod workspace_terminal;
+#[path = "herdr_agent_discovery.rs"]
+mod agent_discovery;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -92,6 +94,18 @@ impl Cli {
         }
         let pane = field(agent, "pane_id")?;
         let info = self.json(&["pane", "process-info", "--pane", pane])?;
+        self.target_from_process_info(workspace_id, agent, &info)
+    }
+    fn target_from_process_info(
+        &self,
+        workspace_id: &str,
+        agent: &Value,
+        info: &Value,
+    ) -> Result<Target, String> {
+        if field(agent, "workspace_id")? != workspace_id {
+            return Err("binding.identity_changed".into());
+        }
+        let pane = field(agent, "pane_id")?;
         let group = info
             .pointer("/result/process_info/foreground_process_group_id")
             .and_then(Value::as_u64)
@@ -533,6 +547,9 @@ impl Herdr for Cli {
             .filter(|a| a.get("workspace_id").and_then(Value::as_str) == Some(id.as_str()))
             .filter_map(|a| self.live_target(&id, a).ok())
             .collect())
+    }
+    fn discover_agents(&self, workspace: &str) -> Result<crate::agent_status::Discovery, String> {
+        self.discover_agent_statuses(workspace)
     }
     fn send(&self, target: &Target, prompt: &str) -> Result<(), SendError> {
         self.send_checked(target, prompt, &|| Ok(()))

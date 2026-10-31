@@ -14,7 +14,7 @@ import { tr, errorText, messageText, useLocalizedMessage, type Message } from ".
 import { flowUnresolved, taskColumn } from "./taskFlow";
 import { useTaskFlowUpdates } from "./useTaskFlowUpdates";
 import { useAgentStatus } from "./useAgentStatus";
-import { taskAgentStatus } from "./agentStatus";
+import { taskAgentPresentation } from "./agentStatus";
 import { machineLabel } from "./WorkspaceAddDialog";
 import "./taskSummary.css";
 import { CreateTaskDialog } from "./CreateTaskDialog";
@@ -81,7 +81,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
   const resetInFlight = useRef(false);
   const [resetBusy, setResetBusy] = useState(false);
   const [resetError, setResetError] = useLocalizedMessage();
-  const { agents, refreshAgents } = useAgentStatus(projects);
+  const { agents, reads, now, refreshAgents } = useAgentStatus(projects);
   const [pendingDispatch, setPendingDispatch] = useState<{ task: Task; paneId: string } | null>(null);
   const [recoveringTaskId, setRecoveringTaskId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -116,7 +116,8 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
   const restoreWorkspaceSelection = useRef(!!project);
   const defaultSelectionSuppressed = useRef(summary || !!initialTaskId);
   const [locatedTaskId, setLocatedTaskId] = useState<string | null>(null);
-  const agentStatuses = new Map(tasks.map(task => [task.id, taskAgentStatus(task, agents[task.project_id] ?? [], busyTasks.has(task.id))]));
+  const agentPresentations = new Map(tasks.map(task => [task.id, taskAgentPresentation(task, agents[task.project_id] ?? [], busyTasks.has(task.id), reads[task.project_id], now)]));
+  const agentStatuses = new Map([...agentPresentations].map(([id, observation]) => [id, observation.status]));
   const activeTaskId = selectedTodo?.id ?? selectedTask?.id ?? null;
   useEffect(() => {
     // Initial/failed reads and ordinary shells must not erase the remembered task.
@@ -549,6 +550,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
                             workspaceName: projectFor(task).name,
                           } : undefined}
                           agentStatus={agentStatuses.get(task.id)!}
+                          agentPresentation={agentPresentations.get(task.id)!}
                           busy={busyTasks.has(task.id)}
                           removing={bulkTaskIds.has(task.id)}
                           onComplete={() => moveTask(task, "done")}

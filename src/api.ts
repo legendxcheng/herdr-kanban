@@ -2,7 +2,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
 import type {
-  CodexSettings, CodexCatalog,
+  CodexSettings, CodexCatalog, AgentSnapshot,
   Machine, SavedMachine, EnrollmentStatus, WorkspaceChoices, NavigationState, Project, ProjectGitStatus, ProjectSnapshot, WorkspaceOperation, Task, TaskSummary, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
 } from "./types";
 
@@ -96,6 +96,8 @@ export const readSkillContent = (skillMdPath: string, projectId?: string) =>
 // Herdr
 export const herdrListAgents = (projectId: string) =>
   invoke<HerdrAgent[]>("herdr_list_agents", { projectId });
+export const herdrAgentSnapshot = (projectId: string) =>
+  invoke<AgentSnapshot>("herdr_agent_snapshot", { projectId });
 export const dispatchToHerdr = (
   taskId: string, agentName: string, workspace: string, promptText: string, operationId: string, promptJson?: string,
 ) => invoke<DispatchRecord>("dispatch_to_herdr", {

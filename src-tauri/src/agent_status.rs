@@ -1,6 +1,27 @@
 //! Read-only live discovery: pane ownership alone is not proof of process identity.
 use crate::workflow::{Target, Workflow};
 
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Discovery {
+    pub targets: Vec<Target>,
+    pub failures: Vec<DiscoveryFailure>,
+    #[serde(default)]
+    pub age_ms: u64,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DiscoveryFailure {
+    pub pane_id: String,
+    pub error: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct AgentSnapshot {
+    pub agents: Vec<AgentChoice>,
+    pub failures: Vec<DiscoveryFailure>,
+    pub age_ms: u64,
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct AgentChoice {
     pub name: String,
@@ -21,6 +42,7 @@ mod tests {
 
     struct FakeHerdr {
         live: Mutex<Result<Vec<Target>, String>>,
+        failures: Mutex<Vec<DiscoveryFailure>>,
         db: Arc<Mutex<Connection>>,
     }
     impl Herdr for FakeHerdr {
@@ -30,6 +52,13 @@ mod tests {
                 "external reads must not hold SQLite"
             );
             self.live.lock().unwrap().clone()
+        }
+        fn discover_agents(&self, workspace: &str) -> Result<Discovery, String> {
+            Ok(Discovery {
+                targets: self.targets(workspace)?,
+                failures: self.failures.lock().unwrap().clone(),
+                age_ms: 0,
+            })
         }
         fn send(&self, _: &Target, _: &str) -> Result<(), SendError> {
             panic!("status reads must never send")
@@ -58,6 +87,7 @@ mod tests {
         let db = Arc::new(Mutex::new(db));
         let fake = Arc::new(FakeHerdr {
             live: Mutex::new(Ok(vec![target.clone()])),
+            failures: Mutex::new(vec![]),
             db: db.clone(),
         });
         (
@@ -167,18 +197,60 @@ mod tests {
         assert!(app.list_agents("p").unwrap().is_empty());
         assert_eq!(app.binding("a").unwrap().state, "valid");
     }
+    #[test]
+    fn background_snapshot_keeps_per_pane_failure_distinct_from_missing_agent() {
+        let (app, fake, target) = fixture();
+        *fake.live.lock().unwrap() = Ok(vec![]);
+        *fake.failures.lock().unwrap() = vec![DiscoveryFailure {
+            pane_id: target.pane_id.clone(),
+            error: "herdr.timeout".into(),
+        }];
+        let snapshot = app.agent_snapshot("p").unwrap();
+        assert!(snapshot.agents.is_empty());
+        assert_eq!(snapshot.failures.len(), 1);
+        assert_eq!(snapshot.failures[0].pane_id, "w1:p1");
+        fake.failures.lock().unwrap().clear();
+        assert!(app.agent_snapshot("p").unwrap().failures.is_empty());
+        *fake.live.lock().unwrap() = Ok(vec![Target {
+            status: "done".into(),
+            ..target
+        }]);
+        let snapshot = app.agent_snapshot("p").unwrap();
+        assert_eq!(snapshot.agents[0].verified_task_id.as_deref(), Some("a"));
+        assert_eq!(snapshot.agents[0].status, "done");
+    }
 }
 
 impl Workflow {
+    pub fn agent_snapshot(&self, project: &str) -> Result<AgentSnapshot, String> {
+        let workspace = self.agent_workspace(project)?;
+        let discovery = self.herdr.discover_agents(&workspace)?;
+        Ok(AgentSnapshot {
+            agents: self.assign_agents(project, &workspace, discovery.targets)?,
+            failures: discovery.failures,
+            age_ms: discovery.age_ms,
+        })
+    }
     pub fn list_agents(&self, project: &str) -> Result<Vec<AgentChoice>, String> {
-        let workspace = crate::projects::project_identity_on(
+        let workspace = self.agent_workspace(project)?;
+        let targets = self.herdr.targets(&workspace)?;
+        self.assign_agents(project, &workspace, targets)
+    }
+    fn agent_workspace(&self, project: &str) -> Result<String, String> {
+        crate::projects::project_identity_on(
             &*self.db.lock().map_err(|e| e.to_string())?,
             project,
             self.herdr.machine_id(),
             self.herdr.session(),
-        )?;
-        // Never hold SQLite while waiting for Herdr.
-        let targets = self.herdr.targets(&workspace)?;
+        )
+    }
+    fn assign_agents(
+        &self,
+        project: &str,
+        workspace: &str,
+        targets: Vec<Target>,
+    ) -> Result<Vec<AgentChoice>, String> {
+        // External queries have finished; recheck ownership before publishing.
         let db = self.db.lock().map_err(|e| e.to_string())?;
         if crate::projects::project_identity_on(
             &db,

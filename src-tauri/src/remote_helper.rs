@@ -285,6 +285,8 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
         "targets" => {
             serde_json::to_value(cli.targets(text("workspace")?)?).map_err(|e| e.to_string())
         }
+        "agent_status_targets" => serde_json::to_value(cli.discover_agents(text("workspace")?)?)
+            .map_err(|e| e.to_string()),
         "image" => {
             use base64::Engine;
             let bytes = request["data"]

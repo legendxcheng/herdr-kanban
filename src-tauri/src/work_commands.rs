@@ -56,6 +56,19 @@ pub async fn recover_lifecycle(
 }
 
 #[tauri::command]
+pub async fn herdr_agent_snapshot(
+    app: State<'_, Arc<Workflow>>,
+    project_id: String,
+) -> Result<crate::agent_status::AgentSnapshot, String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.for_project(&project_id)?.agent_snapshot(&project_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn herdr_list_agents(
     app: State<'_, Arc<Workflow>>,
     project_id: String,

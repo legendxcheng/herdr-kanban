@@ -184,6 +184,7 @@ pub fn run() {
             commands::read_file_content,
             commands::read_skill_content,
             work_commands::herdr_list_agents,
+            work_commands::herdr_agent_snapshot,
             work_commands::start_task,
             work_commands::complete_task,
             work_commands::recover_lifecycle,
