@@ -2,6 +2,24 @@
 use super::*;
 use crate::native_terminal::{Bounds, NativeTerminalManager};
 
+#[test]
+fn read_only_native_client_cannot_deliver_keys_or_menu_requests_to_the_pipe() {
+    let (mut sender, mut receiver) = pair();
+    let (_manager, session) = session();
+    let maintenance = vec![12, 0];
+    // Raw input, clipboard image, pane/popup keys, endpoint execution and named controls.
+    let payloads = [vec![1, 0], vec![2, 0], vec![13, 0], vec![14, 0], vec![15, 0], maintenance.clone()];
+    for payload in payloads {
+        if wire::forward_view_input(&payload, "test:p1", true, true).unwrap() {
+            sender.send(&wire::frame(&payload), &session, &AtomicBool::new(false)).unwrap();
+        }
+    }
+    let mut received = vec![];
+    receiver.read_available(&mut received).unwrap();
+    assert_eq!(wire::next_frame(&mut received).unwrap(), Some(maintenance));
+    assert!(received.is_empty());
+}
+
 fn pair() -> (Pipe, Pipe) {
     let endpoint = format!("kanban-pipe-test-{}", uuid::Uuid::new_v4());
     let server = Pipe::listen(&endpoint).unwrap();

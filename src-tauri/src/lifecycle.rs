@@ -209,12 +209,14 @@ impl Workflow {
     }
     /// A server rejection never launched our Agent. Release only this operation's
     /// reservation, without closing the pane or replaying any prompt/session.
-    fn release_rejected_start(&self, task: &str, op: &str, error: &str) -> Result<(), String> {
+    fn release_rejected_start(&self, task: &str, op: &str, error: &str, check_cancelled: &dyn Fn() -> Result<(), String>) -> Result<(), String> {
         if !crate::herdr::agent_start_rejected_busy(error) {
             return Err("dispatch.operation_conflict".into());
         }
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
+        check_cancelled()?;
+        crate::machines::ensure_enabled(&tx, self.herdr.machine_id())?;
         ensure_operation(&tx, task, op)?;
         let releasable: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM lifecycle_operations o JOIN task_bindings b ON b.task_id=o.task_id
@@ -235,6 +237,7 @@ impl Workflow {
         .map_err(err)?;
         tx.execute("UPDATE lifecycle_operations SET state='failed',error=?2,evidence='Agent start explicitly rejected; no dispatch attempted; pane preserved' WHERE id=?1", params![op, error]).map_err(err)?;
         tx.execute("DELETE FROM task_working_directories WHERE task_id=?1 AND NOT EXISTS(SELECT 1 FROM task_sessions WHERE task_id=?1)", [task]).map_err(err)?;
+        check_cancelled()?;
         tx.commit().map_err(err)
     }
     fn reserve_target(&self, task: &str, op: &str, target: &Target) -> Result<(), String> {
@@ -430,7 +433,7 @@ impl Workflow {
         })();
         if let Err(ref e) = result {
             if start_rejected {
-                self.release_rejected_start(task, op, e)?;
+                self.release_rejected_start(task, op, e, &|| Ok(()))?;
             } else if touched {
                 self.end_flow(op, "unknown", e)?;
             } else {
@@ -503,6 +506,12 @@ impl Workflow {
     /// Reconcile without sending, starting or closing anything. Explicitly rejected starts
     /// may release their reservation; uncertain launches still require pane/dispatch evidence.
     pub fn recover_lifecycle(&self, task: &str, op: &str) -> Result<(), String> {
+        let gate = crate::task_recovery::gate(self, task)?;
+        let _guard = gate.lock().map_err(err)?;
+        self.recover_lifecycle_locked(task, op, &|| Ok(()))
+    }
+    pub(crate) fn recover_lifecycle_locked(&self, task: &str, op: &str, check_cancelled: &dyn Fn() -> Result<(), String>) -> Result<(), String> {
+        check_cancelled()?;
         let (workspace, _, _) = self.project_context(task)?;
         let flow = view(&*self.db.lock().map_err(err)?, task)?;
         if flow.operation_id.as_deref() != Some(op) || flow.state.as_deref() != Some("unknown") {
@@ -516,12 +525,13 @@ impl Workflow {
             if dispatch.id != format!("{op}:dispatch") || dispatch.state != "unknown" {
                 return Err("dispatch.operation_conflict".into());
             }
-            return self.confirm_received_dispatch(dispatch);
+            return self.confirm_received_dispatch(dispatch, check_cancelled);
         }
         if flow.kind.as_deref() == Some("start")
             && crate::herdr::agent_start_rejected_busy(&flow.error)
         {
-            return self.release_rejected_start(task, op, &flow.error);
+            check_cancelled()?;
+            return self.release_rejected_start(task, op, &flow.error, check_cancelled);
         }
         let sent: bool = self
             .db
@@ -534,18 +544,7 @@ impl Workflow {
             )
             .map_err(err)?;
         if sent {
-            if let Some(target) = b.target.as_ref() {
-                let (_, cwd, _) = self.project_context(task)?;
-                if self
-                    .save_session(task, op, target, &cwd, flow.session_id.as_deref())?
-                    .is_none()
-                {
-                    return Err("flow.session_missing".into());
-                }
-            } else {
-                return Err("binding.missing".into());
-            }
-            return self.end_flow(op, "succeeded", "");
+            return self.restore_confirmed_start(task, op, check_cancelled);
         }
         let prior: bool = self
             .db
@@ -560,13 +559,10 @@ impl Workflow {
         if prior {
             if let (Some(expected), Some(old)) = (flow.session_id, b.target.as_ref()) {
                 if let Some(live) = self.herdr.targets(&workspace)?.into_iter().find(|t| {
-                    t.pane_id == old.pane_id
-                        && t.terminal_id == old.terminal_id
-                        && t.session == old.session
+                    t.same_identity(old)
                 }) {
                     if self.herdr.session_id(&live)?.as_deref() == Some(expected.as_str()) {
-                        self.reserve_target(task, op, &live)?;
-                        return self.activate(task, op, &live);
+                        return self.commit_recovered_session(task, op, &live, &expected, check_cancelled);
                     }
                 }
             }
@@ -586,8 +582,11 @@ impl Workflow {
                 return Err("flow.close_before_reset".into());
             }
         }
+        check_cancelled()?;
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
+        check_cancelled()?;
+        crate::machines::ensure_enabled(&tx, self.herdr.machine_id())?;
         ensure_operation(&tx, task, op)?;
         tx.execute(
             "UPDATE pane_allocations SET resolved=1 WHERE operation_id=?1",
@@ -609,6 +608,38 @@ impl Workflow {
                 .map_err(err)?;
         }
         tx.execute("UPDATE lifecycle_operations SET state='failed',error='',evidence='Exact launch pane absent; no confirmed prompt' WHERE id=?1",[op]).map_err(err)?;
+        check_cancelled()?;
+        tx.commit().map_err(err)
+    }
+
+    fn commit_recovered_session(&self, task: &str, op: &str, target: &Target, session: &str, check_cancelled: &dyn Fn() -> Result<(), String>) -> Result<(), String> {
+        self.herdr.validate(&target.workspace_id, target)?;
+        check_cancelled()?;
+        uuid::Uuid::parse_str(session).map_err(|_| "flow.session_invalid")?;
+        let mut db = self.db.lock().map_err(err)?;
+        let tx = db.transaction().map_err(err)?;
+        check_cancelled()?;
+        ensure_operation(&tx, task, op)?;
+        crate::machines::ensure_enabled(&tx, self.herdr.machine_id())?;
+        crate::workflow::ensure_project_target(&tx, task, target, self.herdr.session())?;
+        crate::workflow::ensure_available(&tx, target, task)?;
+        let current = binding(&tx, task)?;
+        if !current.target.as_ref().is_some_and(|old| old.same_identity(target)) {
+            return Err("binding.identity_changed".into());
+        }
+        if view(&tx, task)?.session_id.as_deref().is_some_and(|old| old != session) {
+            return Err("flow.session_mismatch".into());
+        }
+        tx.execute("INSERT INTO task_sessions(task_id,codex_session_id,cwd,updated_at)
+            SELECT t.id,?2,COALESCE(d.cwd,p.root_path),?3 FROM tasks t JOIN projects p ON p.id=t.project_id
+            LEFT JOIN task_working_directories d ON d.task_id=t.id WHERE t.id=?1
+            ON CONFLICT(task_id) DO UPDATE SET codex_session_id=excluded.codex_session_id,updated_at=excluded.updated_at",
+            params![task, session, now()]).map_err(err)?;
+        tx.execute("UPDATE task_bindings SET state='valid' WHERE task_id=?1", [task]).map_err(err)?;
+        tx.execute("UPDATE tasks SET status='in_progress',completed_at=NULL,updated_at=?2 WHERE id=?1", params![task,now()]).map_err(err)?;
+        let evidence = serde_json::json!({"source":"automatic_session","at":now(),"operation_id":op,"target":target,"session_id":session}).to_string();
+        tx.execute("UPDATE lifecycle_operations SET state='succeeded',error='',evidence=?2 WHERE id=?1", params![op,evidence]).map_err(err)?;
+        check_cancelled()?;
         tx.commit().map_err(err)
     }
 }

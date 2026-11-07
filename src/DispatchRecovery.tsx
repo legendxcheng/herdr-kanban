@@ -24,8 +24,8 @@ export function DispatchRecovery({ task, onClose, onSaved }: { task: Task; onClo
     {error && <p role="alert" className="error">{error}</p>}
     <div className="dialog-actions">
       <button onClick={onClose} disabled={busy} className="btn-secondary">{tr("common.cancel")}</button>
-      <button onClick={() => resolve(false)} disabled={busy || evidence.trim().length < 3} className="btn-secondary">{tr("dispatch.not_sent")}</button>
-      <button onClick={() => resolve(true)} disabled={busy || evidence.trim().length < 3} className="btn-primary">{tr("dispatch.sent")}</button>
+      <button onClick={() => resolve(false)} disabled={busy} className="btn-secondary">{tr("dispatch.not_sent")}</button>
+      <button onClick={() => resolve(true)} disabled={busy} className="btn-primary">{tr("dispatch.sent")}</button>
     </div>
   </section></div>;
 }

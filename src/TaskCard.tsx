@@ -4,7 +4,7 @@ import * as api from "./api";
 import { notify } from "./Toast";
 import { Icon } from "./Icon";
 import { errorText, tr, useLocalizedMessage } from "./i18n";
-import { canResetTask, flowPending, flowUnresolved, preparationLabel, taskColumn } from "./taskFlow";
+import { canResetTask, flowPending, flowUnresolved, preparationLabel, taskColumn, taskHasTerminalView } from "./taskFlow";
 import { AgentStatusDot, type AgentStatus, type AgentPresentation } from "./agentStatus";
 import { identityColor } from "./identityColors";
 
@@ -13,6 +13,7 @@ interface TaskCardProps {
   source?: { machineId: string; machineName: string; workspaceId: string; workspaceName: string };
   agentStatus: AgentStatus;
   agentPresentation?: AgentPresentation;
+  recovery?: api.RecoveryStatus;
   onChanged: () => void;
   onRemoved: () => void;
   onEditTask: (id: string | null) => void;
@@ -29,7 +30,7 @@ interface TaskCardProps {
   onReset?: () => void;
 }
 
-export function TaskCard({ task, source, agentStatus, agentPresentation, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, removing, onComplete, onStart, onFlowRecover, onViewPrompt, onReset }: TaskCardProps) {
+export function TaskCard({ task, source, agentStatus, agentPresentation, recovery, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, removing, onComplete, onStart, onFlowRecover, onViewPrompt, onReset }: TaskCardProps) {
   const archivingRef = useRef(false);
   const deletingRef = useRef(false);
   const retryingTitleRef = useRef(false);
@@ -42,12 +43,12 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, onChang
     : task.cleanup_required ? "archive.cleanup_required" : "";
   const disabled = !!busy || !!removing || archiving || deleting;
   const controlsDisabled = disabled || flowUnresolved(task);
-  const preparation = preparationLabel(task);
+  const preparation = task.flow?.state === "unknown" && recovery ? `recovery.${recovery.state}` : preparationLabel(task);
   const compact = taskColumn(task) === "in_progress";
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsId = useId();
   const hasModel = !!(task.codex_settings?.model || task.codex_settings?.effort);
-  const statusKey = task.flow?.state === "unknown" || task.binding?.operation ? "task.compact_verify"
+  const statusKey = task.flow?.state === "unknown" || task.binding?.operation ? recovery ? `recovery.${recovery.state}` : "task.compact_verify"
     : task.flow?.state === "failed" || task.flow?.error || task.cleanup_required || canResetTask(task) ? "task.compact_failed"
     : preparation || busy ? "task.compact_preparing" : null;
   const toggleDetails = () => setDetailsOpen(open => !open);
@@ -119,7 +120,7 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, onChang
       {!compact && source && <div className="summary-card-source" title={sourceLabel}>{sourceContent}</div>}
       <div className="task-heading">
         <div className="task-header" role={onSelect ? "button" : undefined} tabIndex={onSelect ? 0 : undefined}
-          aria-label={onSelect ? `${tr(taskColumn(task) !== "in_progress" ? "task.view_edit" : "terminal.view")}${task.name}` : undefined} aria-pressed={onSelect ? !!selected : undefined}
+          aria-label={onSelect ? `${tr(taskHasTerminalView(task) ? "terminal.view" : "task.view_edit")}${task.name}` : undefined} aria-pressed={onSelect ? !!selected : undefined}
           onKeyDown={(event) => { if (onSelect && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onSelect(); } }}>
           <AgentStatusDot status={agentStatus} presentation={agentPresentation} />
           <span className="task-name" title={task.name}>{task.name}</span>
@@ -168,6 +169,7 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, onChang
       {(task.codex_settings?.model || task.codex_settings?.effort) && <p className="task-model" title={tr("model.startup")}>{task.codex_settings.model ?? tr("model.default")} · {task.codex_settings.effort ?? tr("model.default")}</p>}
       {(preparation || busy) && <p role="status" className="task-notice">{tr(preparation ?? "flow.busy")}</p>}
       {task.flow?.error && <p className="error task-notice">{errorText(task.flow.error)}</p>}
+      {recovery?.error && recovery.error !== task.flow?.error && <p className="error task-notice">{errorText(recovery.error)}</p>}
       {(flowUnresolved(task) || canResetTask(task) || taskColumn(task) === "in_progress") && <div className="task-recovery" {...controls}>
         {!compact && <button className="btn-secondary" disabled={deleting || removing} onClick={onViewPrompt}>{tr("task.view_prompt")}</button>}
         {compact && task.flow?.kind === "start" && task.flow.state === "failed" && <button disabled={controlsDisabled} onClick={onStart} className="btn-secondary">{tr("flow.retry_start")}</button>}
@@ -177,7 +179,8 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, onChang
       {archiveError && <p role="alert" className="error task-notice">{archiveError}</p>}
       {(task.flow?.state === "unknown" || task.cleanup_required || task.binding?.operation) &&
         <fieldset disabled={disabled || flowPending(task)} className="task-recovery" {...controls}>
-          {task.flow?.state === "unknown" && <button className="btn-secondary" onClick={onFlowRecover}>{tr("flow.recover")}</button>}
+          {task.flow?.state === "unknown" && <button className="btn-secondary" onClick={onFlowRecover}>{tr(recovery ? "recovery.retry" : "flow.recover")}</button>}
+          {task.flow?.state !== "unknown" && task.binding?.state === "unknown" && <button className="btn-secondary" onClick={onFlowRecover}>{tr("recovery.retry")}</button>}
           {task.cleanup_required && <button className="btn-secondary" onClick={onComplete}>{tr("flow.retry_cleanup")}</button>}
           {task.binding?.state === "unknown" && <button className="btn-secondary" onClick={onRecover}>{tr("dispatch.verify")}</button>}
           {task.binding?.state === "pending" && <button className="btn-ghost" onClick={onChanged}>{tr("dispatch.pending")}</button>}

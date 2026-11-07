@@ -18,14 +18,18 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
   const [state, setState] = useState("terminal.empty");
   const [error, setError] = useLocalizedMessage();
   const [attempt, setAttempt] = useState(0);
+  const retries = useRef({ selection: "", count: 0 });
   const identity = JSON.stringify(task?.binding?.target);
   const bindingState = task?.binding?.state;
-  const preparation = task ? preparationLabel(task) : null;
+  const preparation = task && task.flow?.state !== "unknown" ? preparationLabel(task) : null;
+  const canOpen = bindingState === "valid" || !!task?.binding?.target && (bindingState === "unknown" || task?.flow?.kind === "start" && task.flow.state === "unknown");
+  const selection = JSON.stringify([task?.id, identity, bindingState, task?.flow?.operation_id, task?.execution_epoch, workspace?.id, workspace?.machine_id]);
+  if (retries.current.selection !== selection) retries.current = { selection, count: 0 };
   useEffect(() => {
     setError("");
     if ((!task && !workspace) || !host.current) { setState("terminal.empty"); return; }
     if (!workspace && preparation) { setState(preparation); return; }
-    if (!workspace && bindingState !== "valid") { setState("binding.repair_required"); return; }
+    if (!workspace && !canOpen) { setState("binding.repair_required"); return; }
     const connectionId = crypto.randomUUID();
     let active = true;
     let ended = false;
@@ -33,12 +37,21 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
     let lastBounds = "";
     let syncing = false;
     let dirty = true;
+    let retryTimer: number | undefined;
+    let connectionMode = "interactive";
     setState("terminal.connecting");
     function fail(e: unknown) {
       if (!active || ended) return;
       ended = true;
+      const code = String(e).replace(/^Error: /, "");
       setState("terminal.disconnected"); setError(String(e));
       void api.closeTerminal(connectionId).catch(() => {});
+      const delay = [2000, 5000, 10000, 30000, 60000][retries.current.count];
+      if (!workspace && delay !== undefined && transientConnectionError(code)) {
+        retries.current.count += 1;
+        setState("terminal.reconnecting");
+        retryTimer = window.setTimeout(() => { if (active) setAttempt(n => n + 1); }, delay);
+      }
     }
     async function syncBounds() {
       dirty = true;
@@ -69,20 +82,26 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
     const open = workspace ? api.openWorkspaceTerminal : api.openTerminal;
     void open(workspace?.id ?? task!.id, connectionId, initial, packet => {
       if (active && !ended && packet.kind === "closed") fail(packet.message);
+      if (active && !ended && packet.kind === "mode") {
+        connectionMode = packet.message;
+        if (opened) setState(connectionMode === "read_only" ? "terminal.read_only" : "terminal.connected");
+      }
     }).then(() => {
       if (!active || ended) { void api.closeTerminal(connectionId).catch(() => {}); return; }
-      opened = true; setState("terminal.connected");
+      opened = true; retries.current.count = 0;
+      setState(connectionMode === "read_only" ? "terminal.read_only" : "terminal.connected");
       void syncBounds();
     }).catch(fail);
     return () => {
       active = false;
+      window.clearTimeout(retryTimer);
       observer.disconnect(); mutations.disconnect();
       window.removeEventListener("resize", update);
       document.removeEventListener("visibilitychange", update);
       void api.closeTerminal(connectionId).catch(() => {});
     };
   // Reconnect only when the selected identity/state changes, not on list refreshes.
-  }, [task?.id, identity, bindingState, attempt, preparation, workspace?.id, workspace?.machine_id, workspace?.herdr_session, workspace?.workspace_id]);
+  }, [selection, attempt, preparation, canOpen, workspace?.herdr_session, workspace?.workspace_id]);
 
   const title = workspace ? tr("workspace_terminal.title", { workspace: workspace.name }) : task?.name ?? tr("terminal.label");
 
@@ -98,10 +117,10 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
       </button>}
     </header>
     {!task && !workspace && <p className="terminal-hint">{tr("terminal.empty")}</p>}
-    {(task || workspace) && state !== "terminal.connected" && <div className="terminal-feedback">
+    {(task || workspace) && state !== "terminal.connected" && state !== "terminal.read_only" && <div className="terminal-feedback">
       {error && <p role="alert">{machineName ?? tr("machine.local")} · {error}</p>}
       {!preparation && state !== "terminal.connecting" && <div className="task-actions">
-        {(bindingState === "valid" || workspace) && <button className="btn-secondary" onClick={() => setAttempt((n) => n + 1)}>{tr("terminal.reconnect")}</button>}
+        {(canOpen || workspace) && <button className="btn-secondary" onClick={() => { retries.current.count = 0; setAttempt((n) => n + 1); }}>{tr("terminal.reconnect")}</button>}
         {onRepair && <button className="btn-ghost" onClick={onRepair}>{tr("binding.repair")}</button>}
       </div>}
     </div>}
@@ -109,4 +128,9 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
       <div ref={host} className="terminal-host" onKeyDown={(e) => e.stopPropagation()} />
     </div>
   </aside>;
+}
+
+function transientConnectionError(message: string) {
+  return ["terminal.disconnected", "terminal.stale", "terminal.client_connect", "terminal.client_focus_timeout", "terminal.window_timeout",
+    "machine.timeout", "machine.connection_failed", "herdr.timeout", "herdr.unavailable"].includes(message.split(":")[0]);
 }

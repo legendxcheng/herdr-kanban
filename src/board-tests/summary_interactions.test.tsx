@@ -74,7 +74,7 @@ it("汇总未知派发核实使用原操作 ID 且不会重新发送", async () 
   stored[1].binding = { state: "unknown", target: null, operation: { id: "remote-op", prompt: "原提示词", created_at: "2026-10-26", target: { ...board.storedTask.binding!.target!, machine_id: "remote", workspace_id: "w2" } } };
   await enter();
   fireEvent.click(within(card("远端待办")).getByRole("button", { name: "核实派发结果" }));
-  fireEvent.change(screen.getByLabelText("核实依据"), { target: { value: "已核对原远端窗口" } });
+  fireEvent.change(screen.getByLabelText("备注（可选）"), { target: { value: "已核对原远端窗口" } });
   fireEvent.click(screen.getByRole("button", { name: "确认已发送" }));
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("resolve_dispatch", { taskId: "remote-task", operationId: "remote-op", sent: true, evidence: "已核对原远端窗口" }));
   expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "dispatch_to_herdr")).toBe(false);

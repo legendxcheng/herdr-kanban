@@ -8,10 +8,11 @@ import * as api from "./api";
 import { notify } from "./Toast";
 import { Icon, type IconName } from "./Icon";
 import { DispatchRecovery } from "./DispatchRecovery";
+import { useTaskRecovery } from "./useTaskRecovery";
 import { TerminalPanel } from "./TerminalPanel";
 import { BindingDialog } from "./BindingDialog";
 import { tr, errorText, messageText, useLocalizedMessage, type Message } from "./i18n";
-import { flowUnresolved, taskColumn } from "./taskFlow";
+import { flowUnresolved, taskColumn, taskHasTerminalView } from "./taskFlow";
 import { useTaskFlowUpdates } from "./useTaskFlowUpdates";
 import { useAgentStatus } from "./useAgentStatus";
 import { taskAgentPresentation } from "./agentStatus";
@@ -82,6 +83,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
   const [resetBusy, setResetBusy] = useState(false);
   const [resetError, setResetError] = useLocalizedMessage();
   const { agents, reads, now, refreshAgents } = useAgentStatus(projects);
+  const recovery = useTaskRecovery();
   const [pendingDispatch, setPendingDispatch] = useState<{ task: Task; paneId: string } | null>(null);
   const [recoveringTaskId, setRecoveringTaskId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -90,7 +92,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
   const [selectedTodoId, setSelectedTodoId] = useState<string | null>(null);
   const localEditorRef = useRef<TaskEditorHandle>(null);
   const editorRef = externalEditorRef ?? localEditorRef;
-  const selectedTodo = tasks.find(task => task.id === selectedTodoId && taskColumn(task) === "todo") ?? null;
+  const selectedTodo = tasks.find(task => task.id === selectedTodoId && taskColumn(task) === "todo" && !taskHasTerminalView(task)) ?? null;
   const [repairingTaskId, setRepairingTaskId] = useState<string | null>(null);
   const activeFlows = useRef(new Set<string>());
   const optimisticStarts = useRef(new Map<string, Task["flow"]>());
@@ -101,7 +103,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
   const [bulkAction, setBulkAction] = useState<"archive" | "delete" | null>(null);
   const [bulkFeedback, setBulkFeedback] = useState<{ message: Message; issues: { id: string; name: string; error: string }[]; failed: boolean } | null>(null);
   const removedTaskIds = useRef(new Set<string>());
-  const selectedTask = tasks.find((task) => task.id === selectedTaskId && taskColumn(task) === "in_progress") ?? null;
+  const selectedTask = tasks.find((task) => task.id === selectedTaskId && taskHasTerminalView(task)) ?? null;
   const suppressClick = useRef(false);
   const selectionSequence = useRef(0);
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -167,8 +169,8 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
           // Consume the request only on a successful fresh read. Never briefly connect the first task.
           const target = t.find(task => task.id === pendingTaskSelection.current);
           pendingTaskSelection.current = undefined;
-          setSelectedTodoId(target && taskColumn(target) === "todo" ? target.id : null);
-          setSelectedTaskId(target && taskColumn(target) === "in_progress" ? target.id : null);
+          setSelectedTodoId(target && taskColumn(target) === "todo" && !taskHasTerminalView(target) ? target.id : null);
+          setSelectedTaskId(target && taskHasTerminalView(target) ? target.id : null);
           setEditingTaskId(target && taskColumn(target) === "done" ? target.id : null);
           setLocatedTaskId(target?.id ?? null);
           if (!target) notify({ key: "summary.unavailable" }, "error");
@@ -178,13 +180,13 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
           const target = t.find(task => task.id === rememberedId && task.project_id === project.id
             && !task.archived_at && taskColumn(task) !== "done");
           // Restore only after a successful read; never connect the default task first.
-          setSelectedTodoId(target && taskColumn(target) === "todo" ? target.id : null);
-          setSelectedTaskId(target && taskColumn(target) === "in_progress" ? target.id
-            : t.find(task => task.project_id === project.id && !task.archived_at && taskColumn(task) === "in_progress")?.id ?? null);
+          setSelectedTodoId(target && taskColumn(target) === "todo" && !taskHasTerminalView(target) ? target.id : null);
+          setSelectedTaskId(target && taskHasTerminalView(target) ? target.id
+            : t.find(task => task.project_id === project.id && !task.archived_at && taskHasTerminalView(task))?.id ?? null);
         } else {
-          setSelectedTodoId(current => t.some(task => task.id === current && taskColumn(task) === "todo") ? current : null);
-          setSelectedTaskId((current) => t.some((task) => task.id === current && taskColumn(task) === "in_progress")
-            ? current : (!defaultSelectionSuppressed.current || current ? t.find((task) => taskColumn(task) === "in_progress")?.id ?? null : null));
+          setSelectedTodoId(current => t.some(task => task.id === current && taskColumn(task) === "todo" && !taskHasTerminalView(task)) ? current : null);
+          setSelectedTaskId((current) => t.some((task) => task.id === current && taskHasTerminalView(task))
+            ? current : (!defaultSelectionSuppressed.current || current ? t.find((task) => taskHasTerminalView(task))?.id ?? null : null));
         }
         return t;
       }
@@ -332,9 +334,9 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
     }
     if (!mounted.current || selectionScope !== scopeRef.current || selection !== selectionSequence.current) return;
     setShellProjectId(null);
-    if (taskColumn(task) === "todo") setSelectedTodoId(task.id);
+    if (taskHasTerminalView(task)) { defaultSelectionSuppressed.current = false; setSelectedTodoId(null); setSelectedTaskId(task.id); }
+    else if (taskColumn(task) === "todo") { setSelectedTaskId(null); setSelectedTodoId(task.id); }
     else if (taskColumn(task) === "done") setEditingTaskId(task.id);
-    else { defaultSelectionSuppressed.current = false; setSelectedTaskId(task.id); }
   }
 
   function editTask(id: string | null) {
@@ -436,10 +438,15 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
 
   async function recoverFlow(task: Task) {
     if (bulkTaskIdsRef.current.has(task.id)) return;
-    if (!task.flow?.operation_id || activeFlows.current.has(task.id)) return;
-    if (task.flow.kind === "complete") { await moveTask(task, "done"); return; }
+    const operation = task.flow?.state === "unknown" ? task.flow.operation_id : task.binding?.operation?.id;
+    if (!operation || activeFlows.current.has(task.id)) return;
+    if (task.flow?.state === "unknown" && task.flow.kind === "complete") { await moveTask(task, "done"); return; }
     activeFlows.current.add(task.id); setBusyTasks(new Set(activeFlows.current));
-    try { await api.recoverLifecycle(task.id, task.flow.operation_id); setFlowError(""); }
+    try {
+      if (recovery[task.id] || task.binding?.operation && task.flow?.state !== "unknown") await api.retryTaskRecovery(task.id, operation);
+      else await api.recoverLifecycle(task.id, operation);
+      setFlowError("");
+    }
     catch (e) { setFlowError(String(e)); }
     finally { activeFlows.current.delete(task.id); setBusyTasks(new Set(activeFlows.current)); await load(); }
   }
@@ -561,6 +568,7 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
                           onChanged={load}
                           onRemoved={() => handleRemoved([task.id])}
                           onRecover={() => setRecoveringTaskId(task.id)}
+                          recovery={recovery[task.id]}
                           selected={!shellWorkspace && (selectedTodoId ?? selectedTaskId) === task.id}
                           onSelect={summary || taskColumn(task) !== "done" ? () => { void selectTask(task); } : undefined}
                           onEditTask={editTask}

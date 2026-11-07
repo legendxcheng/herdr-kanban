@@ -12,7 +12,39 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ left: 600, top: 48, right: 1000, bottom: 700, width: 400, height: 652 } as DOMRect);
   vi.mocked(invoke).mockReset().mockImplementation(async (_command, args) => (args as { connectionId: string })?.connectionId);
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it('automatically reconnects a disconnected task at most six times and cancels old selection retries', async () => {
+  vi.useFakeTimers();
+  vi.mocked(invoke).mockImplementation(async name => { if (name === 'terminal_open') throw 'terminal.disconnected'; });
+  const view = render(<TerminalPanel task={task} />);
+  await act(async () => { await Promise.resolve(); });
+  for (const delay of [2000, 5000, 10000, 30000, 60000]) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(delay); });
+  }
+  expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === 'terminal_open')).toHaveLength(6);
+  await act(async () => { await vi.advanceTimersByTimeAsync(300000); });
+  expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === 'terminal_open')).toHaveLength(6);
+  view.rerender(<TerminalPanel task={{ ...task, id: 'b' }} />);
+  await act(async () => { await Promise.resolve(); });
+  view.rerender(<TerminalPanel task={null} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(300000); });
+  expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === 'terminal_open')).toHaveLength(7);
+});
+
+it('opens the original unknown task in the mode granted by the backend without confirming dispatch', async () => {
+  vi.mocked(invoke).mockImplementation(async (name, args) => {
+    if (name === 'terminal_open') (args as { output: { onmessage: (packet: unknown) => void } }).output.onmessage({ kind: 'mode', message: 'read_only' });
+  });
+  const unknown = { ...task, flow: { kind: 'start', state: 'unknown', operation_id: 'start' }, binding: { ...task.binding, state: 'unknown' } } as Task;
+  const view = render(<TerminalPanel task={unknown} />);
+  await screen.findByText('只读查看：派发结果待确认');
+  expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === 'terminal_open')).toHaveLength(1);
+  expect(vi.mocked(invoke).mock.calls.some(([name]) => name === 'resolve_dispatch' || name === 'start_task')).toBe(false);
+  vi.mocked(invoke).mockImplementation(async () => undefined);
+  view.rerender(<TerminalPanel task={task} />);
+  await screen.findByText('Herdr 已打开');
+});
 
 it('reports the native rectangle and hides for dialogs without releasing the Agent', async () => {
   render(<TerminalPanel task={task} />);

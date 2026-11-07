@@ -26,6 +26,7 @@ struct State {
     receipt_available: bool,
     early_receipt: bool,
     receipt_checks: usize,
+    lookup_error: Option<String>,
     create_error: bool,
     lost_create_response: bool,
     prepare_gate: Option<Arc<(Mutex<bool>, std::sync::Condvar)>>,
@@ -56,6 +57,10 @@ fn target(id: &str) -> Target {
     }
 }
 impl Herdr for Fake {
+    fn workspaces(&self) -> Result<Vec<crate::projects::Workspace>, String> {
+        if let Some(error) = self.0.lock().unwrap().lookup_error.clone() { return Err(error); }
+        Ok(vec![crate::projects::Workspace { id: "w1".into(), name: "test".into(), directory: Some(".".into()) }])
+    }
     fn machine_id(&self) -> &str {
         if self.0.lock().unwrap().remote {
             "ssh-test"
@@ -102,6 +107,7 @@ impl Herdr for Fake {
         _: &str,
         expected: Option<&str>,
     ) -> Result<Option<crate::workflow::PromptReceipt>, String> {
+        self.observe("receipt");
         let id = self.session_id(t)?.ok_or("flow.session_missing")?;
         if expected.is_some_and(|old| old != id) {
             return Err("flow.session_mismatch".into());
@@ -117,6 +123,7 @@ impl Herdr for Fake {
         )
     }
     fn targets(&self, _: &str) -> Result<Vec<Target>, String> {
+        if let Some(error) = self.0.lock().unwrap().lookup_error.clone() { return Err(error); }
         Ok(self
             .0
             .lock()

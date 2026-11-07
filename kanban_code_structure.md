@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-11-07。[GitHub #46](https://github.com/legendxcheng/herdr-kanban/issues/46) 增加应用级有界自动核验、当前任务终端自动重连及待核实原终端只读查看；取消人工核实 Evidence 必填，系统记录确认来源与目标。恢复共用原身份、回执、会话及事务规则，不重放历史输入。Todo 的未知手动派发也可查看原终端及重新核验，不改变持久化业务状态。无数据库迁移；本机与 SSH 的真实工作流和独立原生桌面验收已执行，详细结果、审查与交付边界见[自动恢复验证](docs/verification/2026-11-07-task-auto-recovery.md)。实现入口见 6.6.6。
+
 更新日期：2026-10-31。自动标题切换为看板本机请求 DeepSeek `deepseek-flash`，本地／SSH 项目共用 HTTP 生成器，沿用两路 worker、持久化重试和编辑保护。项目私密文件在编译时内置 Key，正式打包入口验证配置；无数据库迁移或 IPC 变化。规格为 GitHub #45，实现与验证边界见 6.2.4 和[DeepSeek 标题验证](docs/verification/2026-10-31-deepseek-titles.md)。
 
 更新日期：2026-10-31。任务状态后台刷新保留最近观察，焦点切换复用在途请求；查询失败与超过 15 秒的观察明确标为过期，空心圆旁区分查询中、查询失败、绑定异常、会话未找到和未识别状态。新增只读状态快照 IPC，未知或进程检查失败时对原 Agent 有界复查一次，不打开或聚焦终端。无数据库迁移；实现、验证及真实 SSH／桌面未覆盖边界见 6.2.2 和[后台状态验证](docs/verification/2026-10-31-background-agent-status.md)。
@@ -171,6 +173,7 @@ herdr-kanban/
 │  ├─ api.ts                       Tauri IPC 及启动变化事件适配层
 │  ├─ taskFlow.ts                  启动投影列、未决守卫及准备文案
 │  ├─ useTaskFlowUpdates.ts         启动事件、前台 2 秒及焦点对账
+│  ├─ useTaskRecovery.ts            只读展示应用协调器状态；切页面不停止后台恢复
 │  ├─ ProjectSidebar.tsx           项目列表、Workspace 拖动排序和管理入口
 │  ├─ WorkspaceActionDialog.tsx    侧栏隐藏/删除确认、目标身份、焦点与遮罩管理
 │  ├─ WorkspaceAddDialog.tsx       执行电脑选择、完整候选搜索/多选、远端接入与新建衔接
@@ -205,7 +208,7 @@ herdr-kanban/
 │  ├─ TerminalPanel.tsx            原生终端连接状态、布局区域同步及最大化/恢复按钮
 │  ├─ nativeTerminalBounds.ts     WebView 区域测量、裁切与弹窗可见性判定
 │  ├─ BindingDialog.tsx            显式修复独占绑定，不发送提示词
-│  ├─ DispatchRecovery.tsx         核实不确定的派发结果
+│  ├─ DispatchRecovery.tsx         人工记录派发判断，可选备注；不发送提示词
 │  ├─ i18n.ts / locales/           中英词库、语言订阅、本机偏好、插值与错误显示
 │  ├─ LanguageSelect.tsx          侧栏语言选择；不重建组件树
 │  ├─ dispatchUtils.ts             文件相对路径与原生技能名称序列化；预览共用文件格式
@@ -241,6 +244,8 @@ herdr-kanban/
 │     ├─ herdr_agent_discovery.rs  后台状态查询、单 Agent 有界复查及逐 pane 错误保留
 │     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
 │     ├─ lifecycle.rs              自动分配、会话记录、完成清理与启动核实
+│     ├─ task_recovery.rs          应用级自动核验、退避、机器健康观察与状态快照
+│     ├─ task_view.rs              独立查看授权、只读模式、执行代次与会话撤销
 │     ├─ idle_cleanup.rs / idle_cleanup_tests.rs  清理预览、确认、逐项日志、任务保护及恢复
 │     ├─ herdr_idle_cleanup.rs     执行电脑上的 Tab、进程、空闲核验及关闭
 │     ├─ idle_cleanup_acceptance.rs  隔离本机/SSH Workspace 的显式真实验收
@@ -537,6 +542,8 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `execute_idle_cleanup` | projectId、previewId | 确认批次，仅处理快照内仍符合条件的 pane；返回逐项结果和关闭/跳过/失败数量 |
 | `idle_cleanup_result` | projectId、previewId | 读取日志并只读核实未知关闭；不重复发送关闭 |
 | `recover_lifecycle` | taskId、operationId | 只核实未知启动，不发送/启动/关闭；确认已派发或精确恢复，或确认启动 pane 已不存在后释放 |
+| `task_recovery_status` | 无 | 只读本应用恢复批次状态，不做 Herdr 查询 |
+| `retry_task_recovery` | taskId、operationId | 为当前有效未知启动/派发重置有界核验批次，不发送输入 |
 | `delete_task` | id | 本地事务删除卡片，允许未决操作；级联释放绑定/会话/目录，保留操作事实，关闭本应用查看连接 |
 | `reset_task` | id、expectedEpoch、flowId、dispatchId、requestId | 原子隔离异常执行、保留内容退回 Todo，返回最新 Task；仅关闭本应用查看连接，不关闭 Herdr pane |
 | `archive_task` | id | 仅 done 且无未决操作/清理时归档；事务释放独占绑定，保留历史，关闭本应用查看连接 |
@@ -550,7 +557,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `herdr_list_agents` | projectId | 后端解析 session + workspace ID，返回 occupied_by、verified_task_id、完整实时 target 和状态；不修改任务或绑定 |
 | `herdr_agent_snapshot` | projectId | 看板后台只读状态快照：返回已核验 agents、逐 pane failures 和观察年龄；不打开或聚焦终端 |
 | `dispatch_to_herdr` | taskId、agentName（pane ID）、promptText、operationId、可选 promptJson | 后端从项目解析 workspace；有图正文由后端冻结、解析及校验，再经原独占派发流程；旧无图文本调用兼容 |
-| `resolve_dispatch` | taskId、operationId、sent、evidence | 人工核实未知结果，不重发 |
+| `resolve_dispatch` | taskId、operationId、sent、evidence | 人工核实未知结果，evidence 备注可空，自动记录判断来源/目标/时间，不重发 |
 | `repair_binding` | taskId、paneId | 显式验证并替换独占绑定，不重发 |
 | `terminal_open` | taskId、connectionId、bounds、output Channel | 校验任务、定位 pane，并启动 WezTerm 中的官方 Herdr client；窗口发现后返回，Channel 仅通知关闭 |
 | `workspace_terminal_open` | projectId、connectionId、bounds、output Channel | 后端按 Project 路由电脑，创建或复用持久化普通终端，复用同一原生查看器；不创建任务、不启动或派发 Codex |
@@ -910,7 +917,7 @@ Enter 前重新采集该目标的 `state_change_seq`，随后每约 200ms 查询
 
 适配器验证 endpoint generation 1 和 `pane.zoom` 能力，读取初始 snapshot 的 boot_id，在同一客户端连接发送 `ClientShellEndpointRequest(pane.zoom)`，指定目标 pane 和 `mode: on`，同时完成聚焦和单窗显示；不调用全局 `agent focus`。独立请求 ID 的成功回执与目标 pane 快照都确认后，才将“Herdr 已打开 / Herdr open”状态与窗口显示置为就绪。快照必须证明目标聚焦且 Tab 已 zoom，或该 Tab 确实只有一个 pane；单 pane 的 `single_pane` no-op 可正常就绪。初始快照已满足条件时不等待不存在的重复快照；分片回执会合并并核对 boot、请求、pane 和 layout。握手/定位限时 15 秒，单次阻塞写入限时 5 秒，帧大小上限 64 MiB；旧选择取消时隐藏并保留客户端；连接异常或协议不兼容时关闭该客户端，不回退全局 focus。
 
-就绪后继续观察 shell 快照：后台新增分屏会清除 Tab zoom，若当前仍聚焦绑定任务，则以新的请求 ID 串行发送一次 `on` 恢复，重复快照不重复发送。恢复期间查看窗口隐藏，回执和单窗快照均满足后恢复显示；每次恢复单独限时 15 秒，超时关闭查看连接。用户主动导航到其他 pane/workspace/tab 时不抢回焦点。官方输入和渲染帧继续原样转发。
+就绪后继续观察 shell 快照：后台新增分屏会清除 Tab zoom，若当前仍聚焦绑定任务，则以新的请求 ID 串行发送一次 `on` 恢复，重复快照不重复发送。恢复期间查看窗口隐藏，回执和单窗快照均满足后恢复显示；每次恢复单独限时 15 秒，超时关闭查看连接。用户主动导航到其他 pane/workspace/tab 时不抢回焦点。可交互模式的官方输入和渲染帧继续原样转发；只读模式按 6.6.6 的原生消息允许列表限制输入。
 
 **窗口布局。** `.terminal-host` 仅提供区域测量，React 保留标题、错误、重连和最大化控件。ResizeObserver/MutationObserver 合并串行发送 bounds；独立原生线程监听 WinEvent 位置/前台事件，并以 16ms 超时兜底，在 Windows 移动循环内继续定位。CSS 矩形转换为实际客户区屏幕像素，按实际差异移动/缩放/排序。窗口按独立 PID 和唯一 class 查找，无 SetParent、owner 或 TOPMOST。
 
@@ -1033,6 +1040,20 @@ Windows 进程查询可能先观察到 shell，而 Herdr 的 Agent 注册状态�
 逐项持久化 ready → claimed → closing，再发关闭。只有成功查询整个 Herdr session 后确认原 terminal 消失才记 closed；目标移至其他 Workspace 不算关闭。关闭回执丢失保留 unknown，不重放、不提前解除绑定。重启将 closing 转 unknown，claimed/未执行项终止；重开弹窗可只读核实历史未决批次。启动、派发和修复绑定都拒绝 claimed/closing/unknown 的清理目标。此协调保护应用内写入；外部 Herdr 操作仍存在最后复核与关闭之间的竞态，不宣称跨进程原子关闭。
 
 真实本机/SSH、模拟 IPC、测试与构建证据分开记录于[验收文档](docs/verification/2026-10-27-idle-cleanup.md)。安装版与当前业务 Workspace 未用于清理验证。
+
+### 6.6.6 任务自动核验、原终端只读查看与自动重连（2026-11-07，GitHub #46）
+
+`lib → task_recovery::Recovery` 在应用生命周期内扫描有效 unknown 启动和派发，复用 Workflow 的精确回执、已 sent 记录和精确原会话恢复。扫描不依赖当前项目或列表读取；每轮立即检查，再分别退避 2/5/10/30/60 秒，至多六次。机器传输失败后，以独立 60 秒健康观察检测重新连通并启动新一轮；普通页面刷新不重置次数。健康观察和任务核验共用本机两槽、远端三槽，并在任务撤销后保留在途请求的容量占用。停用机器、归档、删除和执行代次变化继续撤销权限；未知完成/清理/Workspace 创建不纳入自动恢复。
+
+`task_recovery_status` 返回 task/operation、attempt、recovering/needs_attention 与稳定原因；`retry_task_recovery(taskId, operationId)` 仅重置当前有效操作的批次，不直接做外部写入。`useTaskRecovery` 展示本地快照，普通看板和 All Tasks 共用；变化沿用 `task-start-changed` 提示权威重读，不选择任务或抢焦点。恢复日志复用有界追加机制，保存标识与原因，不含提示词或凭据。
+
+`task_view::Authorization` 将终端查看独立为不可连接、只读或可交互判断，冻结完整目标、操作、执行代次及会话。原目标唯一且实时身份一致、没有活动写入或关闭/清理时，未知派发可只读查看；保留 unknown 和占用。`native_client_connection/native_client_wire` 在专用原生连接中执行只读消息允许列表，阻止键鼠、粘贴、endpoint 执行与写菜单；正常交互仍使用官方客户端。每帧检查本地租约，独立观察约每秒核对实际目标和会话；授权变化撤销旧查看，由当前选择重新连接，前端输出通道 `mode` 只由后端设置。
+
+`taskHasTerminalView` 允许 Todo 的未知手动派发选择原终端，覆盖普通看板、汇总、上次选择恢复与列表刷新；业务状态和列投影仍由原规则决定。`TerminalPanel` 对当前任务的临时查看连接故障按同样六次规则重连，切任务/电脑/Workspace 清理旧定时器，永久身份错误不重试。普通 Workspace shell 的创建、恢复与按钮语义沿用原规则。
+
+人工 `resolve_dispatch` 的备注可为空，证据自动区分 manual/automatic_receipt/automatic_saved_dispatch/automatic_session；原自由文本证据保留。自动和人工操作共用任务锁；外部观察后、取得事务后与提交前复核取消，派发、任务、绑定、会话和启动一致提交，已有 sent 的恢复也不再先单独保存会话。退出停止协调器和迟到成功通知，不关闭底层 Agent。
+
+工作流、组件、原生消息/Windows 管道以及本机/SSH 原生桌面的实际结果见[自动恢复验证](docs/verification/2026-11-07-task-auto-recovery.md)。未打包安装、未替换运行中的应用；真实网络和 Herdr server 重启不由查看进程断开演练替代。
 
 ## 7. 当前实现的关键边界与维护风险
 

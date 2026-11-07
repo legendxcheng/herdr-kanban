@@ -1,6 +1,299 @@
 use super::*;
 
 #[test]
+fn cancellation_while_waiting_for_the_database_is_rechecked_inside_the_transaction() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().send_error = true;
+    let id = op();
+    assert!(app.start_task("a", "lock cancellation", &id).is_err());
+    let app = Arc::new(app);
+    let receipt_read = Arc::new(AtomicBool::new(false));
+    let marker = receipt_read.clone();
+    {
+        let mut state = fake.0.lock().unwrap();
+        state.receipt_available = true;
+        state.observe = Some(Arc::new(move |phase| { if phase == "receipt" { marker.store(true, Ordering::SeqCst); } }));
+    }
+    let stopped = Arc::new(AtomicBool::new(false));
+    let cancellation = stopped.clone();
+    let (entered, waiting) = std::sync::mpsc::channel();
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let worker_release = release.clone();
+    let worker_app = app.clone();
+    let held = AtomicBool::new(false);
+    let worker = std::thread::spawn(move || worker_app.recover_pending_checked("a", &id, &|| {
+        let cancelled_at_check = cancellation.load(Ordering::SeqCst);
+        if receipt_read.load(Ordering::SeqCst) && !held.swap(true, Ordering::SeqCst) {
+            entered.send(()).unwrap();
+            worker_release.wait();
+        }
+        if cancelled_at_check { Err("recovery.stopped".into()) } else { Ok(()) }
+    }));
+    waiting.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+    let database = app.db.lock().unwrap();
+    stopped.store(true, Ordering::SeqCst);
+    release.wait();
+    drop(database);
+    assert_eq!(worker.join().unwrap(), Err("recovery.stopped".into()));
+    assert_eq!(app.binding("a").unwrap().state, "unknown");
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["lock cancellation"]);
+}
+
+#[test]
+fn an_off_page_machine_recovers_after_exhaustion_without_any_frontend_status_poll() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().send_error = true;
+    assert!(app.start_task("a", "off page", &op()).is_err());
+    fake.0.lock().unwrap().lookup_error = Some("herdr.timeout".into());
+    let app = Arc::new(app);
+    let recovery = crate::task_recovery::Recovery::new(app.clone(), Arc::new(|_| {}));
+    for now in [0, 2000, 7000, 17000, 47000, 107000] {
+        for worker in recovery.poll(now).unwrap() { worker.join().unwrap(); }
+    }
+    {
+        let mut state = fake.0.lock().unwrap();
+        state.lookup_error = None;
+        state.receipt_available = true;
+    }
+    for worker in recovery.poll(200000).unwrap() { worker.join().unwrap(); }
+    for worker in recovery.poll(200500).unwrap() { worker.join().unwrap(); }
+    assert_eq!(app.binding("a").unwrap().state, "valid");
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["off page"]);
+}
+
+#[test]
+fn shutdown_during_a_receipt_probe_cannot_confirm_or_emit_a_late_recovery() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().send_error = true;
+    assert!(app.start_task("a", "cancel recovery", &op()).is_err());
+    let app = Arc::new(app);
+    let (entered, waiting) = std::sync::mpsc::channel();
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let probe_release = release.clone();
+    {
+        let mut state = fake.0.lock().unwrap();
+        state.receipt_available = true;
+        state.observe = Some(Arc::new(move |phase| {
+            if phase == "receipt" { entered.send(()).unwrap(); probe_release.wait(); }
+        }));
+    }
+    let changed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = changed.clone();
+    let recovery = crate::task_recovery::Recovery::new(app.clone(), Arc::new(move |_| { observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst); }));
+    let workers = recovery.poll(0).unwrap();
+    waiting.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+    recovery.shutdown();
+    release.wait();
+    for worker in workers { worker.join().unwrap(); }
+    assert_eq!(app.binding("a").unwrap().state, "unknown");
+    assert_eq!(changed.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[test]
+fn automatic_and_manual_recovery_share_one_current_operation_without_duplicate_effects() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().send_error = true;
+    let id = op();
+    assert!(app.start_task("a", "concurrent receipt", &id).is_err());
+    let app = Arc::new(app);
+    let (entered, waiting) = std::sync::mpsc::channel();
+    let release = Arc::new(std::sync::Barrier::new(2));
+    let probe_release = release.clone();
+    {
+        let mut state = fake.0.lock().unwrap();
+        state.receipt_available = true;
+        state.observe = Some(Arc::new(move |phase| {
+            if phase == "receipt" { entered.send(()).unwrap(); probe_release.wait(); }
+        }));
+    }
+    let recovery = crate::task_recovery::Recovery::new(app.clone(), Arc::new(|_| {}));
+    let workers = recovery.poll(0).unwrap();
+    waiting.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+    assert!(recovery.poll(2000).unwrap().is_empty());
+    let manual_app = app.clone();
+    let manual_id = format!("{id}:dispatch");
+    let manual = std::thread::spawn(move || manual_app.resolve("a", &manual_id, true, ""));
+    release.wait();
+    for worker in workers { worker.join().unwrap(); }
+    assert!(manual.join().unwrap().is_err());
+    assert_eq!(app.binding("a").unwrap().state, "valid");
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["concurrent receipt"]);
+}
+
+#[test]
+fn read_only_view_is_revoked_by_a_replaced_process_session_reset_or_cleanup() {
+    for replacement in ["process", "session", "reset", "cleanup", "pending", "delete"] {
+        let (app, fake) = fixture();
+        fake.0.lock().unwrap().send_error = true;
+        let id = op();
+        assert!(app.start_task("a", "guard viewer", &id).is_err());
+        let permit = app.view_task("a").unwrap();
+        match replacement {
+            "process" => fake.0.lock().unwrap().panes.values_mut().next().unwrap().0.process_id = "replacement".into(),
+            "session" => fake.0.lock().unwrap().panes.values_mut().next().unwrap().1 = Some(uuid::Uuid::new_v4().to_string()),
+            "reset" => { crate::task_reset::reset(&mut app.db.lock().unwrap(), "a", 0, Some(&id), Some(&format!("{id}:dispatch")), &op()).unwrap(); }
+            "delete" => { crate::tasks::delete(&mut app.db.lock().unwrap(), "a").unwrap(); }
+            "cleanup" => { app.db.lock().unwrap().execute("UPDATE lifecycle_operations SET kind='complete' WHERE id=?1", [&id]).unwrap(); }
+            "pending" => { app.db.lock().unwrap().execute("UPDATE lifecycle_operations SET state='pending' WHERE id=?1", [&id]).unwrap(); }
+            _ => unreachable!(),
+        }
+        assert!(app.validate_view("a", &permit).is_err(), "{replacement}");
+        assert!(app.view_task("a").is_err(), "{replacement}");
+        assert_eq!(fake.0.lock().unwrap().sent, vec!["guard viewer"]);
+    }
+}
+
+#[test]
+fn already_sent_start_recovery_is_atomic_when_the_session_commit_fails() {
+    let (app, fake) = fixture();
+    {
+        let mut state = fake.0.lock().unwrap();
+        state.send_error = true;
+        state.missing_id = true;
+    }
+    let id = op();
+    assert!(app.start_task("a", "already sent", &id).is_err());
+    fake.0.lock().unwrap().missing_id = false;
+    app.db.lock().unwrap().execute("UPDATE dispatch_operations SET state='sent',evidence='original decision' WHERE id=?1", [format!("{id}:dispatch")]).unwrap();
+    app.db.lock().unwrap().execute_batch("CREATE TRIGGER fail_activation BEFORE UPDATE OF status ON tasks BEGIN SELECT RAISE(ABORT,'activation failed'); END;").unwrap();
+    assert!(app.recover_lifecycle("a", &id).is_err());
+    assert!(saved(&app, "a").is_none());
+    assert_eq!(view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(), Some("unknown"));
+    app.db.lock().unwrap().execute_batch("DROP TRIGGER fail_activation").unwrap();
+    app.recover_lifecycle("a", &id).unwrap();
+    assert!(saved(&app, "a").is_some());
+    assert_eq!(status(&app, "a"), "in_progress");
+    let evidence: String = app.db.lock().unwrap().query_row("SELECT evidence FROM dispatch_operations WHERE id=?1", [format!("{id}:dispatch")], |r| r.get(0)).unwrap();
+    assert_eq!(evidence, "original decision");
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["already sent"]);
+}
+
+#[test]
+fn recovery_exhausts_its_batch_and_only_a_new_explicit_trigger_restarts_it() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().send_error = true;
+    let id = op();
+    assert!(app.start_task("a", "bounded", &id).is_err());
+    let app = Arc::new(app);
+    let recovery = crate::task_recovery::Recovery::new(app.clone(), Arc::new(|_| {}));
+    for now in [0, 2000, 7000, 17000, 47000, 107000] {
+        for worker in recovery.poll(now).unwrap() { worker.join().unwrap(); }
+    }
+    assert_eq!(recovery.snapshot()[0].state, "needs_attention");
+    fake.0.lock().unwrap().receipt_available = true;
+    assert!(recovery.poll(999999).unwrap().is_empty());
+    assert_eq!(app.binding("a").unwrap().state, "unknown");
+    recovery.retry("a", &id).unwrap();
+    for worker in recovery.poll(999999).unwrap() { worker.join().unwrap(); }
+    assert_eq!(app.binding("a").unwrap().state, "valid");
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["bounded"]);
+}
+
+#[test]
+fn an_independent_connection_recovery_can_restart_an_exhausted_offline_batch() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().send_error = true;
+    assert!(app.start_task("a", "offline receipt", &op()).is_err());
+    fake.0.lock().unwrap().lookup_error = Some("herdr.timeout".into());
+    let app = Arc::new(app);
+    let recovery = crate::task_recovery::Recovery::new(app.clone(), Arc::new(|_| {}));
+    for now in [0, 2000, 7000, 17000, 47000, 107000] {
+        for worker in recovery.poll(now).unwrap() { worker.join().unwrap(); }
+    }
+    assert_eq!(recovery.snapshot()[0].error, "herdr.timeout");
+    {
+        let mut state = fake.0.lock().unwrap();
+        state.lookup_error = None;
+        state.receipt_available = true;
+    }
+    recovery.machine_available("local");
+    for worker in recovery.poll(108000).unwrap() { worker.join().unwrap(); }
+    assert_eq!(app.binding("a").unwrap().state, "valid");
+}
+
+#[test]
+fn disabling_a_machine_during_receipt_read_revokes_recovery_before_commit() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().send_error = true;
+    let id = op();
+    assert!(app.start_task("a", "disable during probe", &id).is_err());
+    let db = app.db.clone();
+    {
+        let mut state = fake.0.lock().unwrap();
+        state.receipt_available = true;
+        state.observe = Some(Arc::new(move |phase| {
+            if phase == "receipt" { db.lock().unwrap().execute("UPDATE machines SET disabled=1 WHERE id='local'", []).unwrap(); }
+        }));
+    }
+    assert!(app.recover_pending("a", &id).is_err());
+    assert_eq!(app.binding("a").unwrap().state, "unknown");
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["disable during probe"]);
+}
+
+#[test]
+fn an_unknown_dispatch_can_be_viewed_read_only_without_claiming_it_was_sent() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().send_error = true;
+    let id = op();
+    assert!(app.start_task("a", "view original", &id).is_err());
+    let viewer = app.view_task("a").unwrap();
+    assert!(viewer.read_only);
+    assert_eq!(app.binding("a").unwrap().state, "unknown");
+    assert_eq!(status(&app, "a"), "todo");
+    app.resolve("a", &format!("{id}:dispatch"), true, "").unwrap();
+    assert!(app.check_view("a", &viewer).is_err());
+    assert!(!app.view_task("a").unwrap().read_only);
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["view original"]);
+}
+
+#[test]
+fn automatic_recovery_finds_a_late_receipt_without_replaying_or_selecting_a_task() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().send_error = true;
+    let id = op();
+    assert!(app.start_task("a", "late original", &id).is_err());
+    let app = Arc::new(app);
+    let recovery = crate::task_recovery::Recovery::new(app.clone(), Arc::new(|_| {}));
+    for worker in recovery.poll(0).unwrap() { worker.join().unwrap(); }
+    assert_eq!(app.binding("a").unwrap().state, "unknown");
+    assert_eq!(recovery.snapshot()[0].attempt, 1);
+    fake.0.lock().unwrap().receipt_available = true;
+    for worker in recovery.poll(1999).unwrap() { worker.join().unwrap(); }
+    assert_eq!(app.binding("a").unwrap().state, "unknown");
+    for worker in recovery.poll(2000).unwrap() { worker.join().unwrap(); }
+    assert_eq!(app.binding("a").unwrap().state, "valid");
+    assert_eq!(status(&app, "a"), "in_progress");
+    assert!(saved(&app, "a").is_some());
+    assert_eq!(view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(), Some("succeeded"));
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["late original"]);
+    assert_eq!(fake.0.lock().unwrap().created, 1);
+    assert!(fake.0.lock().unwrap().closed.is_empty());
+}
+
+#[test]
+fn manual_confirmation_accepts_an_empty_note_and_records_the_actual_decision() {
+    let (app, fake) = fixture();
+    fake.0.lock().unwrap().send_error = true;
+    let id = op();
+    assert!(app.start_task("a", "original prompt", &id).is_err());
+    app.resolve("a", &format!("{id}:dispatch"), true, "").unwrap();
+    assert_eq!(status(&app, "a"), "in_progress");
+    assert_eq!(app.binding("a").unwrap().state, "valid");
+    assert_eq!(view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(), Some("succeeded"));
+    let evidence: String = app.db.lock().unwrap().query_row(
+        "SELECT evidence FROM dispatch_operations WHERE id=?1", [format!("{id}:dispatch")], |r| r.get(0),
+    ).unwrap();
+    let record: serde_json::Value = serde_json::from_str(&evidence).unwrap();
+    assert_eq!(record["source"], "manual");
+    assert_eq!(record["decision"], "sent");
+    assert_eq!(record["note"], "");
+    assert_eq!(record["operation_id"], format!("{id}:dispatch"));
+    assert!(record["at"].as_str().is_some());
+    assert_eq!(fake.0.lock().unwrap().sent, vec!["original prompt"]);
+}
+
+#[test]
 fn directory_sync_does_not_change_a_saved_conversations_working_directory() {
     let (app, herdr) = fixture();
     app.start_task("a", "hello", &uuid::Uuid::new_v4().to_string())
@@ -402,7 +695,7 @@ fn pane_busy_cannot_release_an_operation_that_has_dispatched() {
     assert!(app.start_task("a", "A", &id).is_err());
     let error = r#"herdr.failed: {"error":{"code":"agent_pane_busy"},"id":"cli:agent:start"}"#;
     app.end_flow(&id, "unknown", error).unwrap();
-    assert!(app.release_rejected_start("a", &id, error).is_err());
+    assert!(app.release_rejected_start("a", &id, error, &|| Ok(())).is_err());
     assert!(app.binding("a").unwrap().target.is_some());
     assert_eq!(
         view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),

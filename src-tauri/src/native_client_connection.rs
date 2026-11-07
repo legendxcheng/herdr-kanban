@@ -154,7 +154,8 @@ fn relay(
                 && position.ready
                 && selected.ready.load(Ordering::Acquire)
                 && selected.presented.load(Ordering::Acquire);
-            if wire::forward_input(&payload, &position.input_pane, input_ready)? {
+            let read_only = if active { selected.read_only()? } else { true };
+            if wire::forward_view_input(&payload, &position.input_pane, input_ready, read_only)? {
                 upstream.send(&wire::frame(&payload), view, stop)?;
             }
         }

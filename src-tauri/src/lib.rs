@@ -66,6 +66,10 @@ mod title_prompt;
 mod work_commands;
 mod workflow;
 mod workspace_terminal;
+mod task_recovery;
+mod task_view;
+#[cfg(test)]
+mod recovery_acceptance;
 
 use commands::DbState;
 use rusqlite::Connection;
@@ -98,12 +102,19 @@ pub fn run() {
         conn.clone(),
         workflow.herdr.clone(),
     ));
+    let recovery_workflow = workflow.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .manage(DbState(conn.clone()))
         .manage(startup)
         .setup(move |app| {
+            let recovery_handle = app.handle().clone();
+            app.manage(task_recovery::Recovery::start(recovery_workflow.clone(), Arc::new(move |event| {
+                let _ = recovery_handle.emit("task-start-changed", serde_json::json!({
+                    "project_id": event.project, "task_id": event.task, "operation_id": event.operation,
+                }));
+            })));
             let handle = app.handle().clone();
             app.manage(task_titles::TaskTitles::new(
                 conn.clone(),
@@ -129,9 +140,12 @@ pub fn run() {
                     .close_all();
                 window.state::<task_titles::TaskTitles>().shutdown();
                 window.state::<Arc<mention_search::Search>>().shutdown();
+                window.state::<Arc<task_recovery::Recovery>>().shutdown();
             }
         })
         .invoke_handler(tauri::generate_handler![
+            work_commands::task_recovery_status,
+            work_commands::retry_task_recovery,
             idle_cleanup::preview_idle_cleanup,
             idle_cleanup::execute_idle_cleanup,
             idle_cleanup::idle_cleanup_result,

@@ -127,8 +127,8 @@
   "binding.prepare": "Prepare a separate agent in Herdr, then refresh.",
   "common.cancel": "Cancel",
   "dispatch.verify": "Verify dispatch result",
-  "dispatch.verify_help": "Inspect the target in Herdr before recording whether it received this prompt. Verification never resends it.",
-  "dispatch.evidence": "Verification evidence",
+  "dispatch.verify_help": "This records your judgment, not an automatic verification. Inspect the original terminal before confirming whether this prompt was received. Notes are optional; the target, time and decision are recorded automatically. The prompt is never resent.",
+  "dispatch.evidence": "Note (optional)",
   "dispatch.not_sent": "Confirm not sent",
   "dispatch.sent": "Confirm sent",
   "dispatch.pending": "Dispatch pending · Refresh",
@@ -450,5 +450,12 @@
   "title.request_rejected": "DeepSeek rejected the title request.",
   "title.client_unavailable": "Cannot initialize the title network service. Restart the app and retry.",
   "title.output_limit": "The title response exceeded the size limit; summary retained.",
-  "title.cancelled": "The title request was cancelled."
+  "title.cancelled": "The title request was cancelled.",
+  "terminal.read_only": "Read-only: prompt receipt unconfirmed",
+  "terminal.reconnecting": "Reconnecting automatically…",
+  "recovery.recovering": "Recovering automatically",
+  "recovery.needs_attention": "Needs attention",
+  "recovery.retry": "Retry automatic verification",
+  "recovery.failed": "Automatic verification is incomplete. Inspect the original terminal or retry.",
+  "recovery.stopped": "Automatic verification stopped"
 }

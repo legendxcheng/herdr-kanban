@@ -127,8 +127,8 @@
   "binding.prepare": "请在 Herdr 中准备独立 Agent 后刷新。",
   "common.cancel": "取消",
   "dispatch.verify": "核实派发结果",
-  "dispatch.verify_help": "请先在 Herdr 目标终端核实是否收到本次提示词，再记录依据。此操作不会重新发送提示词。",
-  "dispatch.evidence": "核实依据",
+  "dispatch.verify_help": "这是人工判断，不是机器核验。请查看原终端后选择本次提示词是否已送达；备注可以留空，系统会记录目标、时间和确认方式。此操作不会重发提示词。",
+  "dispatch.evidence": "备注（可选）",
   "dispatch.not_sent": "确认未发送",
   "dispatch.sent": "确认已发送",
   "dispatch.pending": "派发进行中 · 刷新",
@@ -450,5 +450,12 @@
   "title.request_rejected": "DeepSeek 拒绝了标题请求。",
   "title.client_unavailable": "无法初始化标题网络服务，请重启应用后重试。",
   "title.output_limit": "标题响应超过大小限制，已保留摘要。",
-  "title.cancelled": "标题请求已取消。"
+  "title.cancelled": "标题请求已取消。",
+  "terminal.read_only": "只读查看：派发结果待确认",
+  "terminal.reconnecting": "正在自动重连…",
+  "recovery.recovering": "正在自动恢复",
+  "recovery.needs_attention": "需要处理",
+  "recovery.retry": "重新自动核验",
+  "recovery.failed": "自动核验暂未完成，可查看原终端或重试",
+  "recovery.stopped": "自动核验已停止"
 }

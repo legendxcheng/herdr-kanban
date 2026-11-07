@@ -72,8 +72,21 @@ pub struct View {
     open_gate: Arc<Mutex<()>>,
     font: Arc<Mutex<font::Preferences>>,
     session: Mutex<std::sync::Weak<session::Session>>,
+    task_lease: Mutex<Option<TaskLease>>,
+}
+#[derive(Clone)]
+struct TaskLease {
+    app: Arc<Workflow>, task: String, authorization: crate::task_view::Authorization,
 }
 impl View {
+    fn read_only(&self) -> Result<bool, String> {
+        self.check()?;
+        let lease = self.task_lease.lock().map_err(err)?;
+        if let Some(lease) = lease.as_ref() {
+            lease.app.check_view(&lease.task, &lease.authorization)?;
+            Ok(lease.authorization.read_only)
+        } else { Ok(false) }
+    }
     fn stop(&self, message: &str) {
         if self.stopped.swap(true, Ordering::AcqRel) {
             return;
@@ -137,6 +150,7 @@ impl NativeTerminalManager {
             open_gate: self.open_gate.clone(),
             font: self.font.clone(),
             session: Mutex::new(std::sync::Weak::new()),
+            task_lease: Mutex::new(None),
         });
         if let Some(old) = self.slot.lock().map_err(err)?.replace(view.clone()) {
             old.stop("terminal.switched");
@@ -211,6 +225,7 @@ impl NativeTerminalManager {
             let routed;
             let shell;
             let target;
+            let authorization;
             let mut cli;
             let _shell_connection;
             match &view.owner {
@@ -219,6 +234,7 @@ impl NativeTerminalManager {
                     _shell_connection = Some(crate::remote_control::Scope::enter());
                     shell = Some(routed.ensure_workspace_terminal(project, &|| view.check())?);
                     target = None;
+                    authorization = None;
                     cli = routed.herdr.terminal_client()?;
                     if !cli.workspace_terminal_live(shell.as_ref().unwrap())? {
                         return Err("workspace_terminal.missing".into());
@@ -226,8 +242,11 @@ impl NativeTerminalManager {
                 }
                 Owner::Task(task) => {
                     _shell_connection = None;
-                    routed = app.clone();
-                    target = Some(session::target(&app, task)?);
+                    routed = app.for_task(task)?;
+                    let permission = routed.view_task(task)?;
+                    target = Some(permission.target.clone());
+                    *view.task_lease.lock().map_err(err)? = Some(TaskLease { app: routed.clone(), task: task.clone(), authorization: permission.clone() });
+                    authorization = Some(permission);
                     shell = None;
                     cli = app.herdr.terminal_client()?;
                 }
@@ -255,11 +274,7 @@ impl NativeTerminalManager {
             }
             let check_target = || -> Result<(), String> {
                 match (&view.owner, &target, &shell) {
-                    (Owner::Task(task), Some(target), _)
-                        if session::target(&app, task)?.same_identity(target) =>
-                    {
-                        Ok(())
-                    }
+                    (Owner::Task(task), Some(_), _) => routed.check_view(task, authorization.as_ref().ok_or("terminal.stale")?),
                     (Owner::Workspace(project), _, Some(shell))
                         if routed.saved_workspace_terminal(project)? == *shell =>
                     {
@@ -330,6 +345,21 @@ impl NativeTerminalManager {
                 check_target()?;
             }
             view.ready.store(true, Ordering::Release);
+            (view.status)(Output { kind: "mode", message: if authorization.as_ref().is_some_and(|a| a.read_only) { "read_only" } else { "interactive" }.into() });
+            if let Some(lease) = view.task_lease.lock().map_err(err)?.clone() {
+                let weak = Arc::downgrade(&view);
+                thread::spawn(move || {
+                    while let Some(view) = weak.upgrade() {
+                        if view.check().is_err() { break; }
+                        if let Err(error) = lease.app.validate_view(&lease.task, &lease.authorization) {
+                            view.stop(&error);
+                            break;
+                        }
+                        drop(view);
+                        thread::sleep(Duration::from_secs(1));
+                    }
+                });
+            }
             Ok(())
         })();
         if let Err(ref error) = result {

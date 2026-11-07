@@ -324,9 +324,35 @@ pub fn forward_input(payload: &[u8], pane: &str, ready: bool) -> Result<bool, St
     Ok(true)
 }
 
+/// Read-only is an allowlist, including named controls; endpoint requests can mutate panes.
+pub fn forward_view_input(payload: &[u8], pane: &str, ready: bool, read_only: bool) -> Result<bool, String> {
+    if !read_only { return forward_input(payload, pane, ready); }
+    match payload.first().copied().ok_or(INVALID)? {
+        3 | 4 | 9 | 10 | 11 | 12 | 17 | 18 | 19 => Ok(true),
+        20 => Ok(control(payload)?.is_some_and(|(kind, doc)| kind == "endpoint.hello.v1" && doc["generation"] == 1)),
+        _ => Ok(false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_only_view_blocks_terminal_input_and_endpoint_menu_requests() {
+        let pane_input = { let mut p = vec![13]; string(&mut p, "w1:p1"); p };
+        for payload in [vec![1, 0], vec![2, 0], pane_input, vec![14, 0], vec![15, 0], vec![16, 0]] {
+            assert!(!forward_view_input(&payload, "w1:p1", true, true).unwrap());
+        }
+        let mut command = vec![20]; string(&mut command, "endpoint.request.v1");
+        string(&mut command, r#"{"method":"pane.close"}"#);
+        assert!(!forward_view_input(&command, "w1:p1", true, true).unwrap());
+        let mut hello = vec![20]; string(&mut hello, "endpoint.hello.v1"); string(&mut hello, r#"{"generation":1}"#);
+        assert!(forward_view_input(&hello, "w1:p1", false, true).unwrap());
+        assert!(forward_view_input(&[12, 0], "w1:p1", true, true).unwrap());
+        let mut keys = vec![13]; string(&mut keys, "w1:p1");
+        assert!(forward_view_input(&keys, "w1:p1", true, false).unwrap());
+    }
     #[test]
     fn retarget_waits_for_new_receipt_and_snapshot_and_drops_old_pane_input() {
         let mut position = position();

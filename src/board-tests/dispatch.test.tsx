@@ -93,7 +93,7 @@ describe("拖入开发中列", () => {
     } };
     await renderBoard();
     fireEvent.click(screen.getByRole("button", { name: "核实派发结果" }));
-    fireEvent.change(screen.getByLabelText("核实依据"), { target: { value: "已在目标终端确认收到" } });
+    fireEvent.change(screen.getByLabelText("备注（可选）"), { target: { value: "已在目标终端确认收到" } });
     fireEvent.click(screen.getByRole("button", { name: "确认已发送" }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("resolve_dispatch", {
       taskId: "task-1", operationId: "op-1", sent: true, evidence: "已在目标终端确认收到",

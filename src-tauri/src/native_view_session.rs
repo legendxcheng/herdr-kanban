@@ -82,24 +82,3 @@ pub(super) fn key(cli: &Cli) -> String {
         .map(|m| serde_json::json!([m.id, m.profile_id, m.ssh_target, m.host_identity]));
     serde_json::json!([cli.executable, cli.session, remote]).to_string()
 }
-
-/// Only the local ownership checks; live process identity is checked over the
-/// existing read-only channel before a selection can become visible.
-pub(super) fn target(app: &Workflow, task: &str) -> Result<crate::workflow::Target, String> {
-    let db = app.db.lock().map_err(err)?;
-    crate::tasks::ensure_active(&db, task)?;
-    crate::lifecycle::ensure_idle(&db, task, None)?;
-    let binding = crate::workflow::binding(&db, task)?;
-    if binding.state != "valid" {
-        return Err("binding.repair_required".into());
-    }
-    let status: String = db
-        .query_row("SELECT status FROM tasks WHERE id=?1", [task], |r| r.get(0))
-        .map_err(err)?;
-    if status != "in_progress" {
-        return Err("binding.not_developing".into());
-    }
-    let target = binding.target.ok_or("binding.repair_required")?;
-    crate::workflow::ensure_project_target(&db, task, &target, &target.session)?;
-    Ok(target)
-}

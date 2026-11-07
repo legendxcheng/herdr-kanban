@@ -95,7 +95,6 @@ fn uncertain_send_requires_evidence_and_recovery_never_replays_the_prompt() {
     assert!(app.dispatch("a", "w1:p1", "Once", "op-1").is_err());
     assert_eq!(app.binding("a").unwrap().state, "unknown");
     assert!(app.dispatch("a", "w1:p1", "Once", "op-2").is_err());
-    assert!(app.resolve("a", "op-1", true, "").is_err());
     app.resolve("a", "op-1", true, "Confirmed in the target terminal")
         .unwrap();
     assert_eq!(app.binding("a").unwrap().state, "valid");

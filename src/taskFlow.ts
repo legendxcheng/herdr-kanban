@@ -18,6 +18,11 @@ export function taskColumn(task: Task): TaskStatus {
     ? task.flow.requested_status ?? task.status : task.status;
 }
 
+/** A known original terminal may be viewed before its dispatch is confirmed. */
+export function taskHasTerminalView(task: Task) {
+  return taskColumn(task) === "in_progress" || task.binding?.state === "unknown" && !!task.binding.target;
+}
+
 export function preparationLabel(task: Task): string | null {
   if (task.flow?.kind !== "start") return null;
   if (task.flow.state === "unknown") return "flow.verify_required";

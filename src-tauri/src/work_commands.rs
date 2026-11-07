@@ -58,14 +58,29 @@ pub async fn recover_lifecycle(
 #[tauri::command]
 pub async fn herdr_agent_snapshot(
     app: State<'_, Arc<Workflow>>,
+    recovery: State<'_, Arc<crate::task_recovery::Recovery>>,
     project_id: String,
 ) -> Result<crate::agent_status::AgentSnapshot, String> {
     let app = app.inner().clone();
+    let recovery = recovery.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        app.for_project(&project_id)?.agent_snapshot(&project_id)
+        let routed = app.for_project(&project_id)?;
+        let snapshot = routed.agent_snapshot(&project_id);
+        if snapshot.is_ok() { recovery.machine_available(routed.herdr.machine_id()); }
+        snapshot
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn task_recovery_status(recovery: State<'_, Arc<crate::task_recovery::Recovery>>) -> Vec<crate::task_recovery::Status> {
+    recovery.snapshot()
+}
+
+#[tauri::command]
+pub fn retry_task_recovery(recovery: State<'_, Arc<crate::task_recovery::Recovery>>, task_id: String, operation_id: String) -> Result<(), String> {
+    recovery.retry(&task_id, &operation_id)
 }
 
 #[tauri::command]

@@ -367,7 +367,7 @@ pub fn pane_owner(conn: &Connection, target: &Target) -> Result<Option<String>, 
     .optional()
     .map_err(err)
 }
-fn ensure_available(conn: &Connection, target: &Target, task: &str) -> Result<(), String> {
+pub(crate) fn ensure_available(conn: &Connection, target: &Target, task: &str) -> Result<(), String> {
     crate::idle_cleanup::ensure_unclaimed(conn, target, None)?;
     if crate::lifecycle::pane_allocation::quarantines(conn, target)? {
         return Err("binding.occupied".into());
@@ -635,9 +635,8 @@ impl Workflow {
         sent: bool,
         evidence: &str,
     ) -> Result<(), String> {
-        if evidence.trim().len() < 3 {
-            return Err("dispatch.evidence_required".into());
-        }
+        let gate = crate::task_recovery::gate(self, task)?;
+        let _guard = gate.lock().map_err(err)?;
         let op = self
             .binding(task)?
             .operation
@@ -645,13 +644,19 @@ impl Workflow {
         if op.id != operation || op.state != "unknown" {
             return Err("dispatch.operation_conflict".into());
         }
+        let evidence = serde_json::json!({
+            "source": "manual", "decision": if sent { "sent" } else { "not_sent" },
+            "at": chrono::Utc::now().to_rfc3339(), "operation_id": op.id,
+            "target": op.target, "note": evidence.trim(),
+        }).to_string();
         // Manual confirmation uses the same atomic start/session completion as log evidence.
         if sent {
             self.herdr.validate(&op.workspace, &op.target)?;
             let session = self.herdr.session_id(&op.target)?;
-            self.finish_result(&op, true, evidence.trim(), session.as_deref(), true)
+            self.herdr.validate(&op.workspace, &op.target)?;
+            self.finish_result(&op, true, &evidence, session.as_deref(), true)
         } else {
-            self.finish(&op, false, evidence.trim())
+            self.finish(&op, false, &evidence)
         }
     }
     pub(crate) fn dispatch_receipt(&self, op: &Operation) -> Result<Option<PromptReceipt>, String> {
@@ -676,11 +681,28 @@ impl Workflow {
         self.herdr.validate(&op.workspace, &op.target)?;
         Ok(receipt)
     }
-    pub(crate) fn confirm_received_dispatch(&self, op: &Operation) -> Result<(), String> {
+    pub(crate) fn confirm_received_dispatch(&self, op: &Operation, check_cancelled: &dyn Fn() -> Result<(), String>) -> Result<(), String> {
         let receipt = self
             .dispatch_receipt(op)?
             .ok_or("dispatch.verify_required")?;
-        self.finish_result(op, true, &receipt.evidence, Some(&receipt.session_id), true)
+        check_cancelled()?;
+        let evidence = serde_json::json!({
+            "source": "automatic_receipt", "at": chrono::Utc::now().to_rfc3339(),
+            "operation_id": op.id, "target": op.target, "result": receipt.evidence,
+        }).to_string();
+        self.finish_result_checked(op, true, &evidence, Some(&receipt.session_id), true, check_cancelled)
+    }
+    pub(crate) fn restore_confirmed_start(&self, task: &str, start: &str, check_cancelled: &dyn Fn() -> Result<(), String>) -> Result<(), String> {
+        let op = self.db.lock().map_err(err)?.query_row(
+            &format!("{OP_SELECT} WHERE id=?1 AND task_id=?2 AND state='sent'"),
+            params![format!("{start}:dispatch"), task], operation_row,
+        ).map_err(err)?;
+        self.herdr.validate(&op.workspace, &op.target)?;
+        let session = self.herdr.session_id(&op.target)?.ok_or("flow.session_missing")?;
+        self.herdr.validate(&op.workspace, &op.target)?;
+        check_cancelled()?;
+        let evidence = serde_json::json!({"source":"automatic_saved_dispatch","at":chrono::Utc::now().to_rfc3339(),"operation_id":op.id,"target":op.target}).to_string();
+        self.finish_result_checked(&op, true, &evidence, Some(&session), true, check_cancelled)
     }
     fn finish(&self, op: &Operation, sent: bool, evidence: &str) -> Result<(), String> {
         self.finish_result(op, sent, evidence, None, false)
@@ -693,10 +715,23 @@ impl Workflow {
         session_id: Option<&str>,
         complete_start: bool,
     ) -> Result<(), String> {
+        self.finish_result_checked(op, sent, evidence, session_id, complete_start, &|| Ok(()))
+    }
+    fn finish_result_checked(
+        &self, op: &Operation, sent: bool, evidence: &str, session_id: Option<&str>,
+        complete_start: bool, check_cancelled: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), String> {
         let mut conn = self.db.lock().map_err(err)?;
         let tx = conn.transaction().map_err(err)?;
+        check_cancelled()?;
         crate::tasks::ensure_active(&tx, &op.task_id)?;
-        crate::task_reset::check_dispatch(&tx, &op.task_id, &op.id)?;
+        crate::machines::ensure_enabled(&tx, self.herdr.machine_id())?;
+        ensure_available(&tx, &op.target, &op.task_id)?;
+        if complete_start && op.state == "sent" {
+            crate::lifecycle::ensure_operation(&tx, &op.task_id, op.id.strip_suffix(":dispatch").ok_or("dispatch.operation_conflict")?)?;
+        } else {
+            crate::task_reset::check_dispatch(&tx, &op.task_id, &op.id)?;
+        }
         ensure_project_target(&tx, &op.task_id, &op.target, self.herdr.session())?;
         let current = binding(&tx, &op.task_id)?;
         if !current
@@ -706,8 +741,9 @@ impl Workflow {
         {
             return Err("binding.identity_changed".into());
         }
-        let changed = tx.execute("UPDATE dispatch_operations SET state=?1,evidence=?2 WHERE id=?3 AND state IN ('pending','unknown')",
-            params![if sent {"sent"} else {"not_sent"},evidence,op.id]).map_err(err)?;
+        let changed = tx.execute("UPDATE dispatch_operations SET state=?1,evidence=CASE WHEN state='sent' THEN evidence ELSE ?2 END
+            WHERE id=?3 AND (state IN ('pending','unknown') OR (state='sent' AND ?4))",
+            params![if sent {"sent"} else {"not_sent"},evidence,op.id,complete_start && op.state == "sent"]).map_err(err)?;
         if changed != 1 {
             return Err("dispatch.operation_conflict".into());
         }
@@ -756,6 +792,7 @@ impl Workflow {
             tx.execute("DELETE FROM task_bindings WHERE task_id=?1", [&op.task_id])
                 .map_err(err)?;
         }
+        check_cancelled()?;
         tx.commit().map_err(err)
     }
 }
