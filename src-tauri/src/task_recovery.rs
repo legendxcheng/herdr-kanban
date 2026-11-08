@@ -58,6 +58,7 @@ impl Candidate {
             return Ok(None);
         };
         let flow = crate::lifecycle::view(db, task)?;
+        if flow.can_continue_first_prompt { return Ok(None); }
         let binding = crate::workflow::binding(db, task)?;
         let (operation, lifecycle) =
             if flow.state.as_deref() == Some("unknown") && flow.kind.as_deref() == Some("start") {

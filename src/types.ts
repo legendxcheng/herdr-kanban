@@ -54,7 +54,7 @@ export interface Task {
   priority: TaskPriority;
   archived_at: string | null;
   cleanup_required: boolean;
-  flow?: { session_id: string | null; operation_id: string | null; kind: string | null; state: string | null; error: string; pane_id: string | null; stage?: string | null; requested_status?: TaskStatus | null } | null;
+  flow?: { can_continue_first_prompt?: boolean; session_id: string | null; operation_id: string | null; kind: string | null; state: string | null; error: string; pane_id: string | null; stage?: string | null; requested_status?: TaskStatus | null } | null;
   binding?: TaskBinding | null;
   id: string;
   project_id: string;

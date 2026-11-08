@@ -12,6 +12,40 @@ const MAX_TAIL: u64 = 16 * 1024 * 1024;
 const MAX_HEADER: u64 = 1024 * 1024;
 
 impl Cli {
+    /// Absence of a session ID is normal before the first Codex input. If an ID
+    /// exists, require a complete bounded transcript proving no user input yet.
+    pub(super) fn read_first_prompt_available(&self, target: &Target, expected: Option<&str>) -> Result<bool, String> {
+        let current = self.session_id(target)?;
+        if expected.is_some_and(|id| current.as_deref() != Some(id)) { return Err("flow.session_mismatch".into()); }
+        let Some(id) = current else { return Ok(true) };
+        let root = codex_home().ok_or("flow.first_prompt_evidence_required")?;
+        let path = find_session(&root.join("sessions"), &id).ok_or("flow.first_prompt_evidence_required")?;
+        let file = File::open(path).map_err(|_| "flow.first_prompt_evidence_required")?;
+        if file.metadata().map_err(|_| "flow.first_prompt_evidence_required")?.len() > MAX_TAIL {
+            return Err("flow.first_prompt_evidence_required".into());
+        }
+        let mut reader = BufReader::new(file.take(MAX_TAIL));
+        let mut line = String::new();
+        let mut header = false;
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).map_err(|_| "flow.first_prompt_evidence_required")? == 0 { break; }
+            if !line.ends_with('\n') { return Err("flow.first_prompt_evidence_required".into()); }
+            let row: Value = serde_json::from_str(&line).map_err(|_| "flow.first_prompt_evidence_required")?;
+            if !header {
+                if row["type"] != "session_meta" || row["payload"]["id"] != id { return Err("flow.session_mismatch".into()); }
+                header = true;
+            }
+            if (row["type"] == "response_item" && row["payload"]["role"] == "user")
+                || (row["type"] == "event_msg" && matches!(row["payload"]["type"].as_str(), Some("user_message" | "task_started"))) {
+                return Ok(false);
+            }
+        }
+        if !header { return Err("flow.first_prompt_evidence_required".into()); }
+        if self.session_id(target)?.as_deref() != Some(id.as_str()) { return Err("flow.session_mismatch".into()); }
+        Ok(true)
+    }
+
     pub(super) fn read_prompt_receipt(
         &self,
         target: &Target,

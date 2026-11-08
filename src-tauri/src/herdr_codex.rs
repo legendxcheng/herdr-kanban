@@ -412,7 +412,7 @@ impl Cli {
     }
 }
 
-fn codex_session_id(agent: &Value) -> Result<Option<String>, String> {
+pub(super) fn codex_session_id(agent: &Value) -> Result<Option<String>, String> {
     let Some(session) = agent.get("agent_session").filter(|s| !s.is_null()) else {
         return Ok(None);
     };

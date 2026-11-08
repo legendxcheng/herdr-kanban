@@ -23,6 +23,9 @@ struct State {
     prepare_busy: bool,
     mismatch: bool,
     send_error: bool,
+    before_input_error: Option<String>,
+    first_prompt_states: Option<Vec<serde_json::Value>>,
+    input_requests: Vec<Vec<String>>,
     receipt_available: bool,
     early_receipt: bool,
     receipt_checks: usize,
@@ -260,6 +263,7 @@ impl Herdr for Fake {
     }
     fn send(&self, _: &Target, prompt: &str) -> Result<(), SendError> {
         let mut s = self.0.lock().unwrap();
+        if let Some(message) = &s.before_input_error { return Err(SendError { message: message.clone(), uncertain: false }); }
         s.sent.push(prompt.into());
         let send_error = s.send_error;
         drop(s);
@@ -271,6 +275,28 @@ impl Herdr for Fake {
             });
         }
         Ok(())
+    }
+    fn send_first_prompt(
+        &self, target: &Target, prompt: &str, expected: Option<&str>,
+        check_current: &dyn Fn() -> Result<(), String>,
+        received: &dyn Fn() -> Result<bool, String>,
+    ) -> Result<(), SendError> {
+        if expected.is_some_and(|id| self.session_id(target).ok().flatten().as_deref() != Some(id)) {
+            return Err(SendError { message:"flow.session_mismatch".into(), uncertain:false });
+        }
+        let states = self.0.lock().unwrap().first_prompt_states.take();
+        let Some(states) = states else { return self.send_checking_receipt(target, prompt, check_current, received) };
+        let last = states.last().unwrap().clone();
+        let mut states = states.into_iter();
+        let check = || check_current().map_err(|message| SendError { message, uncertain: false });
+        crate::herdr::scripted_first_prompt(&target.pane_id, prompt, |args| {
+            check()?;
+            let mut state = self.0.lock().unwrap();
+            state.input_requests.push(args.iter().map(|s| s.to_string()).collect());
+            if args[1] == "send-text" { state.sent.push(prompt.into()); }
+            Ok(())
+        }, || { check()?; Ok(states.next().unwrap_or_else(|| last.clone())) },
+        || received().map_err(|message| SendError { message, uncertain: true }))
     }
     fn send_checking_receipt(
         &self,
@@ -366,4 +392,5 @@ mod allocation;
 mod background_start;
 mod completion;
 mod recovery;
+mod first_prompt;
 mod reset;

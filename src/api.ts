@@ -109,6 +109,8 @@ export const resolveDispatch = (taskId: string, operationId: string, sent: boole
 export interface RecoveryStatus { task_id: string; operation_id: string; state: "recovering" | "needs_attention"; attempt: number; error: string }
 export const taskRecoveryStatus = () => invoke<RecoveryStatus[]>("task_recovery_status");
 export const retryTaskRecovery = (taskId: string, operationId: string) => invoke<void>("retry_task_recovery", { taskId, operationId });
+export const continueFirstPrompt = (taskId: string, operationId: string, executionEpoch: number) =>
+  invoke<NonNullable<Task["flow"]>>("continue_first_prompt", { taskId, operationId, executionEpoch });
 export const repairBinding = (taskId: string, paneId: string) => invoke<void>("repair_binding", { taskId, paneId });
 export interface TerminalOutput { kind: "closed" | "mode"; message: string }
 export interface TerminalBounds { x: number; y: number; width: number; height: number; viewport_width: number; viewport_height: number; visible: boolean }

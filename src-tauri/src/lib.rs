@@ -51,6 +51,7 @@ mod projects;
 mod prompt_reference;
 mod skill_discovery;
 mod start;
+mod first_prompt;
 mod task_overview;
 mod task_reset;
 mod task_summary;
@@ -70,6 +71,8 @@ mod task_recovery;
 mod task_view;
 #[cfg(test)]
 mod recovery_acceptance;
+#[cfg(test)]
+mod first_prompt_acceptance;
 
 use commands::DbState;
 use rusqlite::Connection;
@@ -135,6 +138,7 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 use tauri::Manager;
+                window.state::<Arc<workflow::Workflow>>().stop_starts();
                 window
                     .state::<Arc<native_terminal::NativeTerminalManager>>()
                     .close_all();
@@ -200,6 +204,7 @@ pub fn run() {
             work_commands::herdr_list_agents,
             work_commands::herdr_agent_snapshot,
             work_commands::start_task,
+            work_commands::continue_first_prompt,
             work_commands::complete_task,
             work_commands::recover_lifecycle,
             work_commands::dispatch_to_herdr,

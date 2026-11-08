@@ -313,7 +313,7 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
             serde_json::to_value(cli.move_workspace(text("id")?, request["before"].as_str())?)
                 .map_err(|e| e.to_string())
         }
-        "session_id" | "session_locks" | "prompt_receipt" => {
+        "session_id" | "session_locks" | "prompt_receipt" | "first_prompt_available" => {
             let mut target: crate::workflow::Target =
                 serde_json::from_value(request["target"].clone())
                     .map_err(|_| "machine.invalid_request")?;
@@ -321,6 +321,7 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
             match text("method")? {
                 "session_id" => Ok(json!(cli.session_id(&target)?)),
                 "session_locks" => Ok(json!(cli.startup_session_locks(&target)?)),
+                "first_prompt_available" => Ok(json!(cli.first_prompt_available(&target, request["expected"].as_str())?)),
                 _ => Ok(json!(cli.prompt_receipt(
                     &target,
                     text("prompt")?,

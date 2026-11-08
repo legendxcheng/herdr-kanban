@@ -32,9 +32,11 @@ impl Workflow {
         op: &str,
         notify: Notify,
     ) -> Result<Flow, String> {
+        self.check_running()?;
         let (request, event, accepted) = {
             let mut db = self.db.lock().map_err(err)?;
             let tx = db.transaction().map_err(err)?;
+            self.check_running()?;
             crate::tasks::ensure_active(&tx, task)?;
             let existing: Option<(String, String)> = tx
                 .query_row(
@@ -133,7 +135,7 @@ impl Workflow {
                         params![changed.operation_id, error]);
                 }
             }
-            reporter(changed);
+            if worker.check_running().is_ok() { reporter(changed); }
         }) {
             self.fail_unstarted(task, op, &format!("flow.worker_failed: {error}"))?;
             notify(event);

@@ -19,6 +19,8 @@ struct SubmissionState {
     sequence: u64,
     status: String,
     ready: bool,
+    interactive_ready: bool,
+    launch_pending: bool,
 }
 
 impl SubmissionState {
@@ -32,6 +34,8 @@ impl SubmissionState {
                 .ok_or_else(|| error("herdr.invalid_response"))?
                 .into(),
             ready: agent["interactive_ready"] == true && agent["launch_pending"] != true,
+            interactive_ready: agent["interactive_ready"] == true,
+            launch_pending: agent["launch_pending"] == true,
         })
     }
 
@@ -133,11 +137,33 @@ impl Cli {
         check_current: &dyn Fn() -> Result<(), String>,
         received: &dyn Fn() -> Result<bool, String>,
     ) -> Result<(), SendError> {
-        submit_observed(
+        self.submit_windows_codex_mode(target, prompt, check_current, received, false, None)
+    }
+    pub(super) fn submit_windows_codex_mode(
+        &self, target: &Target, prompt: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
+        received: &dyn Fn() -> Result<bool, String>, first: bool, expected_session: Option<&str>,
+    ) -> Result<(), SendError> {
+        let readiness_deadline = Instant::now() + Duration::from_secs(30);
+        let text_started = std::cell::Cell::new(false);
+        let pinned_session = std::cell::RefCell::new(expected_session.map(str::to_string));
+        submit_observed_mode(
             &target.pane_id,
             prompt,
             |args| {
                 check_current().map_err(|message| error(&message))?;
+                if first && args.get(1) == Some(&"send-text") {
+                    if !self.first_prompt_available(target, pinned_session.borrow().as_deref()).map_err(|message| error(&message))? { return Err(error("flow.first_prompt_activity")); }
+                    check_current().map_err(|message| error(&message))?;
+                    if Instant::now() >= readiness_deadline { return Err(error("flow.first_prompt_timeout")); }
+                    text_started.set(true);
+                }
+                let stage = match args.get(1).copied() {
+                    Some("send-text") => "text",
+                    Some("send-keys") => match args.last().copied() { Some("right") => "right", Some("esc") => "escape", Some("enter") => "enter", _ => "input" },
+                    _ => "input",
+                };
+                crate::dispatch_trace::record(stage, "transport_requested", None);
                 self.request(args).map(|_| ())
             },
             || {
@@ -155,7 +181,20 @@ impl Cli {
                     return Err(error("binding.identity_changed"));
                 }
                 check_current().map_err(|message| error(&message))?;
-                SubmissionState::parse(agent)
+                let state = SubmissionState::parse(agent)?;
+                if first && !text_started.get() {
+                    let current = super::codex::codex_session_id(agent).map_err(|message| error(&message))?;
+                    let mut pinned = pinned_session.borrow_mut();
+                    if pinned.as_ref().is_some_and(|id| current.as_ref() != Some(id)) { return Err(error("flow.session_mismatch")); }
+                    if pinned.is_none() { *pinned = current; }
+                }
+                if first && !text_started.get() && state.ensure_idle().is_ok() {
+                    if !self.first_prompt_available(target, pinned_session.borrow().as_deref()).map_err(|message| error(&message))? {
+                        return Err(error("flow.first_prompt_activity"));
+                    }
+                    check_current().map_err(|message| error(&message))?;
+                }
+                Ok(state)
             },
             std::thread::sleep,
             || {
@@ -163,9 +202,19 @@ impl Cli {
                 let found = received().map_err(|message| error(&message))?;
                 check_current().map_err(|message| error(&message))?;
                 Ok(found)
-            },
+            }, first,
         )
     }
+}
+
+#[cfg(test)]
+pub(crate) fn scripted_first_prompt(
+    pane: &str, prompt: &str,
+    request: impl FnMut(&[&str]) -> Result<(), SendError>,
+    mut observe: impl FnMut() -> Result<Value, SendError>,
+    received: impl FnMut() -> Result<bool, SendError>,
+) -> Result<(), SendError> {
+    submit_observed_mode(pane, prompt, request, || SubmissionState::parse(&observe()?), |_| {}, received, true)
 }
 
 #[cfg(test)]
@@ -179,17 +228,45 @@ fn submit(
     submit_observed(pane, prompt, request, observe, pause, || Ok(false))
 }
 
+#[cfg(test)]
 fn submit_observed(
+    pane: &str, prompt: &str,
+    request: impl FnMut(&[&str]) -> Result<(), SendError>,
+    observe: impl FnMut() -> Result<SubmissionState, SendError>,
+    pause: impl FnMut(Duration),
+    received: impl FnMut() -> Result<bool, SendError>,
+) -> Result<(), SendError> {
+    submit_observed_mode(pane, prompt, request, observe, pause, received, false)
+}
+
+fn submit_observed_mode(
     pane: &str,
     prompt: &str,
     mut request: impl FnMut(&[&str]) -> Result<(), SendError>,
     mut observe: impl FnMut() -> Result<SubmissionState, SendError>,
     mut pause: impl FnMut(Duration),
     mut received: impl FnMut() -> Result<bool, SendError>,
+    first: bool,
 ) -> Result<(), SendError> {
     let mut retries = OBSERVATION_RETRIES;
-    // A busy turn cannot acknowledge this particular prompt; reject before writing.
-    observe_recovering(&mut observe, &mut pause, &mut retries, "before_text")?.ensure_idle()?;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    for poll in 0..=150 {
+        if first && Instant::now() >= deadline { return Err(error("flow.first_prompt_timeout")); }
+        let state = observe_recovering(&mut || {
+            if first && Instant::now() >= deadline { return Err(error("flow.first_prompt_timeout")); }
+            observe()
+        }, &mut pause, &mut retries, "before_text")?;
+        crate::dispatch_trace::readiness(&state.status, state.interactive_ready, state.launch_pending, state.sequence);
+        if first && Instant::now() >= deadline { return Err(error("flow.first_prompt_timeout")); }
+        if state.ensure_idle().is_ok() { break; }
+        if !first { return Err(error("flow.not_idle")); }
+        if state.status == "blocked" { return Err(error("flow.first_prompt_blocked")); }
+        if !matches!(state.status.as_str(), "idle" | "done" | "working" | "unknown") {
+            return Err(error("herdr.invalid_response"));
+        }
+        if poll == 150 { return Err(error("flow.first_prompt_timeout")); }
+        pause(ACK_INTERVAL);
+    }
     // send-text is raw terminal input, not a paste. Codex can discard raw LF
     // key events, so frame multiline content as one literal bracketed paste.
     // Keep the delimiters out of the durable prompt and exact receipt comparison.
@@ -356,6 +433,8 @@ mod tests {
             sequence,
             status: status.into(),
             ready: true,
+            interactive_ready: true,
+            launch_pending: false,
         }
     }
 
@@ -697,6 +776,34 @@ mod tests {
                 .message
                 .starts_with("dispatch.enter_not_sent_verify_required:")
         );
+    }
+
+    #[test]
+    fn first_prompt_waits_through_busy_startup_without_writing_twice() {
+        let mut states = vec![state(1, "working"), state(2, "unknown"), state(3, "idle")].into_iter();
+        let mut writes = Vec::new();
+        let result = submit_observed_mode(
+            "pane", "once",
+            |args| { writes.push(args.iter().map(|s| s.to_string()).collect::<Vec<_>>()); Ok(()) },
+            || Ok(states.next().unwrap_or_else(|| state(3, "idle"))),
+            |_| {}, || Ok(true), true,
+        );
+        assert_eq!(result.unwrap_err().message, "dispatch.submit_verify_required");
+        assert_eq!(writes.iter().filter(|a| a[0] == "pane").count(), 1);
+        assert_eq!(writes.iter().filter(|a| a.last().is_some_and(|v| v == "enter")).count(), 1);
+    }
+
+    #[test]
+    fn first_prompt_readiness_is_bounded_and_blocked_never_writes() {
+        for status in ["working", "unknown", "blocked"] {
+            let mut reads = 0;
+            let error = submit_observed_mode("pane", "once", |_| panic!("no input"), || {
+                reads += 1; Ok(state(1, status))
+            }, |_| {}, || Ok(false), true).unwrap_err();
+            assert!(!error.uncertain);
+            assert_eq!(error.message, if status=="blocked" { "flow.first_prompt_blocked" } else { "flow.first_prompt_timeout" });
+            assert_eq!(reads, if status=="blocked" { 1 } else { 151 });
+        }
     }
 
     #[test]

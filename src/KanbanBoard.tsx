@@ -443,7 +443,8 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
     if (task.flow?.state === "unknown" && task.flow.kind === "complete") { await moveTask(task, "done"); return; }
     activeFlows.current.add(task.id); setBusyTasks(new Set(activeFlows.current));
     try {
-      if (recovery[task.id] || task.binding?.operation && task.flow?.state !== "unknown") await api.retryTaskRecovery(task.id, operation);
+      if (task.flow?.can_continue_first_prompt) await api.continueFirstPrompt(task.id, operation, task.execution_epoch ?? 0);
+      else if (recovery[task.id] || task.binding?.operation && task.flow?.state !== "unknown") await api.retryTaskRecovery(task.id, operation);
       else await api.recoverLifecycle(task.id, operation);
       setFlowError("");
     }

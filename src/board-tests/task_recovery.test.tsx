@@ -41,3 +41,14 @@ it("restarts an exhausted dispatch-only recovery using its current operation", a
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("retry_task_recovery", { taskId: board.storedTask.id, operationId: "manual-op" }));
   expect(vi.mocked(invoke).mock.calls.some(([name]) => name === "start_task" || name === "resolve_dispatch" || name === "dispatch_to_herdr")).toBe(false);
 });
+
+it("continues a proven unsent first prompt instead of retrying receipt recovery", async () => {
+  bindTask();
+  board.storedTask.flow = { session_id: null, operation_id: "start-original", kind: "start", state: "unknown", error: "flow.not_idle", pane_id: "pane", requested_status: "in_progress", can_continue_first_prompt: true } as NonNullable<typeof board.storedTask.flow>;
+  board.storedTask.execution_epoch = 3;
+  await renderBoard();
+  fireEvent.click(await screen.findByRole("button", { name: "提示词尚未发送" }));
+  fireEvent.click(screen.getByRole("button", { name: "继续首次发送" }));
+  await waitFor(() => expect(invoke).toHaveBeenCalledWith("continue_first_prompt", { taskId: board.storedTask.id, operationId: "start-original", executionEpoch: 3 }));
+  expect(vi.mocked(invoke).mock.calls.some(([name]) => name === "retry_task_recovery" || name === "start_task")).toBe(false);
+});

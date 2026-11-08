@@ -43,12 +43,13 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, recover
     : task.cleanup_required ? "archive.cleanup_required" : "";
   const disabled = !!busy || !!removing || archiving || deleting;
   const controlsDisabled = disabled || flowUnresolved(task);
-  const preparation = task.flow?.state === "unknown" && recovery ? `recovery.${recovery.state}` : preparationLabel(task);
+  const unsent = !!task.flow?.can_continue_first_prompt;
+  const preparation = !unsent && task.flow?.state === "unknown" && recovery ? `recovery.${recovery.state}` : preparationLabel(task);
   const compact = taskColumn(task) === "in_progress";
   const [detailsOpen, setDetailsOpen] = useState(false);
   const detailsId = useId();
   const hasModel = !!(task.codex_settings?.model || task.codex_settings?.effort);
-  const statusKey = task.flow?.state === "unknown" || task.binding?.operation ? recovery ? `recovery.${recovery.state}` : "task.compact_verify"
+  const statusKey = unsent ? "flow.prompt_not_sent" : task.flow?.state === "unknown" || task.binding?.operation ? recovery ? `recovery.${recovery.state}` : "task.compact_verify"
     : task.flow?.state === "failed" || task.flow?.error || task.cleanup_required || canResetTask(task) ? "task.compact_failed"
     : preparation || busy ? "task.compact_preparing" : null;
   const toggleDetails = () => setDetailsOpen(open => !open);
@@ -179,7 +180,7 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, recover
       {archiveError && <p role="alert" className="error task-notice">{archiveError}</p>}
       {(task.flow?.state === "unknown" || task.cleanup_required || task.binding?.operation) &&
         <fieldset disabled={disabled || flowPending(task)} className="task-recovery" {...controls}>
-          {task.flow?.state === "unknown" && <button className="btn-secondary" onClick={onFlowRecover}>{tr(recovery ? "recovery.retry" : "flow.recover")}</button>}
+          {task.flow?.state === "unknown" && <button className="btn-secondary" onClick={onFlowRecover}>{tr(unsent ? "flow.continue_first_prompt" : recovery ? "recovery.retry" : "flow.recover")}</button>}
           {task.flow?.state !== "unknown" && task.binding?.state === "unknown" && <button className="btn-secondary" onClick={onFlowRecover}>{tr("recovery.retry")}</button>}
           {task.cleanup_required && <button className="btn-secondary" onClick={onComplete}>{tr("flow.retry_cleanup")}</button>}
           {task.binding?.state === "unknown" && <button className="btn-secondary" onClick={onRecover}>{tr("dispatch.verify")}</button>}

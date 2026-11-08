@@ -240,6 +240,14 @@ pub trait Herdr: Send + Sync {
     ) -> Result<(), SendError> {
         self.send_checked(target, prompt, check_current)
     }
+    /// Only the first prompt of a task-owned, newly launched process may wait for readiness.
+    fn send_first_prompt(
+        &self, target: &Target, prompt: &str, _expected_session: Option<&str>,
+        check_current: &dyn Fn() -> Result<(), String>,
+        received: &dyn Fn() -> Result<bool, String>,
+    ) -> Result<(), SendError> {
+        self.send_checking_receipt(target, prompt, check_current, received)
+    }
 }
 
 pub struct Workflow {
@@ -569,24 +577,38 @@ impl Workflow {
                 params![op.id,task,op.workspace,json,prompt,op.created_at,op.had_binding]).map_err(|_|"dispatch.verify_required".to_string())?;
             tx.commit().map_err(err)?;
         }
+        self.send_reserved(&op, lifecycle, epoch)
+    }
+
+    pub(crate) fn send_reserved(&self, op: &Operation, lifecycle: Option<&str>, epoch: i64) -> Result<DispatchRecord, String> {
+        let task = op.task_id.as_str();
+        let operation = op.id.as_str();
+        let target = &op.target;
+        let prompt = op.prompt.as_str();
         crate::task_reset::check_dispatch(&*self.db.lock().map_err(err)?, task, operation)?;
         let _control = crate::remote_control::Scope::enter_if_absent();
         let database = self.db.lock().ok().and_then(|db| db.path()
             .filter(|p| !p.is_empty()).map(std::path::PathBuf::from));
         let _trace = crate::dispatch_trace::Scope::enter(&op.id, &target, database);
-        match self.herdr.send_checking_receipt(
-            &target,
-            prompt,
-            &|| {
-                let db = self.db.lock().map_err(err)?;
-                crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
-                crate::tasks::ensure_active(&db, task)?;
-                crate::task_reset::check_dispatch(&db, task, operation)?;
-                crate::images::verify_operation(&db, operation)
-            },
-            &|| self.dispatch_receipt(&op).map(|receipt| receipt.is_some()),
-        ) {
-            Ok(()) => match self.finish(&op, true, "") {
+        let check_commit = || if lifecycle.is_some() { self.check_running() } else { Ok(()) };
+        let check_current = || {
+            let db = self.db.lock().map_err(err)?;
+            crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
+            crate::tasks::ensure_active(&db, task)?;
+            crate::task_reset::check_dispatch(&db, task, operation)?;
+            if let Some(start) = lifecycle {
+                self.check_running()?;
+                crate::first_prompt::check_pending(&db, task, start, epoch)?;
+            }
+            crate::images::verify_operation(&db, operation)
+        };
+        let received = || self.dispatch_receipt(op).map(|receipt| receipt.is_some());
+        let result = if lifecycle.is_some() {
+            let expected = crate::lifecycle::view(&*self.db.lock().map_err(err)?, task)?.session_id;
+            self.herdr.send_first_prompt(target, prompt, expected.as_deref(), &check_current, &received)
+        } else { self.herdr.send_checking_receipt(target, prompt, &check_current, &received) };
+        match result {
+            Ok(()) => match self.finish_result_checked(op, true, "", None, false, &check_commit) {
                 Ok(()) => Ok(record(&op)),
                 Err(_) => {
                     self.mark_unknown(&op.id, None);
@@ -596,12 +618,13 @@ impl Workflow {
             Err(error) if error.uncertain => {
                 self.mark_unknown(&op.id, Some(&error.message));
                 if let Ok(Some(receipt)) = self.dispatch_receipt(&op) {
-                    self.finish_result(
+                    self.finish_result_checked(
                         &op,
                         true,
                         &receipt.evidence,
                         Some(&receipt.session_id),
                         false,
+                        &check_commit,
                     )
                     .map_err(|_| "dispatch.verify_required".to_string())?;
                     return Ok(record(&op));
@@ -615,7 +638,10 @@ impl Workflow {
                 })
             }
             Err(error) => {
-                self.finish(&op, false, &error.message)?;
+                let evidence = if lifecycle.is_some() {
+                    format!("first_prompt.not_written:{}", error.message)
+                } else { error.message.clone() };
+                self.finish_result_checked(op, false, &evidence, None, false, &check_commit)?;
                 Err(error.message)
             }
         }

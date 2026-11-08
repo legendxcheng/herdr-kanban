@@ -25,12 +25,14 @@ export function taskHasTerminalView(task: Task) {
 
 export function preparationLabel(task: Task): string | null {
   if (task.flow?.kind !== "start") return null;
+  if (task.flow.can_continue_first_prompt) return "flow.prompt_not_sent";
   if (task.flow.state === "unknown") return "flow.verify_required";
   if (!flowPending(task)) return null;
   switch (task.flow.stage) {
     case "reading_prompt": return "flow.reading_prompt";
     case "starting_agent": return "flow.starting_agent";
     case "checking_model": return "flow.checking_model";
+    case "waiting_first_prompt": return "flow.waiting_first_prompt";
     case "dispatching": return "flow.dispatching";
     default: return "flow.preparing";
   }

@@ -25,6 +25,27 @@ pub async fn start_task(
     .map_err(|e| e.to_string())?
 }
 #[tauri::command]
+pub async fn continue_first_prompt(
+    app: State<'_, Arc<Workflow>>, handle: tauri::AppHandle,
+    task_id: String, operation_id: String, execution_epoch: i64,
+) -> Result<crate::lifecycle::Flow, String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = app.for_task(&task_id)?.continue_first_prompt_notifying(&task_id, &operation_id, execution_epoch, &|event| { let _ = handle.emit("task-start-changed", event); });
+        if app.check_running().is_ok() {
+            if let Ok(db) = app.db.lock() {
+                if let Ok(project_id) = db.query_row("SELECT project_id FROM tasks WHERE id=?1", [&task_id], |r| r.get::<_,String>(0)) {
+                    if let Ok(flow) = crate::lifecycle::view(&db, &task_id) {
+                        let _ = handle.emit("task-start-changed", crate::start::StartChanged { project_id, task_id:task_id.clone(), operation_id:flow.operation_id.unwrap_or(operation_id) });
+                    }
+                }
+            }
+        }
+        result
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub async fn complete_task(
     app: State<'_, Arc<Workflow>>,
     manager: State<'_, Arc<TerminalManager>>,

@@ -457,5 +457,13 @@
   "recovery.needs_attention": "Needs attention",
   "recovery.retry": "Retry automatic verification",
   "recovery.failed": "Automatic verification is incomplete. Inspect the original terminal or retry.",
-  "recovery.stopped": "Automatic verification stopped"
+  "recovery.stopped": "Automatic verification stopped",
+  "flow.prompt_not_sent": "Prompt not sent",
+  "flow.waiting_first_prompt": "Waiting for Agent readiness and first submission",
+  "flow.continue_first_prompt": "Continue first submission",
+  "flow.first_prompt_timeout": "Readiness timed out. The prompt was not sent; you can continue the first submission.",
+  "flow.first_prompt_blocked": "The Agent needs attention during startup. The prompt was not sent.",
+  "flow.first_prompt_ineligible": "This operation is not eligible for safe continuation. Refresh and verify.",
+  "flow.first_prompt_activity": "The original session has input or execution evidence. First submission stopped; please verify.",
+  "flow.first_prompt_evidence_required": "The original session history could not be verified. First submission stopped; please verify."
 }

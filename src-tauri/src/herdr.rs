@@ -6,6 +6,9 @@ pub(crate) use cli::agent_start_rejected_busy;
 #[cfg(all(test, windows))]
 #[path = "agent_start_tests.rs"]
 mod agent_start_tests;
+#[cfg(all(test, windows))]
+#[path = "first_prompt_cli_tests.rs"]
+mod first_prompt_cli_tests;
 #[path = "codex_process.rs"]
 mod codex_process;
 #[path = "herdr_executable.rs"]
@@ -27,6 +30,8 @@ mod codex_receipt;
 #[cfg(any(windows, test))]
 #[path = "herdr_codex_submit.rs"]
 mod codex_submit;
+#[cfg(test)]
+pub(crate) use codex_submit::scripted_first_prompt;
 #[path = "herdr_idle_cleanup.rs"]
 mod idle_cleanup;
 #[path = "herdr_workspace_terminal.rs"]
@@ -44,6 +49,12 @@ pub struct Cli {
 }
 
 impl Cli {
+    pub(crate) fn first_prompt_available(&self, target: &Target, expected: Option<&str>) -> Result<bool, String> {
+        if let Some(machine) = &self.remote {
+            return crate::remote_transport::request(machine, serde_json::json!({"method":"first_prompt_available","target":target,"expected":expected}));
+        }
+        self.read_first_prompt_available(target, expected)
+    }
     fn check_target(&self, target: &Target) -> Result<(), SendError> {
         // Revalidate immediately before sending, after the ownership reservation.
         let doc = self
@@ -574,6 +585,16 @@ impl Herdr for Cli {
         } else {
             self.send_prompt_checked(target, prompt, check_current)
         }
+    }
+    fn send_first_prompt(
+        &self, target: &Target, prompt: &str, expected_session: Option<&str>,
+        check_current: &dyn Fn() -> Result<(), String>,
+        received: &dyn Fn() -> Result<bool, String>,
+    ) -> Result<(), SendError> {
+        #[cfg(windows)]
+        { self.submit_windows_codex_mode(target, prompt, check_current, received, true, expected_session) }
+        #[cfg(not(windows))]
+        { self.send_prompt_with_receipt(target, prompt, check_current, received) }
     }
 }
 

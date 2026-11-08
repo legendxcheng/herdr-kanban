@@ -457,5 +457,13 @@
   "recovery.needs_attention": "需要处理",
   "recovery.retry": "重新自动核验",
   "recovery.failed": "自动核验暂未完成，可查看原终端或重试",
-  "recovery.stopped": "自动核验已停止"
+  "recovery.stopped": "自动核验已停止",
+  "flow.prompt_not_sent": "提示词尚未发送",
+  "flow.waiting_first_prompt": "等待 Agent 就绪并首次发送",
+  "flow.continue_first_prompt": "继续首次发送",
+  "flow.first_prompt_timeout": "等待就绪已超时；提示词尚未发送，可继续首次发送。",
+  "flow.first_prompt_blocked": "Agent 需要处理启动界面；提示词尚未发送。",
+  "flow.first_prompt_ineligible": "当前操作不符合安全续发条件，请刷新后核实。",
+  "flow.first_prompt_activity": "原会话已有输入或执行证据，已停止首次发送，请核实。",
+  "flow.first_prompt_evidence_required": "无法核实原会话的输入记录，已停止首次发送，请核实。"
 }

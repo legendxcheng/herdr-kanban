@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-11-08。首次提示词派发增加 30 秒有界就绪等待；明确未写入的首次启动可经“继续首次发送”向原进程提交冻结正文，未知结果仍只核验。新增 `first_prompt.rs` 和 `continue_first_prompt` IPC，无数据库迁移。本机连续 10 次取得精确回执；SSH 连续样本仍有就绪超时及正文后状态波动，不能标记自动送达验收全通过。本机及 SSH 原生桌面已验证原进程续发、刷新及重开不重发。实现见 6.6.7，完整证据与限制见[首次提示词验证](docs/verification/2026-11-08-first-prompt.md)。
+
 更新日期：2026-11-07。[GitHub #46](https://github.com/legendxcheng/herdr-kanban/issues/46) 增加应用级有界自动核验、当前任务终端自动重连及待核实原终端只读查看；取消人工核实 Evidence 必填，系统记录确认来源与目标。恢复共用原身份、回执、会话及事务规则，不重放历史输入。Todo 的未知手动派发也可查看原终端及重新核验，不改变持久化业务状态。无数据库迁移；本机与 SSH 的真实工作流和独立原生桌面验收已执行，详细结果、审查与交付边界见[自动恢复验证](docs/verification/2026-11-07-task-auto-recovery.md)。实现入口见 6.6.6。
 
 更新日期：2026-10-31。自动标题切换为看板本机请求 DeepSeek `deepseek-flash`，本地／SSH 项目共用 HTTP 生成器，沿用两路 worker、持久化重试和编辑保护。项目私密文件在编译时内置 Key，正式打包入口验证配置；无数据库迁移或 IPC 变化。规格为 GitHub #45，实现与验证边界见 6.2.4 和[DeepSeek 标题验证](docs/verification/2026-10-31-deepseek-titles.md)。
@@ -542,6 +544,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `execute_idle_cleanup` | projectId、previewId | 确认批次，仅处理快照内仍符合条件的 pane；返回逐项结果和关闭/跳过/失败数量 |
 | `idle_cleanup_result` | projectId、previewId | 读取日志并只读核实未知关闭；不重复发送关闭 |
 | `recover_lifecycle` | taskId、operationId | 只核实未知启动，不发送/启动/关闭；确认已派发或精确恢复，或确认启动 pane 已不存在后释放 |
+| `continue_first_prompt` | taskId、operationId、executionEpoch | 仅当前首次启动、明确 not_sent 且原身份有效时领取新尝试；沿用冻结正文及原进程，不重置旧派发、不接受前端目标 |
 | `task_recovery_status` | 无 | 只读本应用恢复批次状态，不做 Herdr 查询 |
 | `retry_task_recovery` | taskId、operationId | 为当前有效未知启动/派发重置有界核验批次，不发送输入 |
 | `delete_task` | id | 本地事务删除卡片，允许未决操作；级联释放绑定/会话/目录，保留操作事实，关闭本应用查看连接 |
@@ -1054,6 +1057,15 @@ Windows 进程查询可能先观察到 shell，而 Herdr 的 Agent 注册状态�
 人工 `resolve_dispatch` 的备注可为空，证据自动区分 manual/automatic_receipt/automatic_saved_dispatch/automatic_session；原自由文本证据保留。自动和人工操作共用任务锁；外部观察后、取得事务后与提交前复核取消，派发、任务、绑定、会话和启动一致提交，已有 sent 的恢复也不再先单独保存会话。退出停止协调器和迟到成功通知，不关闭底层 Agent。
 
 工作流、组件、原生消息/Windows 管道以及本机/SSH 原生桌面的实际结果见[自动恢复验证](docs/verification/2026-11-07-task-auto-recovery.md)。未打包安装、未替换运行中的应用；真实网络和 Herdr server 重启不由查看进程断开演练替代。
+
+### 6.6.7 首次提示词就绪等待与明确未发送续发（2026-11-08，GitHub #47）
+
+- `Workflow::send_reserved` 将任务创建进程的首条派发交给 `Herdr::send_first_prompt`。Windows Codex 适配器在正文前用统一 30 秒截止时间和最多 151 次观察等待 idle/done、interactive_ready 且非 launch_pending；普通手动派发仍即时拒绝忙碌目标。blocked、协议错误、身份或会话变化立即停止。所有读取重试共享预算，正文写入后的不确定结果沿用原核验规则。
+- `first_prompt::unsent` 仅接受当前 start 的派发 not_sent，且证据为旧版 `flow.not_idle` 或新版 `first_prompt.not_written:`。须无已派发任务时间、后续有效派发、人工确认或已知会话活动，原完整目标必须匹配 valid 绑定。`Flow.can_continue_first_prompt` 是后端投影；自动核验调度跳过这类明确未发送操作。
+- `continue_first_prompt_notifying` 在任务锁与执行代次检查下核验机器、原进程和已知会话，事务创建新 lifecycle/dispatch pending，保留旧记录及冻结正文、配置和图片引用。预检新发现的会话 ID 在领取事务固定；输入前再次核验会话记录没有用户消息/执行证据。旧请求、重复点击、崩溃后无肯定未写入证据的 pending 均不能重放。
+- 就绪阶段使用 `waiting_first_prompt`；普通看板与 All Tasks 共用“提示词尚未发送”和“继续首次发送”。续发开始和结束通过包含 project/task/current operation 的 `StartChanged` 刷新。窗口退出调用 `stop_starts` 撤销仍运行的首次启动，旧 worker 不再写入或回写成功。
+- 新 helper 方法 `first_prompt_available` 只读当前会话及有界会话文件；既有 helper 版本安装校验继续适用。`dispatch-input.jsonl` 增加状态、interactive_ready、launch_pending、序号、耗时及真实传输请求边界，不记录正文；检测规则未知时明确记录 unknown。
+- 新测试入口 `lifecycle_tests/first_prompt.rs`、`first_prompt_cli_tests.rs`、`first_prompt_acceptance.rs` 分别覆盖 Workflow/SQLite、实际 CLI 适配层、隔离真实 Herdr。自动化和原生验收的证据范围、SSH 未通过项及既有工作区改动边界见验证记录。
 
 ## 7. 当前实现的关键边界与维护风险
 

@@ -10,6 +10,8 @@ mod delete_cli_tests;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Flow {
+    #[serde(default)]
+    pub can_continue_first_prompt: bool,
     pub session_id: Option<String>,
     pub operation_id: Option<String>,
     pub kind: Option<String>,
@@ -65,6 +67,7 @@ pub fn view(db: &Connection, task: &str) -> Result<Flow, String> {
         .optional()
         .map_err(err)?;
     let mut flow = Flow {
+        can_continue_first_prompt: false,
         session_id,
         operation_id: None,
         kind: None,
@@ -78,6 +81,7 @@ pub fn view(db: &Connection, task: &str) -> Result<Flow, String> {
         "SELECT id,kind,state,error,target_json FROM lifecycle_operations WHERE task_id=?1 ORDER BY rowid DESC LIMIT 1",
         [task], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(err)?;
     if let Some((id, kind, state, error, json)) = op {
+        flow.can_continue_first_prompt = crate::first_prompt::unsent(db, task, &id)?.is_some();
         flow.stage = db
             .query_row(
                 "SELECT stage FROM start_requests WHERE operation_id=?1",
@@ -160,6 +164,7 @@ impl Workflow {
         write(&db)
     }
     fn check_flow(&self, task: &str, op: &str) -> Result<(), String> {
+        self.check_running()?;
         let db = self.db.lock().map_err(err)?;
         crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
         ensure_operation(&db, task, op)
@@ -263,7 +268,7 @@ impl Workflow {
         .map_err(err)?;
         tx.commit().map_err(err)
     }
-    fn save_session(
+    pub(crate) fn save_session(
         &self,
         task: &str,
         op: &str,
@@ -271,6 +276,7 @@ impl Workflow {
         cwd: &str,
         expected: Option<&str>,
     ) -> Result<Option<String>, String> {
+        self.check_running()?;
         ensure_operation(&*self.db.lock().map_err(err)?, task, op)?;
         let id = self.herdr.session_id(target)?;
         if expected.is_some() && id.as_deref() != expected {
@@ -281,15 +287,18 @@ impl Workflow {
                 return Err("flow.session_invalid".into());
             }
             let db = self.db.lock().map_err(err)?;
+            self.check_running()?;
             ensure_operation(&db, task, op)?;
             db.execute("INSERT INTO task_sessions(task_id,codex_session_id,cwd,updated_at) VALUES (?1,?2,?3,?4) ON CONFLICT(task_id) DO UPDATE SET codex_session_id=excluded.codex_session_id,cwd=excluded.cwd,updated_at=excluded.updated_at",params![task,id,cwd,now()]).map_err(err)?;
         }
         Ok(id)
     }
-    fn activate(&self, task: &str, op: &str, target: &Target) -> Result<(), String> {
+    pub(crate) fn activate(&self, task: &str, op: &str, target: &Target) -> Result<(), String> {
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
+        self.check_running()?;
         ensure_operation(&tx, task, op)?;
+        crate::first_prompt::check_pending(&tx, task, op, crate::task_reset::epoch(&tx, task)?)?;
         tx.execute(
             "UPDATE task_bindings SET state='valid',target_json=?2 WHERE task_id=?1",
             params![task, serde_json::to_string(target).map_err(err)?],
@@ -417,7 +426,7 @@ impl Workflow {
                 .map_err(err)
             })?;
             if saved.is_none() {
-                progress("dispatching")?;
+                progress("waiting_first_prompt")?;
                 self.dispatch_inner(
                     task,
                     &live.pane_id,

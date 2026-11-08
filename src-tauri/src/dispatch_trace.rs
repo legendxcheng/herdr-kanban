@@ -62,6 +62,12 @@ pub(crate) fn record(stage: &str, outcome: &str, error: Option<&str>) {
     });
 }
 
+pub(crate) fn readiness(status: &str, interactive_ready: bool, launch_pending: bool, sequence: u64) {
+    // Status comes from a protocol field, never a title or terminal text.
+    let status = match status { "idle" | "done" | "working" | "blocked" | "unknown" => status, _ => "invalid" };
+    record("before_text", &format!("status={status};interactive_ready={interactive_ready};launch_pending={launch_pending};sequence={sequence};detector=unknown"), None);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
