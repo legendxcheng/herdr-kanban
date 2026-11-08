@@ -25,6 +25,8 @@ mod workspace_metadata;
 use workspace_metadata::workspace_directories;
 #[path = "herdr_codex.rs"]
 mod codex;
+#[path = "herdr_startup_prompt.rs"]
+mod startup_prompt;
 #[path = "codex_receipt.rs"]
 mod codex_receipt;
 #[cfg(any(windows, test))]
@@ -157,6 +159,26 @@ fn field<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
         .ok_or_else(|| "herdr.invalid_response".into())
 }
 impl Herdr for Cli {
+    fn startup_shell(&self, target: &Target, check: &dyn Fn()->Result<(),String>) -> Result<Target,String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            check()?;
+            let (live,_) = self.inspect_pane(&target.workspace_id,&target.pane_id)?;
+            if live.terminal_id != target.terminal_id || live.session != target.session || !live.agent.is_empty() { return Err("binding.identity_changed".into()); }
+            if live.process_id.split_once(':').is_some_and(|(shell,group)|shell!="0" && shell==group) { return Ok(live); }
+            if std::time::Instant::now() >= deadline { return Err("startup.shell_unavailable".into()); }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    fn startup_receipt_wait(&self) -> std::time::Duration { std::time::Duration::from_secs(40) }
+    fn launch_prompt(&self, request: &crate::startup_prompt::Request, check: &dyn Fn()->Result<(),String>) -> Result<(),String> { self.launch_startup_prompt(request,check) }
+    fn find_prompt_launch(&self, request: &crate::startup_prompt::Request) -> Result<Option<Target>,String> {
+        if let Some(machine) = &self.remote {
+            let mut result: Option<Target> = crate::remote_transport::request(machine, serde_json::json!({"method":"observe_startup_prompt","request":request}))?;
+            if let Some(target) = &mut result { target.machine_id = self.machine_id().into(); }
+            Ok(result)
+        } else { self.observe_startup_prompt(request) }
+    }
     fn workspace_terminal_live(
         &self,
         target: &crate::workspace_terminal::Target,

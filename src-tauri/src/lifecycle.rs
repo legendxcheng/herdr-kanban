@@ -245,7 +245,7 @@ impl Workflow {
         check_cancelled()?;
         tx.commit().map_err(err)
     }
-    fn reserve_target(&self, task: &str, op: &str, target: &Target) -> Result<(), String> {
+    pub(crate) fn reserve_target(&self, task: &str, op: &str, target: &Target) -> Result<(), String> {
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
         ensure_operation(&tx, task, op)?;
@@ -402,6 +402,9 @@ impl Workflow {
             touched = true;
             progress("starting_agent")?;
             self.check_flow(task, op)?;
+            if saved.is_none() {
+                return self.start_with_prompt(task, op, &target, &cwd, prompt, &settings, progress);
+            }
             let live = self
                 .herdr
                 .prepare_codex_configured(
@@ -441,7 +444,9 @@ impl Workflow {
             Ok(Outcome::default())
         })();
         if let Err(ref e) = result {
-            if start_rejected {
+            if e.starts_with("startup.not_launched:") {
+                self.fail_startup_not_launched(task,op,e,&||self.check_running())?;
+            } else if start_rejected {
                 self.release_rejected_start(task, op, e, &|| Ok(()))?;
             } else if touched {
                 self.end_flow(op, "unknown", e)?;
@@ -528,6 +533,12 @@ impl Workflow {
         }
         if flow.kind.as_deref() == Some("complete") {
             return Err("flow.retry_cleanup".into());
+        }
+        if self.has_startup_prompt(op)? && self.binding(task)?.operation.is_some() {
+            return match self.reconcile_startup_prompt(task, op, check_cancelled) {
+                Err(error) if error.starts_with("startup.not_launched:") => self.fail_startup_not_launched(task,op,&error,check_cancelled),
+                result => result,
+            };
         }
         let b = self.binding(task)?;
         if let Some(dispatch) = b.operation.as_ref() {

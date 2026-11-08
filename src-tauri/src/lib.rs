@@ -52,6 +52,9 @@ mod prompt_reference;
 mod skill_discovery;
 mod start;
 mod first_prompt;
+mod startup_prompt;
+mod codex_launcher;
+pub fn codex_launcher_main() -> i32 { codex_launcher::run() }
 mod task_overview;
 mod task_reset;
 mod task_summary;
@@ -73,6 +76,8 @@ mod task_view;
 mod recovery_acceptance;
 #[cfg(test)]
 mod first_prompt_acceptance;
+#[cfg(test)]
+mod startup_prompt_acceptance;
 
 use commands::DbState;
 use rusqlite::Connection;

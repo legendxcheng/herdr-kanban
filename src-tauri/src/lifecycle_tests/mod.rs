@@ -15,6 +15,9 @@ struct State {
     catalog_directories: Vec<String>,
     directories: Vec<String>,
     sent: Vec<String>,
+    launch_prompts: Vec<String>,
+    launches: BTreeMap<String, Target>,
+    startup_failure: Option<String>,
     closed: Vec<String>,
     missing_id: bool,
     close_error: bool,
@@ -60,6 +63,30 @@ fn target(id: &str) -> Target {
     }
 }
 impl Herdr for Fake {
+    fn launch_prompt(&self, request: &crate::startup_prompt::Request, check: &dyn Fn()->Result<(),String>) -> Result<(),String> {
+        self.observe("launching");
+        check()?;
+        let live = self.prepare_codex_configured(&request.target,&request.cwd,None,&request.operation,&request.settings,check)?;
+        check()?;
+        let mut state = self.0.lock().unwrap();
+        state.launch_prompts.push(request.prompt.clone());
+        state.sent.push(request.prompt.clone());
+        state.launches.insert(request.operation.clone(),live);
+        let failed = state.send_error;
+        if !failed { state.receipt_available=true; }
+        drop(state);
+        self.observe("sent");
+        if failed { Err("timeout".into()) } else { Ok(()) }
+    }
+    fn find_prompt_launch(&self, request: &crate::startup_prompt::Request) -> Result<Option<Target>,String> {
+        let s = self.0.lock().unwrap();
+        if let Some(error)=&s.startup_failure { return Err(error.clone()); }
+        if let Some(error) = &s.lookup_error { return Err(error.clone()); }
+        let Some(expected) = s.launches.get(&request.operation) else { return Ok(None); };
+        let live = s.panes.get(&expected.pane_id).ok_or("binding.missing")?.0.clone();
+        if !live.same_identity(expected) { return Err("binding.identity_changed".into()); }
+        Ok(Some(live))
+    }
     fn workspaces(&self) -> Result<Vec<crate::projects::Workspace>, String> {
         if let Some(error) = self.0.lock().unwrap().lookup_error.clone() { return Err(error); }
         Ok(vec![crate::projects::Workspace { id: "w1".into(), name: "test".into(), directory: Some(".".into()) }])
@@ -329,6 +356,31 @@ fn fixture() -> (Workflow, Arc<Fake>) {
     fixture_on(false)
 }
 
+// Reproduce the persisted pre-startup-input protocol for upgrade compatibility.
+// Production new starts never select this path.
+impl Workflow {
+    fn legacy_start_task(&self, task: &str, prompt: &str, id: &str) -> Result<Outcome,String> {
+        self.begin_flow(task,id,"start")?;
+        let result: Result<Outcome,String> = (|| {
+            let (workspace,cwd,_) = self.project_context(task)?;
+            let shell = self.herdr.create_pane(&workspace,&cwd,id,&||self.check_flow(task,id))?;
+            self.reserve_target(task,id,&shell)?;
+            let live = self.herdr.prepare_codex(&shell,&cwd,None,id,&||self.check_flow(task,id))?;
+            self.reserve_target(task,id,&live)?;
+            self.save_session(task,id,&live,&cwd,None)?;
+            self.db.lock().unwrap().execute("UPDATE task_bindings SET state='valid' WHERE task_id=?1",[task]).unwrap();
+            self.dispatch_inner(task,&live.pane_id,prompt,&format!("{id}:dispatch"),Some(id))?;
+            self.activate(task,id,&live)?;
+            Ok(Outcome::default())
+        })();
+        if let Err(ref error) = result {
+            if crate::herdr::agent_start_rejected_busy(error) { self.release_rejected_start(task,id,error,&||Ok(()))?; }
+            else { self.end_flow(id,"unknown",error)?; }
+        }
+        result
+    }
+}
+
 fn fixture_on(remote: bool) -> (Workflow, Arc<Fake>) {
     let db = Connection::open_in_memory().unwrap();
     crate::db::init(&db).unwrap();
@@ -393,4 +445,5 @@ mod background_start;
 mod completion;
 mod recovery;
 mod first_prompt;
+mod startup_prompt;
 mod reset;

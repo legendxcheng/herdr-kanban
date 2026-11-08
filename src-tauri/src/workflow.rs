@@ -52,6 +52,16 @@ pub(crate) fn ensure_project_target(
 }
 
 pub trait Herdr: Send + Sync {
+    fn startup_receipt_wait(&self) -> std::time::Duration { std::time::Duration::ZERO }
+    fn startup_shell(&self, target: &Target, check: &dyn Fn()->Result<(),String>) -> Result<Target,String> { check()?; Ok(target.clone()) }
+    /// One startup request, containing the first prompt. Never terminal input.
+    fn launch_prompt(&self, _request: &crate::startup_prompt::Request, _check: &dyn Fn() -> Result<(), String>) -> Result<(), String> {
+        Err("startup.unsupported".into())
+    }
+    /// Read-only reconciliation of the exact process started by this request.
+    fn find_prompt_launch(&self, _request: &crate::startup_prompt::Request) -> Result<Option<Target>, String> {
+        Err("startup.unsupported".into())
+    }
     fn workspace_terminal_live(
         &self,
         _target: &crate::workspace_terminal::Target,
@@ -798,7 +808,7 @@ impl Workflow {
             }
             if complete_start {
                 if let Some(start_id) = op.id.strip_suffix(":dispatch") {
-                    let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM lifecycle_operations WHERE id=?1 AND task_id=?2 AND kind='start' AND state='unknown')", params![start_id,op.task_id], |r| r.get(0)).map_err(err)?;
+                    let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM lifecycle_operations WHERE id=?1 AND task_id=?2 AND kind='start' AND state IN ('pending','unknown'))", params![start_id,op.task_id], |r| r.get(0)).map_err(err)?;
                     if !active {
                         return Err("dispatch.operation_conflict".into());
                     }

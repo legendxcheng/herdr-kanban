@@ -24,6 +24,7 @@ pub(crate) fn unsent(db: &Connection, task: &str, op: &str) -> Result<Option<Uns
          JOIN task_bindings b ON b.task_id=t.id
          WHERE l.id=?1 AND t.id=?2 AND l.kind='start' AND l.state='unknown'
          AND t.archived_at IS NULL AND t.dispatched_at IS NULL AND b.state='valid'
+         AND NOT EXISTS(SELECT 1 FROM startup_prompt_operations s WHERE s.operation_id=l.id)
          AND l.rowid=(SELECT MAX(rowid) FROM lifecycle_operations WHERE task_id=t.id)
          AND d.state='not_sent' AND (d.evidence='flow.not_idle' OR d.evidence LIKE 'first_prompt.not_written:%')
          AND d.evidence NOT IN ('first_prompt.not_written:flow.first_prompt_activity','first_prompt.not_written:flow.session_mismatch')

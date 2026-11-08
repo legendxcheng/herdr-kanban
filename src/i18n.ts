@@ -50,6 +50,7 @@ export function formatDateTime(value: string): string {
 
 export function errorText(error: unknown): string {
   const message = String(error).replace(/^Error: /, "");
+  if (message.startsWith("startup.not_launched:")) return `${tr("startup.not_launched")}: ${errorText(message.slice("startup.not_launched:".length))}`;
   const [key, ...details] = message.split(":");
   const translated = tr(key);
   return translated === key ? String(error) : `${translated}${details.length ? `: ${details.join(":").trimStart()}` : ""}`;

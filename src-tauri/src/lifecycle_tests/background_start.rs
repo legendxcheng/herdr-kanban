@@ -406,7 +406,7 @@ fn deletion_during_external_start_steps_prevents_later_work_and_resurrection() {
             },
             "{phase}"
         );
-        assert_eq!(s.sent.len(), if phase == "sent" { 1 } else { 0 }, "{phase}");
+        assert_eq!(s.sent.len(), if ["sent","session"].contains(&phase) { 1 } else { 0 }, "{phase}");
         assert!(s.closed.is_empty());
         drop(s);
         // A late worker must not rewrite the evidence left at deletion.
@@ -487,7 +487,9 @@ fn asynchronous_unknown_start_preserves_ownership_and_does_not_block_other_tasks
     assert_eq!(fake.0.lock().unwrap().sent, vec!["second"]);
     let pane = app.binding("a").unwrap().target.unwrap().pane_id;
     fake.0.lock().unwrap().panes.remove(&pane);
-    app.recover_lifecycle("a", &id).unwrap();
+    assert!(app.recover_lifecycle("a", &id).is_err());
+    let dispatch = format!("{id}:dispatch");
+    crate::task_reset::reset(&mut app.db.lock().unwrap(), "a", 0, Some(&id), Some(&dispatch), &op()).unwrap();
     app.submit_start("a", &op(), Arc::new(|_| {})).unwrap();
     assert_eq!(await_start(&app, "a").state.as_deref(), Some("succeeded"));
     assert_eq!(fake.0.lock().unwrap().sent, vec!["second", "first"]);

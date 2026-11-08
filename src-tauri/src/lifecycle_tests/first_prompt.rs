@@ -5,7 +5,7 @@ fn legacy_proven_unsent_survives_sqlite_file_reopen_without_automatic_input() {
     let (app, fake) = fixture();
     fake.0.lock().unwrap().before_input_error = Some("flow.not_idle".into());
     let id = op();
-    app.start_task("a", "frozen once", &id).unwrap_err();
+    app.legacy_start_task("a", "frozen once", &id).unwrap_err();
     let path =
         std::env::temp_dir().join(format!("kanban-first-reopen-{}.db", uuid::Uuid::new_v4()));
     {
@@ -45,7 +45,7 @@ fn newly_discovered_session_is_pinned_before_continuation_notification() {
     fake.0.lock().unwrap().before_input_error = Some("flow.not_idle".into());
     fake.0.lock().unwrap().missing_id = true;
     let id = op();
-    app.start_task("a", "once", &id).unwrap_err();
+    app.legacy_start_task("a", "once", &id).unwrap_err();
     fake.0.lock().unwrap().missing_id = false;
     fake.0.lock().unwrap().before_input_error = None;
     let pane = app.binding("a").unwrap().target.unwrap().pane_id;
@@ -74,7 +74,7 @@ fn workflow_start_survives_idle_working_idle_before_first_input() {
         state.first_prompt_states = Some([("working", false), ("unknown", true), ("idle", false)].into_iter().map(|(status,pending)| serde_json::json!({"agent_status":status,"interactive_ready":true,"launch_pending":pending,"state_change_seq":3})).collect());
     }
     let id = op();
-    app.start_task("a", "中文\n\n\t$skill", &id).unwrap();
+    app.legacy_start_task("a", "中文\n\n\t$skill", &id).unwrap();
     assert_eq!(status(&app, "a"), "in_progress");
     assert_eq!(
         view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
@@ -109,7 +109,7 @@ fn session_appearing_after_unsent_start_can_continue_but_known_session_switch_ca
         fake.0.lock().unwrap().before_input_error = Some("flow.not_idle".into());
         fake.0.lock().unwrap().missing_id = !known;
         let id = op();
-        app.start_task("a", "original", &id).unwrap_err();
+        app.legacy_start_task("a", "original", &id).unwrap_err();
         fake.0.lock().unwrap().before_input_error = None;
         fake.0.lock().unwrap().missing_id = false;
         if known {
@@ -138,7 +138,7 @@ fn concurrent_continuations_claim_one_durable_attempt() {
     let (app, fake) = fixture();
     fake.0.lock().unwrap().before_input_error = Some("flow.not_idle".into());
     let id = op();
-    app.start_task("a", "once", &id).unwrap_err();
+    app.legacy_start_task("a", "once", &id).unwrap_err();
     fake.0.lock().unwrap().before_input_error = None;
     let app = Arc::new(app);
     let barrier = Arc::new(std::sync::Barrier::new(3));
@@ -178,7 +178,7 @@ fn known_unsent_first_prompt_is_not_queued_as_receipt_recovery() {
     fake.0.lock().unwrap().before_input_error = Some("flow.not_idle".into());
     let id = op();
     assert_eq!(
-        app.start_task("a", "frozen original", &id).unwrap_err(),
+        app.legacy_start_task("a", "frozen original", &id).unwrap_err(),
         "flow.not_idle"
     );
     let flow = serde_json::to_value(view(&app.db.lock().unwrap(), "a").unwrap()).unwrap();
@@ -193,7 +193,7 @@ fn explicit_continuation_keeps_original_process_and_prompt_and_sends_once() {
     let (app, fake) = fixture();
     fake.0.lock().unwrap().before_input_error = Some("flow.not_idle".into());
     let id = op();
-    app.start_task("a", "frozen original", &id).unwrap_err();
+    app.legacy_start_task("a", "frozen original", &id).unwrap_err();
     let target = app.binding("a").unwrap().target.unwrap();
     fake.0.lock().unwrap().before_input_error = None;
     let flow = app.continue_first_prompt("a", &id, 0).unwrap();
@@ -219,7 +219,7 @@ fn continuation_rejects_unknown_manual_decisions_and_replaced_targets() {
         let (app, fake) = fixture();
         fake.0.lock().unwrap().before_input_error = Some("flow.not_idle".into());
         let id = op();
-        app.start_task("a", "original", &id).unwrap_err();
+        app.legacy_start_task("a", "original", &id).unwrap_err();
         let target = app.binding("a").unwrap().target.unwrap();
         match failure {
             "unknown" => {
@@ -266,7 +266,7 @@ fn repeated_unsent_attempts_keep_audit_and_late_receipt_never_replays() {
     let (app, fake) = fixture();
     fake.0.lock().unwrap().before_input_error = Some("flow.not_idle".into());
     let original = op();
-    app.start_task("a", "original", &original).unwrap_err();
+    app.legacy_start_task("a", "original", &original).unwrap_err();
     app.continue_first_prompt("a", &original, 0).unwrap_err();
     let next = view(&app.db.lock().unwrap(), "a").unwrap();
     assert!(next.can_continue_first_prompt);
@@ -308,7 +308,7 @@ fn shutdown_revokes_waiting_first_submission_and_future_continuations() {
         }
     }));
     let id = op();
-    assert!(app.start_task("a", "once", &id).is_err());
+    assert!(app.legacy_start_task("a", "once", &id).is_err());
     assert!(fake.0.lock().unwrap().sent.is_empty());
     assert!(app.continue_first_prompt("a", &id, 0).is_err());
     assert_ne!(status(&app, "a"), "in_progress");
@@ -319,7 +319,7 @@ fn interrupted_claim_is_unknown_on_reopen_and_cannot_be_continued() {
     let (app, fake) = fixture();
     fake.0.lock().unwrap().before_input_error = Some("flow.not_idle".into());
     let id = op();
-    app.start_task("a", "once", &id).unwrap_err();
+    app.legacy_start_task("a", "once", &id).unwrap_err();
     // Crash just after claiming a durable write, before any definitive result.
     app.db
         .lock()
@@ -341,7 +341,7 @@ fn manual_not_sent_confirmation_still_resolves_unknown_first_dispatch_without_se
     let (app, fake) = fixture();
     fake.0.lock().unwrap().send_error = true;
     let id = op();
-    app.start_task("a", "once", &id).unwrap_err();
+    app.legacy_start_task("a", "once", &id).unwrap_err();
     app.resolve("a", &format!("{id}:dispatch"), false, "")
         .unwrap();
     assert!(app.binding("a").unwrap().operation.is_none());

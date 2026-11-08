@@ -443,7 +443,7 @@ fn early_receipt_is_rechecked_and_committed_with_session_and_never_replayed() {
             }
         }
         let id = op();
-        let result = app.start_task("a", "测试", &id);
+        let result = app.legacy_start_task("a", "测试", &id);
         assert_eq!(result.is_ok(), !replace_after_probe);
         assert_eq!(fake.0.lock().unwrap().sent, vec!["测试"]);
         assert_eq!(fake.0.lock().unwrap().receipt_checks, 1);
@@ -615,13 +615,13 @@ fn failed_start_requires_pane_absence_before_releasing_reservation() {
     let (app, fake) = fixture();
     fake.0.lock().unwrap().prepare_error = true;
     let id = op();
-    assert!(app.start_task("a", "A", &id).is_err());
+    assert!(app.legacy_start_task("a", "A", &id).is_err());
     assert!(app.recover_lifecycle("a", &id).is_err());
     assert!(ensure_idle(&app.db.lock().unwrap(), "a", None).is_err());
     fake.0.lock().unwrap().panes.clear();
     app.recover_lifecycle("a", &id).unwrap();
     fake.0.lock().unwrap().prepare_error = false;
-    app.start_task("a", "A", &op()).unwrap();
+    app.legacy_start_task("a", "A", &op()).unwrap();
     assert_eq!(fake.0.lock().unwrap().sent, vec!["A"]);
 }
 
@@ -630,7 +630,7 @@ fn pane_busy_releases_rejected_start_without_closing_or_sending() {
     let (app, fake) = fixture();
     fake.0.lock().unwrap().prepare_busy = true;
     let id = op();
-    assert!(app.start_task("a", "A", &id).is_err());
+    assert!(app.legacy_start_task("a", "A", &id).is_err());
     assert_eq!(
         view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
         Some("failed")
@@ -643,7 +643,7 @@ fn pane_busy_releases_rejected_start_without_closing_or_sending() {
         assert_eq!(s.panes.len(), 1);
     }
     fake.0.lock().unwrap().prepare_busy = false;
-    app.start_task("a", "A", &op()).unwrap();
+    app.legacy_start_task("a", "A", &op()).unwrap();
     assert_eq!(fake.0.lock().unwrap().sent, vec!["A"]);
 }
 
@@ -652,7 +652,7 @@ fn pane_busy_legacy_unknown_can_be_checked_without_removing_pane() {
     let (app, fake) = fixture();
     fake.0.lock().unwrap().prepare_error = true;
     let id = op();
-    assert!(app.start_task("a", "A", &id).is_err());
+    assert!(app.legacy_start_task("a", "A", &id).is_err());
     app.end_flow(
         &id,
         "unknown",

@@ -169,7 +169,7 @@ fn retired_workers_cannot_save_sessions_dispatch_activate_or_restore_errors() {
         );
         assert_eq!(
             fake.0.lock().unwrap().sent.len(),
-            usize::from(phase == "sent")
+            usize::from(["sent", "session"].contains(&phase))
         );
     }
 }

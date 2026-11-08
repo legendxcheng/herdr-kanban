@@ -1,6 +1,32 @@
 use super::*;
 
 struct Resources;
+
+#[test]
+fn image_removed_after_preparation_prevents_startup_input() {
+    let (mut app,fake)=fixture();
+    let root=std::env::temp_dir().join(format!("startup-image-{}",op()));
+    std::fs::create_dir(&root).unwrap();
+    let file=root.join("kanban.db");
+    app.db.lock().unwrap().execute("VACUUM INTO ?1",[file.to_str().unwrap()]).unwrap();
+    app.db=Arc::new(Mutex::new(Connection::open(&file).unwrap()));
+    let image;
+    {
+        let db=app.db.lock().unwrap();
+        let draft=crate::images::open_draft(&db,"p1",Some("a")).unwrap();
+        image=crate::images::import_image(&db,&draft,"test.png","image/png","iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8DwHwyBNBAw/AcAR8oI+ItOQ4UAAAAASUVORK5CYII=").unwrap();
+        let document=serde_json::json!({"type":"doc","content":[{"type":"promptImage","attrs":{"imageId":image.id}}]}).to_string();
+        crate::images::save_task(&db,Some("a"),"p1","image",&document,crate::models::TaskPriority::Normal,Some(&draft)).unwrap();
+    }
+    let source=root.join("images").join(format!("{}.png",image.id));
+    fake.0.lock().unwrap().observe=Some(Arc::new(move |phase|{ if phase=="created" { std::fs::remove_file(&source).unwrap(); } }));
+    let app=Arc::new(app);
+    app.submit_start("a",&op(),Arc::new(|_|{})).unwrap();
+    assert_ne!(await_start(&app,"a").state.as_deref(),Some("succeeded"));
+    assert!(fake.0.lock().unwrap().launch_prompts.is_empty());
+    assert!(fake.0.lock().unwrap().prepared.is_empty());
+    drop(app); std::fs::remove_dir_all(root).unwrap();
+}
 impl crate::execution::Resources for Resources {
     fn read_text(&self, _: &str) -> Result<String, String> {
         panic!("file and skill references must never read bodies")

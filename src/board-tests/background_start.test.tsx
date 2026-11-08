@@ -5,6 +5,18 @@ import { describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 
 describe("保留其他拖放与派发行为", () => {
+  it("新启动显示确认送达，刷新和工作状态不触发继续首次发送", async () => {
+    bindTask();
+    board.storedTask.flow = { session_id: null, operation_id: "startup-input", kind: "start", state: "pending",
+      error: "", pane_id: agent.pane_id, requested_status: "in_progress", stage: "confirming_startup_prompt" };
+    await renderBoard();
+    expect((await screen.findAllByText("正在确认首条提示词已送达…")).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "继续首次发送" })).toBeNull();
+    cleanup();
+    await renderBoard();
+    await screen.findAllByText("正在确认首条提示词已送达…");
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => ["start_task", "continue_first_prompt", "send_prompt"].includes(command))).toHaveLength(0);
+  });
   it("启动仍未返回时卡片立即进入开发中且不阻塞新建任务", async () => {
     sendPrompt.mockReturnValue(new Promise(() => {}));
     await renderBoard();

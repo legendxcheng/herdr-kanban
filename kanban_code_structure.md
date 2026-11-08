@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-11-09。[GitHub #48](https://github.com/legendxcheng/herdr-kanban/issues/48) 将新任务首条正文随原生 Codex 启动传入，移除启动后的 idle 等待、正文粘贴及提交按键。启动前固定输入与操作意图，原生进程恢复执行前持久化身份；响应丢失只核实原次启动。新增启动记录表及同一应用的 `--codex-start` 模式，旧明确未发送续发和已有会话 resume 保留。本机／SSH 文本引用矩阵各 10/10，原生 WebView2 连续启动各 10/10，丢响应后重开核实各 1/1；全量前端 327 项通过，Rust 全量仍有两项未修改的标题 HTTP 测试失败。实现见 6.6.8，证据和限制见[启动输入验证](docs/verification/2026-11-09-startup-prompt.md)。
+
 更新日期：2026-11-08。首次提示词派发增加 30 秒有界就绪等待；明确未写入的首次启动可经“继续首次发送”向原进程提交冻结正文，未知结果仍只核验。新增 `first_prompt.rs` 和 `continue_first_prompt` IPC，无数据库迁移。本机连续 10 次取得精确回执；SSH 连续样本仍有就绪超时及正文后状态波动，不能标记自动送达验收全通过。本机及 SSH 原生桌面已验证原进程续发、刷新及重开不重发。实现见 6.6.7，完整证据与限制见[首次提示词验证](docs/verification/2026-11-08-first-prompt.md)。
 
 更新日期：2026-11-07。[GitHub #46](https://github.com/legendxcheng/herdr-kanban/issues/46) 增加应用级有界自动核验、当前任务终端自动重连及待核实原终端只读查看；取消人工核实 Evidence 必填，系统记录确认来源与目标。恢复共用原身份、回执、会话及事务规则，不重放历史输入。Todo 的未知手动派发也可查看原终端及重新核验，不改变持久化业务状态。无数据库迁移；本机与 SSH 的真实工作流和独立原生桌面验收已执行，详细结果、审查与交付边界见[自动恢复验证](docs/verification/2026-11-07-task-auto-recovery.md)。实现入口见 6.6.6。
@@ -1060,12 +1062,22 @@ Windows 进程查询可能先观察到 shell，而 Herdr 的 Agent 注册状态�
 
 ### 6.6.7 首次提示词就绪等待与明确未发送续发（2026-11-08，GitHub #47）
 
-- `Workflow::send_reserved` 将任务创建进程的首条派发交给 `Herdr::send_first_prompt`。Windows Codex 适配器在正文前用统一 30 秒截止时间和最多 151 次观察等待 idle/done、interactive_ready 且非 launch_pending；普通手动派发仍即时拒绝忙碌目标。blocked、协议错误、身份或会话变化立即停止。所有读取重试共享预算，正文写入后的不确定结果沿用原核验规则。
-- `first_prompt::unsent` 仅接受当前 start 的派发 not_sent，且证据为旧版 `flow.not_idle` 或新版 `first_prompt.not_written:`。须无已派发任务时间、后续有效派发、人工确认或已知会话活动，原完整目标必须匹配 valid 绑定。`Flow.can_continue_first_prompt` 是后端投影；自动核验调度跳过这类明确未发送操作。
+- 该终端提交路径自 #48 起仅用于旧记录兼容；新任务改走 6.6.8。`Workflow::send_reserved` 将旧首次派发交给 `Herdr::send_first_prompt`。Windows Codex 适配器在正文前用统一 30 秒截止时间和最多 151 次观察等待 idle/done、interactive_ready 且非 launch_pending；普通手动派发仍即时拒绝忙碌目标。blocked、协议错误、身份或会话变化立即停止。所有读取重试共享预算，正文写入后的不确定结果沿用原核验规则。
+- `first_prompt::unsent` 仅接受当前 start 的派发 not_sent，且证据为旧版 `flow.not_idle` 或新版 `first_prompt.not_written:`，排除 `startup_prompt_operations` 中的新启动输入记录。须无已派发任务时间、后续有效派发、人工确认或已知会话活动，原完整目标必须匹配 valid 绑定。`Flow.can_continue_first_prompt` 是后端投影；自动核验调度跳过这类明确未发送操作。
 - `continue_first_prompt_notifying` 在任务锁与执行代次检查下核验机器、原进程和已知会话，事务创建新 lifecycle/dispatch pending，保留旧记录及冻结正文、配置和图片引用。预检新发现的会话 ID 在领取事务固定；输入前再次核验会话记录没有用户消息/执行证据。旧请求、重复点击、崩溃后无肯定未写入证据的 pending 均不能重放。
 - 就绪阶段使用 `waiting_first_prompt`；普通看板与 All Tasks 共用“提示词尚未发送”和“继续首次发送”。续发开始和结束通过包含 project/task/current operation 的 `StartChanged` 刷新。窗口退出调用 `stop_starts` 撤销仍运行的首次启动，旧 worker 不再写入或回写成功。
 - 新 helper 方法 `first_prompt_available` 只读当前会话及有界会话文件；既有 helper 版本安装校验继续适用。`dispatch-input.jsonl` 增加状态、interactive_ready、launch_pending、序号、耗时及真实传输请求边界，不记录正文；检测规则未知时明确记录 unknown。
 - 新测试入口 `lifecycle_tests/first_prompt.rs`、`first_prompt_cli_tests.rs`、`first_prompt_acceptance.rs` 分别覆盖 Workflow/SQLite、实际 CLI 适配层、隔离真实 Herdr。自动化和原生验收的证据范围、SSH 未通过项及既有工作区改动边界见验证记录。
+
+### 6.6.8 首条提示词随启动输入（2026-11-09，GitHub #48）
+
+- `lifecycle::run_start` 在无已保存会话的新任务分支调用 `startup_prompt::start_with_prompt`；已保留进程及 `resume <UUID>` 不携带历史首条输入。冻结正文、模型、思考强度、工作目录和执行代次沿用原受理流程，图片在实际启动前重新校验。
+- 增量表 `startup_prompt_operations(operation_id, request_json)` 区分新旧协议。新输入与原 shell 身份在外部请求前，同事务写入该表及 `dispatch_operations(unknown)`；重开不会把缺失旧 send-text/Enter 日志当作未发送。取得新进程后仅在原上下文内更新绑定／操作目标，已发现会话立即固定，唯一精确回执通过现有事务完成送达。
+- `herdr_startup_prompt` 先只读取得新 pane 的 shell PID，再 stage 冻结请求到目标机的用户目录。`pane run` 只承载短 PowerShell 启动器命令；`codex_launcher` 读取请求并把完整正文作为 `--` 后的单个原生参数交给 Codex，仍为交互式 TUI。正文不经过 PowerShell、cmd 或模型读取文件的提示词替代；兼容 standalone launcher 与 npm 的原生 Windows 可执行文件。
+- 同一二进制的 `--codex-start` 模式在 GUI build 中附着父控制台；短命令使用 `Start-Process -NoNewWindow -Wait` 保持控制台存活。`create_new` 领取单次请求；`CREATE_SUSPENDED` 创建 Codex，先持久化操作指纹、PID 与 Windows 创建时间，再恢复其唯一主线程。落盘失败先终止挂起进程，启动失败保存带指纹的分类记录。文件只承担启动传输，成功消费后删除正文文件。
+- 不以 idle/done、working 或终端连接作为送达门槛／证明。原操作在 40 秒确认预算内只读查进程与回执，随后由既有有界协调器接续；启动响应丢失不再创建 pane、重启或追加输入。完整机器/session/workspace/pane/terminal/shell、PID+创建时间及已知会话继续匹配。
+- `startup.not_launched` 仅表示明确尚未运行输入的证据：正常错误处理和重开恢复均事务更新 `not_sent/failed`、释放预留，保留旧操作审计；其他未知结果保持原次核验。新路径阶段为 `confirming_startup_prompt`，普通看板和 All Tasks 共用“正在确认首条提示词已送达”。
+- `dispatch-input.jsonl` 记录 startup_intent/request/process/receipt，排除正文；`lifecycle_tests/startup_prompt.rs`、原生 argv 捕获测试及 `startup_prompt_acceptance.rs` 覆盖 SQLite、启动器和真实本机／SSH。Windows 总 argv 仍有系统长度上限，不截断或偷偷退回粘贴。详见验证记录。
 
 ## 7. 当前实现的关键边界与维护风险
 

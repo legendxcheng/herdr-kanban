@@ -213,6 +213,12 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
         .as_str()
         .ok_or("machine.invalid_request")?
     {
+        "stage_startup_prompt" | "observe_startup_prompt" => {
+            let startup: crate::startup_prompt::Request = serde_json::from_value(request["request"].clone()).map_err(|_| "machine.invalid_request")?;
+            if startup.target.session != cli.session { return Err("binding.identity_changed".into()); }
+            if request["method"] == "stage_startup_prompt" { Ok(json!(cli.stage_startup_prompt(&startup)?)) }
+            else { Ok(json!(cli.observe_startup_prompt(&startup)?)) }
+        }
         "task_title" => Ok(json!(
             crate::title_cli::CodexTitleGenerator::from_env()
                 .generate(text("input")?, &std::sync::atomic::AtomicBool::new(false))?

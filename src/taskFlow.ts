@@ -33,6 +33,7 @@ export function preparationLabel(task: Task): string | null {
     case "starting_agent": return "flow.starting_agent";
     case "checking_model": return "flow.checking_model";
     case "waiting_first_prompt": return "flow.waiting_first_prompt";
+    case "confirming_startup_prompt": return "flow.confirming_startup_prompt";
     case "dispatching": return "flow.dispatching";
     default: return "flow.preparing";
   }
