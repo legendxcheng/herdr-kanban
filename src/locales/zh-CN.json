@@ -207,6 +207,7 @@
   "priority.urgent": "紧急",
   "archive.action": "归档",
   "archive.success": "任务已归档",
+  "archive.closing": "正在关闭任务窗口并归档…",
   "archive.only_done": "只能归档已完成的任务",
   "archive.cleanup_required": "请先完成窗口清理再归档",
   "task.archived": "任务已归档，无法继续操作",

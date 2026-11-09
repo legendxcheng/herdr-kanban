@@ -58,16 +58,31 @@ describe("紧凑卡片与归档", () => {
     expect(confirm).not.toHaveBeenCalled(); confirm.mockRestore();
   });
 
-  it("后续启动失败不会隐藏完成清理问题，归档禁用且可重试清理", async () => {
+  it("后续启动失败不隐藏完成清理问题，归档可继续关闭窗口", async () => {
     board.storedTask.cleanup_required = true;
     board.storedTask.flow = { session_id: null, operation_id: "restart", kind: "start", state: "failed", error: "binding.identity_changed", pane_id: "p1" };
     await renderBoard("done");
     const archive = screen.getByRole("button", { name: "归档" });
-    expect(archive.matches(":disabled")).toBe(true);
-    expect(screen.getByText("请先完成窗口清理再归档")).toBeTruthy();
+    expect(archive.matches(":disabled")).toBe(false);
     expect(screen.getByRole("button", { name: "重试关闭窗口" })).toBeTruthy();
     fireEvent.click(archive);
-    expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "archive_task")).toBe(false);
+    expect(invoke).toHaveBeenCalledWith("archive_task", { id: board.storedTask.id });
+  });
+
+  it("关闭结果待核实时可重试归档", async () => {
+    board.storedTask.cleanup_required = true;
+    board.storedTask.flow = { session_id: null, operation_id: "close", kind: "complete", state: "unknown", error: "flow.close_pending", pane_id: "p1" };
+    await renderBoard("done");
+    const archive = screen.getByRole("button", { name: "归档" });
+    expect(archive.matches(":disabled")).toBe(false);
+    fireEvent.click(archive);
+    expect(invoke).toHaveBeenCalledWith("archive_task", { id: board.storedTask.id });
+  });
+
+  it("启动待核实时归档仍被禁止", async () => {
+    board.storedTask.flow = { session_id: null, operation_id: "start", kind: "start", state: "unknown", error: "", pane_id: "p1" };
+    await renderBoard("done");
+    expect(screen.getByRole("button", { name: "归档" }).matches(":disabled")).toBe(true);
   });
 
   it("已完成任务点击归档后消失并更新数量，不派发或连接终端", async () => {

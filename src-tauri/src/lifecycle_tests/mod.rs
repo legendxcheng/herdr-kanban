@@ -443,6 +443,7 @@ fn set_prompt(app: &Workflow, task: &str, text: &str) {
 mod allocation;
 mod background_start;
 mod completion;
+mod archive;
 mod recovery;
 mod first_prompt;
 mod startup_prompt;

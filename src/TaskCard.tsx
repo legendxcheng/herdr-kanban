@@ -39,8 +39,7 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, recover
   const [archiving, setArchiving] = useState(false);
   const [archiveError, setArchiveError] = useLocalizedMessage();
   const archiveReason = task.binding?.operation ? "dispatch.verify_required"
-    : ["pending", "unknown"].includes(task.flow?.state ?? "") ? "flow.verify_required"
-    : task.cleanup_required ? "archive.cleanup_required" : "";
+    : task.flow?.state === "pending" || (task.flow?.state === "unknown" && task.flow.kind !== "complete") ? "flow.verify_required" : "";
   const disabled = !!busy || !!removing || archiving || deleting;
   const controlsDisabled = disabled || flowUnresolved(task);
   const unsent = !!task.flow?.can_continue_first_prompt;
@@ -81,6 +80,7 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, recover
       onRemoved();
     } catch (error) {
       setArchiveError(String(error));
+      onChanged();
     } finally {
       archivingRef.current = false; setArchiving(false);
     }
@@ -134,12 +134,12 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, recover
         {titlePending && <span role="status" aria-label={titleStatus} title={titleStatus}><Icon name="progress" /></span>}
         {compact && (hasModel || source) && <button className="btn-icon" onClick={toggleDetails}
           aria-label={tr("task.details")} title={tr("task.details")} aria-expanded={detailsOpen} aria-controls={detailsId}><Icon name="info" /></button>}
-        <fieldset disabled={controlsDisabled} className="task-tools">
+        <fieldset disabled={disabled || flowPending(task)} className="task-tools">
           {taskColumn(task) === "done" && <button className="btn-icon" onClick={handleArchive} disabled={!!archiveReason}
             aria-label={tr("archive.action")} title={tr(archiveReason || "archive.action")}>
             {archiving ? <span className="spinner" /> : <Icon name="archive" />}
           </button>}
-          <button onClick={() => onEditTask(task.id)} className="btn-icon" aria-label={tr("task.edit")} title={tr("task.edit")}><Icon name="edit" /></button>
+          <button disabled={controlsDisabled} onClick={() => onEditTask(task.id)} className="btn-icon" aria-label={tr("task.edit")} title={tr("task.edit")}><Icon name="edit" /></button>
         </fieldset>
         </div>
       </div>
@@ -178,6 +178,7 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, recover
       </div>}
       {taskColumn(task) === "done" && archiveReason && <p className="task-notice">{tr(archiveReason)}</p>}
       {archiveError && <p role="alert" className="error task-notice">{archiveError}</p>}
+      {archiving && <p role="status" className="task-notice">{tr("archive.closing")}</p>}
       {(task.flow?.state === "unknown" || task.cleanup_required || task.binding?.operation) &&
         <fieldset disabled={disabled || flowPending(task)} className="task-recovery" {...controls}>
           {task.flow?.state === "unknown" && <button className="btn-secondary" onClick={onFlowRecover}>{tr(unsent ? "flow.continue_first_prompt" : recovery ? "recovery.retry" : "flow.recover")}</button>}

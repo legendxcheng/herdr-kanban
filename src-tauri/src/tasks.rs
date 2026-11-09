@@ -149,13 +149,14 @@ pub fn delete(db: &mut Connection, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 pub fn archive(db: &mut Connection, id: &str) -> Result<(), String> {
     let tx = db.transaction().map_err(err)?;
     archive_in_transaction(&tx, id)?;
     tx.commit().map_err(err)
 }
 
-fn archive_in_transaction(tx: &Connection, id: &str) -> Result<(), String> {
+pub(crate) fn archive_in_transaction(tx: &Connection, id: &str) -> Result<(), String> {
     let (status, archived): (String, bool) = tx
         .query_row(
             "SELECT status,archived_at IS NOT NULL FROM tasks WHERE id=?1",
@@ -191,6 +192,7 @@ fn archive_in_transaction(tx: &Connection, id: &str) -> Result<(), String> {
 
 #[derive(Clone, Copy)]
 pub enum CompletedTaskAction {
+    #[cfg(test)]
     Archive,
     Delete,
 }
@@ -275,6 +277,7 @@ fn remove_completed_item(
         return Ok(false);
     }
     match action {
+        #[cfg(test)]
         CompletedTaskAction::Archive => archive_in_transaction(&tx, id)?,
         CompletedTaskAction::Delete => {
             tx.execute("DELETE FROM tasks WHERE id=?1", [id])

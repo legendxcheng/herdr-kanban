@@ -3,6 +3,8 @@ use crate::workflow::{Target, Workflow, binding, pane_owner};
 use rusqlite::{Connection, OptionalExtension, params};
 #[path = "pane_allocation.rs"]
 pub(crate) mod pane_allocation;
+#[path = "task_archive.rs"]
+mod task_archive;
 
 #[cfg(all(test, windows))]
 #[path = "delete_cli_tests.rs"]
@@ -457,16 +459,20 @@ impl Workflow {
         result
     }
     pub fn complete_task(&self, task: &str, op: &str) -> Result<Outcome, String> {
-        let (workspace, cwd, _) = self.project_context(task)?;
+        self.project_context(task)?;
         if !self.begin_flow(task, op, "complete")? {
             return Ok(Outcome::default());
         }
+        self.complete_started(task, op, false)
+    }
+    fn complete_started(&self, task: &str, op: &str, archive: bool) -> Result<Outcome, String> {
         // Completion is a business decision, independent from external cleanup success.
         self.with_operation(task, op, |db| {
             db.execute("UPDATE tasks SET status='done',completed_at=CASE WHEN status='done' THEN completed_at ELSE ?2 END,updated_at=?2 WHERE id=?1", params![task, now()]).map_err(err)
         })?;
         let mut close_attempted = false;
         let result = (|| {
+            let (workspace, cwd, _) = self.project_context(task)?;
             if let Some(target) = self.binding(task)?.target {
                 self.reserve_target(task, op, &target)?;
                 if self.herdr.pane_exists(&target)? {
@@ -485,16 +491,22 @@ impl Workflow {
                         return Err("flow.close_pending".into());
                     }
                 }
-                self.with_operation(task, op, |db| {
-                    db.execute("DELETE FROM task_bindings WHERE task_id=?1", [task])
-                        .map_err(err)
-                })?;
             }
+            // Keep the lifecycle claim until binding release and optional archive
+            // commit together; no restart may enter between close and archive.
+            let mut db = self.db.lock().map_err(err)?;
+            let tx = db.transaction().map_err(err)?;
+            ensure_operation(&tx, task, op)?;
+            tx.execute("DELETE FROM task_bindings WHERE task_id=?1", [task]).map_err(err)?;
+            tx.execute("UPDATE lifecycle_operations SET state='succeeded',error='' WHERE id=?1", [op]).map_err(err)?;
+            if archive {
+                crate::tasks::archive_in_transaction(&tx, task)?;
+            }
+            tx.commit().map_err(err)?;
             Ok::<_, String>(())
         })();
         match result {
             Ok(()) => {
-                self.end_flow(op, "succeeded", "")?;
                 Ok(Outcome::default())
             }
             Err(error) => {

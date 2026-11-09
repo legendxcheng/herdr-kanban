@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-11-09（归档关闭 Pane）。单个归档和已完成列批量归档现在先核对并关闭任务仍绑定的 Pane，再原子提交归档与绑定释放；关闭失败或未知时保留卡片和绑定，可显式重试。无绑定任务仍可本地归档，删除语义不变。实现见 6.2.1，验证与共享工作区边界见[归档关闭验证](docs/verification/2026-11-09-archive-close-pane.md)。
+
 更新日期：2026-11-09。[GitHub #48](https://github.com/legendxcheng/herdr-kanban/issues/48) 将新任务首条正文随原生 Codex 启动传入，移除启动后的 idle 等待、正文粘贴及提交按键。启动前固定输入与操作意图，原生进程恢复执行前持久化身份；响应丢失只核实原次启动。新增启动记录表及同一应用的 `--codex-start` 模式，旧明确未发送续发和已有会话 resume 保留。本机／SSH 文本引用矩阵各 10/10，原生 WebView2 连续启动各 10/10，丢响应后重开核实各 1/1；全量前端 327 项通过，Rust 全量仍有两项未修改的标题 HTTP 测试失败。实现见 6.6.8，证据和限制见[启动输入验证](docs/verification/2026-11-09-startup-prompt.md)。
 
 更新日期：2026-11-08。首次提示词派发增加 30 秒有界就绪等待；明确未写入的首次启动可经“继续首次发送”向原进程提交冻结正文，未知结果仍只核验。新增 `first_prompt.rs` 和 `continue_first_prompt` IPC，无数据库迁移。本机连续 10 次取得精确回执；SSH 连续样本仍有就绪超时及正文后状态波动，不能标记自动送达验收全通过。本机及 SSH 原生桌面已验证原进程续发、刷新及重开不重发。实现见 6.6.7，完整证据与限制见[首次提示词验证](docs/verification/2026-11-08-first-prompt.md)。
@@ -248,6 +250,7 @@ herdr-kanban/
 │     ├─ herdr_agent_discovery.rs  后台状态查询、单 Agent 有界复查及逐 pane 错误保留
 │     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
 │     ├─ lifecycle.rs              自动分配、会话记录、完成清理与启动核实
+│     ├─ task_archive.rs           归档范围检查、关闭前生命周期占用、按机器执行和批量逐项结果
 │     ├─ task_recovery.rs          应用级自动核验、退避、机器健康观察与状态快照
 │     ├─ task_view.rs              独立查看授权、只读模式、执行代次与会话撤销
 │     ├─ idle_cleanup.rs / idle_cleanup_tests.rs  清理预览、确认、逐项日志、任务保护及恢复
@@ -551,8 +554,8 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `retry_task_recovery` | taskId、operationId | 为当前有效未知启动/派发重置有界核验批次，不发送输入 |
 | `delete_task` | id | 本地事务删除卡片，允许未决操作；级联释放绑定/会话/目录，保留操作事实，关闭本应用查看连接 |
 | `reset_task` | id、expectedEpoch、flowId、dispatchId、requestId | 原子隔离异常执行、保留内容退回 Todo，返回最新 Task；仅关闭本应用查看连接，不关闭 Herdr pane |
-| `archive_task` | id | 仅 done 且无未决操作/清理时归档；事务释放独占绑定，保留历史，关闭本应用查看连接 |
-| `archive_completed_tasks` | projectId、taskIds | 后台逐项归档快照中仍属于当前项目已完成列的任务，沿用单项归档守卫；返回 succeeded ID[]、skipped/failed {id,error}[] |
+| `archive_task` | id | 后台核对 done 状态，保存会话并关闭仍绑定的 Pane；确认消失后事务提交归档、释放绑定并关闭本应用查看连接；失败保留卡片 |
+| `archive_completed_tasks` | projectId、taskIds | 后台逐项核对快照范围，复用单项关闭并归档流程；失败保留当前项并继续后续项，返回 succeeded ID[]、skipped/failed {id,error}[] |
 | `delete_completed_tasks` | projectId、taskIds | 后台逐项删除快照中仍属于当前项目已完成列的任务；允许异常完成/派发状态，保留操作审计；返回同上 |
 | `search_files` | rootPath、query、可选 projectId/refresh | 本机后台扫描；远端共享完整索引后按相关性返回最多 50 个 FileEntry，refresh 强制重扫当前目录范围 |
 | `search_skills` | query、可选 rootPath/projectId/refresh | 项目优先，排序/去重后匹配，最多 30 个 SkillEntry；远端共享索引，refresh 强制重扫 |
@@ -671,17 +674,17 @@ Todo／Done 卡片标题最多两行，完整名称通过悬停查看；右上�
 
 准备中、需核实和异常状态占据操作行左侧，按钮支持键盘展开并通过 `aria-expanded` / `aria-controls` 关联详情；错误、完整准备阶段、重试、核实、退回 Todo 与清理入口放入详情区，展开时允许增高。查看提示词仍独立于未决状态 fieldset；完成、重试、重置、删除沿用各自禁用条件。信息与操作事件不触发选卡，既有按钮拖拽防护继续生效。不新增 IPC、持久化或迁移。浏览器与自动化边界见上述验证记录。
 
-`archive_task → tasks::archive` 在同一 SQLite 事务检查 done、未归档、无 pending/unknown 派发或生命周期操作、无未完成的 complete 清理，再写入归档时间、updated_at 并解除 task_bindings；成功后只释放本应用的终端查看连接，不调用 Herdr 关闭 pane、停止 Agent 或发送 prompt。重复归档幂等；事务失败保留卡片、绑定与证据。任务正文、priority、快照、会话及操作历史全部保留。
+`archive_task → Workflow::archive_task（task_archive.rs）→ lifecycle::complete_started`：在同一 SQLite 事务核对 done、未归档及批量项目范围，并预占 complete 生命周期操作。有绑定时在任务所属本机或 SSH 电脑重新核验完整目标身份、保存精确 Codex 会话、关闭 Pane 并查询确认消失；外部调用不持数据库锁。归档时间、绑定释放和 complete 成功在同一最终事务提交，防止关闭后、归档前被并发重新启动。无绑定时仅运行本地归档事务及既有未决守卫，不要求远端在线。成功后释放本应用查看连接；不发送 prompt。重复归档幂等，任务正文、priority、快照、会话及操作历史保留。
 
-最近一次 complete 的 failed/unknown 独立派生 `cleanup_required`；后续 start 失败不会掩盖它。前端使用该字段保留清理重试入口，后端重新核对后才允许归档。归档互斥复用生命周期守卫和派发事务；更新、状态改变、派发、开始/完成、修复绑定及终端目标解析均拒绝已归档任务，防止迟到请求重新激活。
+最近一次 complete 的 failed/unknown 独立派生 `cleanup_required`；后续 start 失败不会掩盖它。归档现在可显式重试失败或未知的关闭流程，先检查原 Pane 是否已消失，已消失则不重复发送关闭。身份变化、会话缺失、断线或写库失败均保留卡片与绑定；关闭后归档事务失败会回滚绑定释放，供后续核实。pending 生命周期、未知 start 和未决派发仍阻止归档。单项归档期间显示“正在关闭任务窗口并归档”，失败后刷新卡片状态。更新、状态改变、派发、开始/完成、修复绑定及终端目标解析继续拒绝已归档任务。
 
 归档成功后看板先从本地列表移除该任务并清理相关选择/弹层，再刷新任务和 Agent 占用信息；即使列表刷新失败，卡片与统计也不会回退。归档失败保留卡片并显示错误，不额外弹确认框。当前没有归档列表或恢复归档入口；列标题的批量入口见下一节。
 
 ### 6.2.1.1 已完成列批量归档与删除（2026-10-24）
 
-`KanbanBoard → api.archiveCompletedTasks/deleteCompletedTasks → commands::archive_completed_tasks/delete_completed_tasks → tasks::remove_completed`。完成列标题右侧提供两个带本地化悬停提示及无障碍名称的紧凑图标。空列禁用；归档直接执行，删除使用一次带任务数量及正文/本地会话删除说明的确认。点击时以 `taskColumn` 固定当前项目已完成列的 ID 快照，后来完成的任务不追加；批量执行期间锁定这批卡片的编辑、删除、恢复及拖放，保留其他任务和新建入口。
+`KanbanBoard → api.archiveCompletedTasks/deleteCompletedTasks → commands`：归档进入 `Workflow::archive_completed_tasks`，删除继续进入 `tasks::remove_completed`。完成列标题右侧提供两个带本地化悬停提示及无障碍名称的紧凑图标。空列禁用；归档直接执行，删除使用一次带任务数量及正文/本地会话删除说明的确认。点击时以 `taskColumn` 固定当前项目已完成列的 ID 快照，后来完成的任务不追加；批量执行期间锁定这批卡片的编辑、删除、恢复及拖放，保留其他任务和新建入口。
 
-IPC 使用后台线程执行本地事务。每个去重后的 ID 都在自己的事务内重新核对项目、done 状态及未归档条件，并检查 `start_requests` 对应的 pending/unknown start，跳过已投影回开发中的任务；归档继续共用单项归档事务逻辑，待核实派发/生命周期及完成清理未结束均保留为跳过。删除沿用本地删除语义，允许未决完成/派发和损坏的目标文本，级联释放绑定、会话及目录，保留操作审计。不新增数据库迁移；不查询 Herdr 或关闭底层 pane。事务失败只回滚当前任务，继续处理后续 ID；提交成功后释放本应用查看连接。
+IPC 使用后台线程逐项处理。归档的每个去重 ID 在事务内重新核对项目、done 及未归档条件，再取得关闭操作占用；已改变范围、未知启动或未决派发跳过，关闭/身份/传输失败计入 failed，其他项继续。删除保留原先的已完成列投影检查与纯本地删除语义，允许未决完成/派发和损坏的目标文本，级联释放绑定、会话及目录，保留操作审计，不查询或关闭 Herdr Pane。两种操作均不新增数据库迁移；提交成功后释放本应用查看连接。
 
 返回的 `succeeded` 是实际已提交的任务 ID，`skipped` 和 `failed` 分别携带任务 ID 及原因。列内展示三项数量及可展开的逐项原因；失败或跳过的任务等待列表对账。成功项先在本地移除、更新数量并清理关联弹层，再统一刷新；组件持有已移除 ID 集合，避免迟到旧列表恢复已删除/归档卡片。切项目卸载后忽略旧批次回调，不影响新项目。
 

@@ -207,6 +207,7 @@
   "priority.urgent": "Urgent",
   "archive.action": "Archive",
   "archive.success": "Task archived",
+  "archive.closing": "Closing the task pane and archiving…",
   "archive.only_done": "Only completed tasks can be archived",
   "archive.cleanup_required": "Finish pane cleanup before archiving",
   "task.archived": "This task is archived",

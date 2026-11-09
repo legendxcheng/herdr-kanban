@@ -213,16 +213,18 @@ pub fn reset_task(
 }
 
 #[tauri::command]
-pub fn archive_task(
-    state: State<DbState>,
-    terminals: State<Arc<crate::native_terminal::NativeTerminalManager>>,
+pub async fn archive_task(
+    app: State<'_, Arc<crate::workflow::Workflow>>,
+    terminals: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
     id: String,
 ) -> Result<(), String> {
-    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
-    crate::tasks::archive(&mut conn, &id)?;
-    drop(conn);
-    terminals.close_task(&id);
-    Ok(())
+    let app = app.inner().clone();
+    let terminals = terminals.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.archive_task(&id, None)?;
+        terminals.close_task(&id);
+        Ok(())
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -240,19 +242,18 @@ pub fn delete_task(
 
 #[tauri::command]
 pub async fn archive_completed_tasks(
-    state: State<'_, DbState>,
+    app: State<'_, Arc<crate::workflow::Workflow>>,
     terminals: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
     project_id: String,
     task_ids: Vec<String>,
 ) -> Result<crate::tasks::BatchTaskResult, String> {
-    remove_completed_tasks(
-        state.0.clone(),
-        terminals.inner().clone(),
-        project_id,
-        task_ids,
-        crate::tasks::CompletedTaskAction::Archive,
-    )
-    .await
+    let app = app.inner().clone();
+    let terminals = terminals.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = app.archive_completed_tasks(&project_id, &task_ids);
+        for id in &result.succeeded { terminals.close_task(id); }
+        Ok(result)
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
