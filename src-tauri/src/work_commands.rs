@@ -191,7 +191,6 @@ pub async fn terminal_open(
     window: tauri::Window,
     app: State<'_, Arc<Workflow>>,
     native: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
-    search: State<'_, Arc<crate::mention_search::Search>>,
     task_id: String,
     connection_id: String,
     bounds: crate::native_terminal::Bounds,
@@ -199,7 +198,6 @@ pub async fn terminal_open(
 ) -> Result<String, String> {
     let app = app.inner().clone();
     let native = native.inner().clone();
-    let search = search.inner().clone();
     let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
     let view = native.select(
         connection_id.clone(),
@@ -210,7 +208,7 @@ pub async fn terminal_open(
         }),
     )?;
     tauri::async_runtime::spawn_blocking(move || {
-        native.open(view, app, search, hwnd)?;
+        native.open(view, app, hwnd)?;
         Ok(connection_id)
     })
     .await
@@ -229,15 +227,14 @@ pub async fn workspace_terminal_open(
     window: tauri::Window,
     app: State<'_, Arc<Workflow>>,
     native: State<'_, Arc<crate::native_terminal::NativeTerminalManager>>,
-    search: State<'_, Arc<crate::mention_search::Search>>,
     project_id: String,
     connection_id: String,
     bounds: crate::native_terminal::Bounds,
     output: tauri::ipc::Channel<Output>,
+    reconnect: Option<bool>,
 ) -> Result<String, String> {
     let app = app.inner().clone();
     let native = native.inner().clone();
-    let search = search.inner().clone();
     let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
     let view = native.select_owner(
         connection_id.clone(),
@@ -247,8 +244,9 @@ pub async fn workspace_terminal_open(
             let _ = output.send(packet);
         }),
     )?;
+    if reconnect.unwrap_or(false) { view.resume_only(); }
     tauri::async_runtime::spawn_blocking(move || {
-        native.open(view, app, search, hwnd)?;
+        native.open(view, app, hwnd)?;
         Ok(connection_id)
     })
     .await

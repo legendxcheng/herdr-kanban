@@ -158,7 +158,7 @@ pub fn install(machine: &Machine, executable: &std::path::Path) -> Result<Machin
     )
 }
 
-fn install_with_budget(
+pub(crate) fn install_with_budget(
     machine: &Machine,
     executable: &std::path::Path,
     budget: &transport::Budget<'_>,

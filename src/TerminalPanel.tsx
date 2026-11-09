@@ -47,7 +47,7 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
       setState("terminal.disconnected"); setError(String(e));
       void api.closeTerminal(connectionId).catch(() => {});
       const delay = [2000, 5000, 10000, 30000, 60000][retries.current.count];
-      if (!workspace && delay !== undefined && transientConnectionError(code)) {
+      if (delay !== undefined && transientConnectionError(code)) {
         retries.current.count += 1;
         setState("terminal.reconnecting");
         retryTimer = window.setTimeout(() => { if (active) setAttempt(n => n + 1); }, delay);
@@ -79,7 +79,10 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
     window.addEventListener("resize", update);
     document.addEventListener("visibilitychange", update);
     const initial = terminalBounds(host.current);
-    const open = workspace ? api.openWorkspaceTerminal : api.openTerminal;
+    const open = workspace
+      ? (id: string, connection: string, bounds: api.TerminalBounds, output: (packet: api.TerminalOutput) => void) =>
+        api.openWorkspaceTerminal(id, connection, bounds, output, retries.current.count > 0)
+      : api.openTerminal;
     void open(workspace?.id ?? task!.id, connectionId, initial, packet => {
       if (active && !ended && packet.kind === "closed") fail(packet.message);
       if (active && !ended && packet.kind === "mode") {

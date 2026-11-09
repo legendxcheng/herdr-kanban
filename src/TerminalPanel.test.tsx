@@ -3,7 +3,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { TerminalPanel } from './TerminalPanel';
-import type { Task } from './types';
+import type { Project, Task } from './types';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), Channel: class { onmessage = () => {}; } }));
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn() }));
 const task = { id: 'a', name: '任务 A', binding: { state: 'valid', target: { pane_id: 'p1' } } } as Task;
@@ -13,6 +13,28 @@ beforeEach(() => {
   vi.mocked(invoke).mockReset().mockImplementation(async (_command, args) => (args as { connectionId: string })?.connectionId);
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+it('reconnects the selected Workspace shell after a reset without creating or dispatching a task', async () => {
+  vi.useFakeTimers();
+  const channels: { onmessage: (packet: unknown) => void }[] = [];
+  vi.mocked(invoke).mockImplementation(async (name, args) => {
+    if (name === 'workspace_terminal_open') channels.push((args as { output: typeof channels[number] }).output);
+  });
+  const workspace = { id: 'remote-project', machine_id: 'remote', name: 'Remote' } as Project;
+  const view = render(<TerminalPanel task={null} workspace={workspace} />);
+  await act(async () => {});
+  await act(async () => { channels[0].onmessage({ kind: 'closed', message: 'terminal.disconnected' }); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+  expect(channels).toHaveLength(2);
+  expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === 'workspace_terminal_open').map(([, args]) => (args as { reconnect: boolean }).reconnect)).toEqual([false, true]);
+  expect(screen.getByText('Herdr 已打开')).toBeTruthy();
+  await act(async () => { channels[1].onmessage({ kind: 'closed', message: 'terminal.disconnected' }); });
+  view.rerender(<TerminalPanel task={null} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(300000); });
+  expect(channels).toHaveLength(2);
+  expect(vi.mocked(invoke).mock.calls.every(([name]) => ['workspace_terminal_open', 'terminal_close', 'terminal_bounds'].includes(name))).toBe(true);
+  expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === 'workspace_terminal_open').every(([, args]) => (args as { projectId: string }).projectId === workspace.id)).toBe(true);
+});
 
 it('automatically reconnects a disconnected task at most six times and cancels old selection retries', async () => {
   vi.useFakeTimers();

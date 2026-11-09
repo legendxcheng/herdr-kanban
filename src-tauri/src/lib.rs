@@ -27,6 +27,7 @@ mod remote_helper;
 mod remote_images;
 mod remote_install;
 mod remote_resources;
+mod remote_reads;
 mod remote_transport;
 mod search_connection;
 mod search_wire;
@@ -143,12 +144,14 @@ pub fn run() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 use tauri::Manager;
+                machine_commands::shutdown_connections();
                 window.state::<Arc<workflow::Workflow>>().stop_starts();
                 window
                     .state::<Arc<native_terminal::NativeTerminalManager>>()
-                    .close_all();
+                    .shutdown();
                 window.state::<task_titles::TaskTitles>().shutdown();
                 window.state::<Arc<mention_search::Search>>().shutdown();
+                remote_reads::shutdown();
                 window.state::<Arc<task_recovery::Recovery>>().shutdown();
             }
         })

@@ -225,6 +225,10 @@ pub trait Herdr: Send + Sync {
             .find(|t| t.same_identity(expected))
             .ok_or_else(|| "binding.identity_changed".into())
     }
+    /// Fresh read-only authorization observation, batched at the execution computer.
+    fn view_identity(&self, target: &Target) -> Result<Option<String>, String> {
+        crate::task_view::observe_identity(self, target)
+    }
     fn send(&self, target: &Target, prompt: &str) -> Result<(), SendError>;
     /// Multi-command adapters also check between external side effects.
     fn send_checked(

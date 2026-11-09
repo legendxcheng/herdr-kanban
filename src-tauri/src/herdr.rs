@@ -491,6 +491,12 @@ impl Herdr for Cli {
         }
         crate::codex_catalog::local(cwd)
     }
+    fn view_identity(&self, target: &Target) -> Result<Option<String>, String> {
+        if let Some(machine) = &self.remote {
+            return crate::remote_transport::request(machine, serde_json::json!({"method":"view_identity","target":target}));
+        }
+        crate::task_view::observe_identity(self, target)
+    }
     fn session_id(&self, target: &Target) -> Result<Option<String>, String> {
         if let Some(machine) = &self.remote {
             return crate::remote_transport::request(

@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-11-09。GitHub #49 将已访问远端电脑的原生查看连接及共享只读连接保留至 Kanban 退出，取消远端 60/90 秒空闲回收和 3 组查看客户端淘汰；同机切换复用，传输 reset 后当前任务及普通终端有界重连。停用与连接检查按代次取消，自动重连不创建替代 shell 或重放业务输入。详情及独立提交、实际验证边界见 [SSH 连接生命周期验证](docs/verification/2026-11-09-ssh-connection-lifetime.md)。
+
 更新日期：2026-11-09（归档关闭 Pane）。单个归档和已完成列批量归档现在先核对并关闭任务仍绑定的 Pane，再原子提交归档与绑定释放；关闭失败或未知时保留卡片和绑定，可显式重试。无绑定任务仍可本地归档，删除语义不变。实现见 6.2.1，验证与共享工作区边界见[归档关闭验证](docs/verification/2026-11-09-archive-close-pane.md)。
 
 更新日期：2026-11-09。[GitHub #48](https://github.com/legendxcheng/herdr-kanban/issues/48) 将新任务首条正文随原生 Codex 启动传入，移除启动后的 idle 等待、正文粘贴及提交按键。启动前固定输入与操作意图，原生进程恢复执行前持久化身份；响应丢失只核实原次启动。新增启动记录表及同一应用的 `--codex-start` 模式，旧明确未发送续发和已有会话 resume 保留。本机／SSH 文本引用矩阵各 10/10，原生 WebView2 连续启动各 10/10，丢响应后重开核实各 1/1；全量前端 327 项通过，Rust 全量仍有两项未修改的标题 HTTP 测试失败。实现见 6.6.8，证据和限制见[启动输入验证](docs/verification/2026-11-09-startup-prompt.md)。
@@ -288,12 +290,14 @@ herdr-kanban/
 │     ├─ pane_allocation.rs        同 workspace 分配互斥、创建前快照与未知结果隔离
 │     ├─ mention_search.rs / mention_search_tests.rs  完整远端索引、预热、刷新、限量缓存和身份隔离
 │     ├─ search_connection.rs / search_wire.rs  查询/控制共用的持久 SSH 子进程、有界帧协议及超时清理
+│     ├─ ssh_read_pool.rs / remote_reads.rs  应用级只读通道池、连接身份、停用及在途取消
+│     ├─ machine_connection_attempt.rs  接入检查代次、取消及发布边界
 │     ├─ remote_control.rs / remote_control_tests.rs  单次启动私有控制连接、身份固定及断线不重放回归
 │     ├─ start_timing.rs           有界启动阶段计时日志，不记录提示词内容
 │     ├─ native_terminal.rs        任务定位、独立 WezTerm/官方 Herdr 客户端复用及关闭
 │     ├─ workspace_terminal.rs     Workspace 普通终端创建意图、持久化复用、身份与占用保护
 │     ├─ herdr_workspace_terminal.rs  普通 pane 身份核验、唯一创建标记查找与带 cwd 的 Tab 创建
-│     ├─ native_view_session.rs    电脑/session 客户端池、短期任务选择与隐藏/空闲回收
+│     ├─ native_view_session.rs    电脑/session 保留客户端、短期选择、本机空闲回收及连接阶段日志
 │     ├─ native_client_connection.rs  私有管道连接、原样转发及单 pane 显示/恢复超时
 │     ├─ native_client_wire.rs      endpoint generation 1 zoom 信封、回执及单 pane 快照确认
 │     ├─ native_client_profile.rs   查看窗口配置快照、默认隐藏侧栏及独立偏好目录清理
@@ -947,13 +951,15 @@ Herdr 侧栏默认收起且完全隐藏，保留原生快捷键主动展开。�
 
 **生命周期与导航边界。** 在已验证的 Herdr 0.9.5 中，选中任务仅定位 Kanban 自己的客户端；其他客户端可保留各自 workspace/tab。同一 Tab 的 zoom、pane 焦点、分屏布局及尺寸由 Herdr 共享；另一个客户端若查看同一 Tab，会受到本次 zoom 的影响。用户随后可在完整 Herdr UI 中导航，Kanban 绑定不会自动改成当前 pane。Windows Job 清理 WezTerm 及 Herdr client；不终止外部 server/Agent。用户在 Herdr 菜单主动关闭 pane 则执行真实的 Herdr 操作。
 
-**连接复用（2026-10-26）。** `NativeTerminalManager` 按 CLI executable、机器/profile/target/host identity、session 保留最多 3 个原生客户端。前端 connectionId 仍是一次任务选择，关闭/切换仅停止该选择并隐藏查看窗口，下一次选择复用原进程、专用管道和 SSH 桥接。每次先检查本地任务/绑定/生命周期，再实时验证远端进程身份；远端通过查询长连接执行本机只读 CLI 校验，不复用身份结果。校验后及就绪前再次检查任务绑定；过时选择不能启动或显示窗口。
+**连接复用（2026-10-26）。** `NativeTerminalManager` 按 CLI executable、机器/profile/target/host identity/helper、session 保留原生客户端。远端在首次访问后保留至应用退出，不按任务数量扩增；本机仍最多保留 3 个客户端。前端 connectionId 仍是一次任务选择，关闭/切换仅停止该选择并隐藏查看窗口，下一次选择复用原进程、专用管道和 SSH 桥接。每次先检查本地任务/绑定/生命周期，再实时验证远端进程身份；远端通过查询长连接执行本机只读 CLI 校验，不复用身份结果。校验后及就绪前再次检查任务绑定；过时选择不能启动或显示窗口。
 
-复用时生成新的 pane.zoom 请求 ID，等待对应回执与目标快照；旧回执被丢弃。返回同一 pane 的幂等定位可使用最近已确认快照配合本次新回执，不等待不存在的重复快照。切换或隐藏期间拒绝输入，仍传递握手、尺寸和图形确认；就绪后只转发与最新客户端快照焦点一致的 pane 输入，保留原生菜单和主动导航。空闲客户端 60 秒后回收，容量满时淘汰最久未使用客户端；任务删除/归档/完成/绑定修复关闭仍选中该任务的客户端，应用退出全部关闭。受控断线通过原有“重新连接”创建新客户端，不重发 Prompt。配置快照随保留客户端继续使用，回收重建才重新读取；字号恢复跳过旧日志尾部，并在窗口重新获焦时读取共享字号偏好。真实测量与限制见[长连接验收](docs/verification/2026-10-26-persistent-connections.md)。
+复用时生成新的 pane.zoom 请求 ID，等待对应回执与目标快照；旧回执被丢弃。返回同一 pane 的幂等定位可使用最近已确认快照配合本次新回执，不等待不存在的重复快照。切换或隐藏期间拒绝输入，仍传递握手、尺寸和图形确认；就绪后只转发与最新客户端快照焦点一致的 pane 输入，保留原生菜单和主动导航。仅本机空闲客户端 60 秒后回收，容量满时淘汰最久未使用本机客户端；远端不因空闲或访问更多电脑而回收。任务删除/归档/完成/绑定修复取消该任务选择及输入，健康机器连接仍可用于其他对话。停用电脑关闭对应任务与普通终端查看连接，退出释放全部资源。当前对话发生可恢复断线时按 2/5/10/30/60 秒有界重建，耗尽后保留手动重试；后台失效客户端下次访问重建，不重发 Prompt。配置快照随保留客户端继续使用，回收重建才重新读取；字号恢复跳过旧日志尾部，并在窗口重新获焦时读取共享字号偏好。真实测量与限制见[长连接验收](docs/verification/2026-10-26-persistent-connections.md)。
 
 **单 pane 验证。** 本次共享工作区前端 136 项、Rust 150 项通过，12 项 opt-in live 默认忽略；新增真实 Herdr/WezTerm zoom 用例显式运行通过。真实 Tauri/WebView2 + 两个空闲 Codex 验证任务点击、实际终端缓冲区仅显示对应任务、输入隔离、后台分屏恢复、快速切换、reload 重连及关闭看板保留 Agent。生产前端构建及 Rust debug 构建通过；桌面截图因遮挡未作为证据，未打包安装。详见[单 pane 验收](docs/verification/2026-10-25-selected-task-pane.md)。
 
 **验证。** 当前独立导航修正：前端 136 项、Rust 138 项通过，10 项 opt-in live 测试默认 ignored，其中新增原生连接定位测试另行显式运行通过；生产前端构建及 tauri dev 编译通过。真实 Tauri+WezTerm+Herdr 0.9.5 双窗口验证不同 workspace/tab 保持独立、连续/快速选任务正确、输入目标正确、旧客户端清理、原生右键菜单及关闭看板后 Agent 保留，见[独立导航验收](docs/verification/2026-10-25-herdr-client-navigation.md)。此前[原生客户端验收](docs/verification/2026-10-25-herdr-native-client.md)及桥接验收保留历史语义。旧 terminal.rs 在 cfg(test) 下保留历史协议回归，不进入产品。没有数据库迁移；跨屏 DPI、虚拟桌面、完整物理鼠标/IME/剪贴板和 NSIS 安装升级未完整验收。
+
+2026-11-09 #49：任务查看及每秒授权观察通过独立 `view_identity` 只读通道，在远端执行原有目标→Codex 会话→目标复核，避免每一步重建 SSH；原生打开不再额外调用搜索通道重复校验。查看选择与就绪仍核验当前本地授权，连接状态不代表派发成功。连接创建、复用、授权、就绪及关闭原因写入 `terminal/connection-events.jsonl`，保留一个轮转文件，不记录正文与认证信息。原生连接池摘除资源后在锁外停止和记录日志。
 
 ### 6.5.1 Workspace 普通终端（2026-10-29，GitHub #43）
 
@@ -1206,6 +1212,10 @@ Herdr 对外仍使用 `Cli` 与 `Herdr`。内部 `herdr_cli` 承担进程执行�
 共享工作区的验证结果、提交快照与真实桌面验收分别记录在[首批重构验收记录](docs/verification/2026-10-24-kanban-first-refactor.md)。本次变更只整理内部职责，不将其他未提交功能纳入重构提交。
 
 ## 12. SSH 执行电脑（2026-10-27 更新）
+
+2026-11-09 #49：引用索引与目标查询同样使用应用级只读连接池，缓存 TTL 与连接生命周期独立；协议半帧/管道错误归一为可重试的连接错误，身份和格式错误仍分别报告。机器连接检查通过取消令牌及发布检查防止停用或退出后的迟到启用；DB 和各连接池的启停顺序由短转换锁协调，安装不持有此锁。普通终端打开 IPC 增加可选 `reconnect`：自动重连只读取原保存目标，不进入 shell 创建流程。无数据库迁移。
+
+`remote_reads` 为列表、状态、Git 和 `view_identity` 选择独立只读通道，复用应用级池；启动与派发仍使用操作专用控制连接，不进入共享队列。
 
 一个看板使用一份本地 SQLite，不共享数据库。`machines.rs` 的 schema 12 将旧数据统一归属 `local`；Project 以 machine/session/workspace 唯一，绑定以 machine/session/pane 唯一，执行目标 JSON、派发/生命周期操作、启动快照、工作目录、会话和分配记录均保留 machine_id。名称可改，已有任务的项目不可换电脑。停用机器不删除历史。
 

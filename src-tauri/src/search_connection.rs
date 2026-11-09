@@ -12,6 +12,8 @@ use std::{
 };
 
 type Exchange = (Value, mpsc::Sender<Result<Value, String>>);
+#[path = "ssh_read_pool.rs"]
+pub(crate) mod pool;
 pub struct Connection {
     child: Child,
     requests: Option<mpsc::SyncSender<Exchange>>,
@@ -132,6 +134,7 @@ mod tests {
         command.args(["-NoProfile", "-NonInteractive", "-Command", r#"
             if ($env:KANBAN_SEARCH_TEST_MODE -eq 'eof') { exit }
             if ($env:KANBAN_SEARCH_TEST_MODE -eq 'wait') { Start-Sleep 60; exit }
+            if ($env:KANBAN_SEARCH_TEST_MODE -eq 'partial') { $s=[Console]::OpenStandardOutput(); $s.Write([byte[]]@(8,0,0,0,123),0,5); $s.Flush(); exit }
             $reader = [IO.BinaryReader]::new([Console]::OpenStandardInput())
             $writer = [IO.BinaryWriter]::new([Console]::OpenStandardOutput())
             while ($true) {
@@ -159,6 +162,79 @@ mod tests {
             helper_name: None,
             host_identity: Some("expected-host".into()),
         }
+    }
+    #[test]
+    fn reset_during_a_read_has_a_retryable_code_and_next_consumer_reconnects() {
+        let pool = pool::Pool::default();
+        assert_eq!(
+            pool.request(&machine(), "view", json!({}), || Ok(peer("partial")))
+                .unwrap_err(),
+            "machine.connection_failed"
+        );
+        assert_eq!(
+            pool.request(&machine(), "view", json!({"restored":true}), || Ok(peer(
+                "echo"
+            )))
+            .unwrap()["restored"],
+            true
+        );
+    }
+    #[test]
+    fn read_pool_retains_four_machines_and_disable_cancels_a_blocked_read() {
+        use std::sync::Arc;
+        let pool = Arc::new(pool::Pool::default());
+        let mut targets = Vec::new();
+        for n in 0..4 {
+            let mut machine = machine();
+            machine.id = format!("machine-{n}");
+            assert_eq!(
+                pool.request(&machine, "query", json!({"n":n}), || Ok(peer("echo")))
+                    .unwrap()["n"],
+                n
+            );
+            targets.push(machine);
+        }
+        for machine in &targets {
+            assert_eq!(
+                pool.request(machine, "query", json!({"warm":true}), || panic!(
+                    "must reuse"
+                ))
+                .unwrap()["warm"],
+                true
+            );
+        }
+        let waiting = pool.clone();
+        let machine = targets[0].clone();
+        let (started, ready) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            waiting.request(&machine, "blocked", json!({}), || {
+                let connection = peer("wait");
+                started.send(()).unwrap();
+                Ok(connection)
+            })
+        });
+        ready.recv().unwrap();
+        let start = Instant::now();
+        pool.disable_machine(&targets[0].id);
+        assert_eq!(worker.join().unwrap().unwrap_err(), "machine.cancelled");
+        assert!(start.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            pool.request(&targets[0], "query", json!({}), || panic!("disabled"))
+                .unwrap_err(),
+            "machine.disabled"
+        );
+        assert!(
+            pool.request(&targets[1], "query", json!({}), || panic!(
+                "other machine remains connected"
+            ))
+            .is_ok()
+        );
+        pool.shutdown();
+        assert_eq!(
+            pool.request(&targets[1], "query", json!({}), || panic!("shutdown"))
+                .unwrap_err(),
+            "machine.cancelled"
+        );
     }
     #[test]
     fn persistent_child_preserves_request_identity_and_rejects_wrong_host() {

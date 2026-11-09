@@ -48,7 +48,7 @@ it("routes remote Workspace by project ID and offers reconnect after a failure",
   const remote = { ...project, id: "remote-project", machine_id: "remote" };
   render(<KanbanBoard project={remote} machineName="devpc" />);
   fireEvent.click(await screen.findByRole("button", { name: "打开终端" }));
-  await screen.findByText("连接已断开");
+  await screen.findByText("正在自动重连…");
   expect(calls("workspace_terminal_open")[0][1]).toMatchObject({ projectId: "remote-project" });
   expect(document.querySelector(".terminal-machine")?.textContent).toBe("devpc");
   fail = false;

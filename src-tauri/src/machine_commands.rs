@@ -4,6 +4,12 @@ use crate::{
     remote_transport as transport,
 };
 use tauri::State;
+#[path = "machine_connection_attempt.rs"]
+mod connection_attempt;
+// Order DB state and pool state together, without holding a DB lock during disposal.
+static CONNECTION_TRANSITIONS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub(crate) fn shutdown_connections() { connection_attempt::shutdown(); }
 
 #[tauri::command]
 pub fn enroll_machine(
@@ -78,29 +84,49 @@ pub async fn saved_machines() -> Result<Vec<SavedMachine>, String> {
 #[tauri::command]
 pub async fn connect_machine(
     db: State<'_, DbState>,
+    native: State<'_, std::sync::Arc<crate::native_terminal::NativeTerminalManager>>,
+    search: State<'_, std::sync::Arc<crate::mention_search::Search>>,
     profile_id: String,
 ) -> Result<Machine, String> {
     let db = db.0.clone();
+    let native = native.inner().clone();
+    let search = search.inner().clone();
+    let attempt = {
+        let _db = db.lock().map_err(|e| e.to_string())?;
+        connection_attempt::Attempt::begin(&profile_id)?
+    };
     tauri::async_runtime::spawn_blocking(move || {
         // Serialize setup only; normal Local and remote task operations remain independent.
         static SETUP: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _setup = SETUP.lock().map_err(|e| e.to_string())?;
+        attempt.check()?;
         let profile = transport::saved_profiles()?
             .into_iter()
             .find(|p| p.id == profile_id)
             .ok_or("machine.profile_missing")?;
         let machine = {
+            let _transition = CONNECTION_TRANSITIONS.lock().map_err(|e| e.to_string())?;
+            let machine = {
             let conn = db.lock().map_err(|e| e.to_string())?;
+            attempt.check()?;
             let machine = machines::import_profile(&conn, &profile, "windows")?;
             // A saved profile is not yet a verified execution environment.
             conn.execute("UPDATE machines SET disabled=1 WHERE id=?1", [&machine.id]).map_err(|e|e.to_string())?;
             machine
+            };
+        native.disable_machine(&machine.id);
+        search.disable_machine(&machine.id);
+        crate::remote_reads::disable_machine(&machine.id);
+            machine
         };
-        let installed = crate::remote_install::install(
+        let installed = crate::remote_install::install_with_budget(
             &machine,
             &std::env::current_exe().map_err(|e| e.to_string())?,
+            &transport::Budget { stop: &attempt.cancelled, deadline: std::time::Instant::now() + std::time::Duration::from_secs(300) },
         )?;
+        let _transition = CONNECTION_TRANSITIONS.lock().map_err(|e| e.to_string())?;
         let conn = db.lock().map_err(|e| e.to_string())?;
+        attempt.publish(|| {
         conn.execute(
             "UPDATE machines SET helper_name=?2,host_identity=?3,platform=?4,disabled=0 WHERE id=?1",
             rusqlite::params![
@@ -111,7 +137,11 @@ pub async fn connect_machine(
             ],
         )
         .map_err(|e| e.to_string())?;
+        native.enable_machine(&installed.id);
+        search.enable_machine(&installed.id);
+        crate::remote_reads::enable_machine(&installed.id);
         Ok(installed)
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -126,11 +156,14 @@ pub fn rename_machine(db: State<'_, DbState>, id: String, name: String) -> Resul
 pub fn remove_machine(
     db: State<'_, DbState>,
     native: State<'_, std::sync::Arc<crate::native_terminal::NativeTerminalManager>>,
+    search: State<'_, std::sync::Arc<crate::mention_search::Search>>,
     id: String,
 ) -> Result<(), String> {
+    let _transition = CONNECTION_TRANSITIONS.lock().map_err(|e| e.to_string())?;
     let tasks = {
         let db = db.0.lock().map_err(|e| e.to_string())?;
         machines::disable(&db, &id)?;
+        if let Some(profile) = machines::get(&db, &id)?.profile_id { connection_attempt::cancel(&profile); }
         let mut query=db.prepare("SELECT t.id FROM tasks t JOIN projects p ON p.id=t.project_id WHERE p.machine_id=?1").map_err(|e|e.to_string())?;
         query
             .query_map([&id], |r| r.get::<_, String>(0))
@@ -138,6 +171,9 @@ pub fn remove_machine(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?
     };
+    crate::remote_reads::disable_machine(&id);
+    search.disable_machine(&id);
+    native.disable_machine(&id);
     for task in tasks {
         native.close_task(&task);
     }

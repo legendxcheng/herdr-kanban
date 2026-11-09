@@ -120,10 +120,10 @@ export const openTerminal = (taskId: string, connectionId: string, bounds: Termi
   return invoke<string>("terminal_open", { taskId, connectionId, bounds, output });
 };
 export const closeTerminal = (connectionId: string) => invoke<void>("terminal_close", { connectionId });
-export const openWorkspaceTerminal = (projectId: string, connectionId: string, bounds: TerminalBounds, onOutput: (packet: TerminalOutput) => void) => {
+export const openWorkspaceTerminal = (projectId: string, connectionId: string, bounds: TerminalBounds, onOutput: (packet: TerminalOutput) => void, reconnect = false) => {
   const output = new Channel<TerminalOutput>();
   output.onmessage = onOutput;
-  return invoke<string>("workspace_terminal_open", { projectId, connectionId, bounds, output });
+  return invoke<string>("workspace_terminal_open", { projectId, connectionId, bounds, output, reconnect });
 };
 export const setTerminalBounds = (connectionId: string, bounds: TerminalBounds) => invoke<void>("terminal_bounds", { connectionId, bounds });
 

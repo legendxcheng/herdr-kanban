@@ -85,16 +85,10 @@ impl<T> Cache<T> {
 }
 
 #[derive(Default)]
-struct Remote {
-    connection: Option<Connection>,
-    helper: Option<String>,
-}
-
-#[derive(Default)]
 pub struct Search {
     files: Cache<Vec<FileEntry>>,
     skills: Cache<Vec<SkillEntry>>,
-    remotes: Mutex<HashMap<String, Arc<Mutex<Remote>>>>,
+    remotes: crate::search_connection::pool::Pool,
     stop: AtomicBool,
 }
 
@@ -134,46 +128,18 @@ pub fn target(db: &Db, project: Option<&str>, root: &str) -> Result<Option<Machi
 
 impl Search {
     pub fn new() -> Arc<Self> {
-        let search = Arc::new(Self::default());
-        let weak = Arc::downgrade(&search);
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_secs(5));
-                let Some(search) = weak.upgrade() else {
-                    break;
-                };
-                if search.stop.load(Ordering::Acquire) {
-                    break;
-                }
-                if let Ok(mut remotes) = search.remotes.lock() {
-                    remotes.retain(|_, remote| {
-                        if Arc::strong_count(remote) != 1 {
-                            return true;
-                        }
-                        let Ok(mut remote) = remote.try_lock() else {
-                            return true;
-                        };
-                        if remote
-                            .connection
-                            .as_ref()
-                            .is_some_and(|c| c.touched.elapsed() < Duration::from_secs(60))
-                        {
-                            return true;
-                        }
-                        remote.connection.take();
-                        false
-                    });
-                }
-            }
-        });
-        search
+        Arc::new(Self::default())
     }
 
     pub fn shutdown(&self) {
         self.stop.store(true, Ordering::Release);
-        if let Ok(mut remotes) = self.remotes.lock() {
-            remotes.clear();
-        }
+        self.remotes.shutdown();
+    }
+    pub fn disable_machine(&self, machine: &str) {
+        self.remotes.disable_machine(machine);
+    }
+    pub fn enable_machine(&self, machine: &str) {
+        self.remotes.enable_machine(machine);
     }
 
     pub fn validate_target(
@@ -199,45 +165,17 @@ impl Search {
             return Err("machine.cancelled".into());
         }
         // A large directory scan must not hold up task switching.
-        let key = json!([identity(machine), request["method"] == "validate_target"]).to_string();
-        let remote = {
-            let mut remotes = self.remotes.lock().map_err(|e| e.to_string())?;
-            if !remotes.contains_key(&key) && remotes.len() >= CAPACITY {
-                let victim = remotes
-                    .iter()
-                    .find(|(_, r)| Arc::strong_count(r) == 1)
-                    .map(|(key, _)| key.clone());
-                if let Some(victim) = victim {
-                    remotes.remove(&victim);
-                } else {
-                    return Err("mention.busy".into());
-                }
-            }
-            remotes.entry(key).or_default().clone()
+        let lane = if request["method"] == "validate_target" {
+            "target"
+        } else {
+            "index"
         };
-        let mut remote = remote.lock().map_err(|e| e.to_string())?;
         let current = crate::remote_install::ensure_current(db, machine)?;
         if self.stop.load(Ordering::Acquire) {
             return Err("machine.cancelled".into());
         }
-        if remote.helper != current.helper_name {
-            remote.connection.take();
-        }
-        if remote.connection.is_none() {
-            remote.connection = Some(Connection::connect(&current)?);
-            remote.helper = current.helper_name.clone();
-        }
-        let result = remote
-            .connection
-            .as_mut()
-            .unwrap()
-            .request(&current, request, &self.stop);
-        // Never replay a failed request silently. A retry establishes a fresh,
-        // identity-checked connection; terminal and dispatch connections are unrelated.
-        if result.is_err() {
-            remote.connection.take();
-        }
-        result
+        self.remotes
+            .request(&current, lane, request, || Connection::connect(&current))
     }
 
     pub fn files(

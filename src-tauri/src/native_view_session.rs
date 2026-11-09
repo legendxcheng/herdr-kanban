@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicIsize;
 
 pub(super) struct Session {
     pub id: String,
+    pub machine: Option<String>,
     selection: Mutex<(Arc<View>, String)>,
     pub stopped: AtomicBool,
     pub window_found: AtomicBool,
@@ -13,8 +14,15 @@ pub(super) struct Session {
 }
 impl Session {
     pub fn new(view: Arc<View>, pane: String) -> Arc<Self> {
+        Self::create(view, pane, None)
+    }
+    pub fn for_client(view: Arc<View>, pane: String, cli: &Cli) -> Arc<Self> {
+        Self::create(view, pane, cli.remote.as_ref().map(|m| m.id.clone()))
+    }
+    fn create(view: Arc<View>, pane: String, machine: Option<String>) -> Arc<Self> {
         let session = Arc::new(Self {
             id: uuid::Uuid::new_v4().to_string(),
+            machine,
             selection: Mutex::new((view.clone(), pane)),
             stopped: AtomicBool::new(false),
             window_found: AtomicBool::new(false),
@@ -48,6 +56,15 @@ impl Session {
             Ok(())
         }
     }
+    pub fn expire_if_idle(&self) {
+        if self.selected().0.check().is_ok() {
+            *self.touched.lock().unwrap() = Instant::now();
+        } else if self.machine.is_none()
+            && self.touched.lock().unwrap().elapsed() > Duration::from_secs(60)
+        {
+            self.stop("terminal.closed");
+        }
+    }
     pub fn hide(&self) {
         let hwnd = self.hwnd.load(Ordering::Acquire);
         if hwnd != 0 {
@@ -69,16 +86,63 @@ impl Session {
     }
     pub fn stop(&self, message: &str) {
         if !self.stopped.swap(true, Ordering::AcqRel) {
+            record(
+                message.split(':').next().unwrap_or("closed"),
+                &self.selected().0.id,
+                self.machine.as_deref(),
+                Some(&self.id),
+                Duration::ZERO,
+            );
             self.hide();
             self.selected().0.stop(message);
         }
     }
 }
 
+/// Connection phases only: never persist terminal input, targets, or credentials.
+pub(super) fn record(
+    event: &str,
+    selection: &str,
+    machine: Option<&str>,
+    connection: Option<&str>,
+    elapsed: Duration,
+) {
+    use std::io::Write;
+    static WRITE: Mutex<()> = Mutex::new(());
+    let Ok(_lock) = WRITE.lock() else {
+        return;
+    };
+    let Some(root) = crate::db::db_path().parent().map(Path::to_path_buf) else {
+        return;
+    };
+    let root = root.join("terminal");
+    if std::fs::create_dir_all(&root).is_err() {
+        return;
+    }
+    let path = root.join("connection-events.jsonl");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 2 * 1024 * 1024) {
+        let _ = std::fs::remove_file(root.join("connection-events.previous.jsonl"));
+        let _ = std::fs::rename(&path, root.join("connection-events.previous.jsonl"));
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let value = serde_json::json!({"at":chrono::Utc::now().to_rfc3339(),"event":event,"selection":selection,"machine_id":machine,"connection_id":connection,"elapsed_ms":elapsed.as_millis()});
+        let _ = writeln!(file, "{value}");
+    }
+}
+
 pub(super) fn key(cli: &Cli) -> String {
-    let remote = cli
-        .remote
-        .as_ref()
-        .map(|m| serde_json::json!([m.id, m.profile_id, m.ssh_target, m.host_identity]));
+    let remote = cli.remote.as_ref().map(|m| {
+        serde_json::json!([
+            m.id,
+            m.profile_id,
+            m.ssh_target,
+            m.host_identity,
+            m.helper_name
+        ])
+    });
     serde_json::json!([cli.executable, cli.session, remote]).to_string()
 }

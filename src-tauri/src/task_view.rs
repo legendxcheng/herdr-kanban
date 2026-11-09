@@ -14,6 +14,20 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+pub(crate) fn observe_identity(
+    herdr: &(impl crate::workflow::Herdr + ?Sized),
+    target: &Target,
+) -> Result<Option<String>, String> {
+    herdr.validate(&target.workspace_id, target)?;
+    let session = if target.agent == "codex" {
+        herdr.session_id(target)?
+    } else {
+        None
+    };
+    herdr.validate(&target.workspace_id, target)?;
+    Ok(session)
+}
+
 fn local(db: &Connection, task: &str) -> Result<Authorization, String> {
     let epoch = crate::task_reset::epoch(db, task)?;
     crate::idle_cleanup::ensure_task_unclaimed(db, task)?;
@@ -124,13 +138,7 @@ impl Workflow {
         {
             return Err("machine.identity_changed".into());
         }
-        self.herdr
-            .validate(&authorization.target.workspace_id, &authorization.target)?;
-        let session = if authorization.target.agent == "codex" {
-            self.herdr.session_id(&authorization.target)?
-        } else {
-            None
-        };
+        let session = self.herdr.view_identity(&authorization.target)?;
         if authorization
             .session_id
             .as_ref()
@@ -143,18 +151,13 @@ impl Workflow {
                 .map_err(|_| "flow.session_invalid")?;
         }
         authorization.session_id = session;
-        self.herdr
-            .validate(&authorization.target.workspace_id, &authorization.target)?;
         self.check_view(task, &authorization)?;
         Ok(authorization)
     }
     pub fn validate_view(&self, task: &str, expected: &Authorization) -> Result<(), String> {
         self.check_view(task, expected)?;
-        self.herdr
-            .validate(&expected.target.workspace_id, &expected.target)?;
-        if expected.session_id.is_some()
-            && self.herdr.session_id(&expected.target)? != expected.session_id
-        {
+        let session = self.herdr.view_identity(&expected.target)?;
+        if expected.session_id.is_some() && session != expected.session_id {
             return Err("flow.session_mismatch".into());
         }
         self.check_view(task, expected)

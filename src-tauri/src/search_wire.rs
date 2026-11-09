@@ -6,18 +6,23 @@ pub const LIMIT: usize = 20 * 1024 * 1024;
 
 pub fn read(input: &mut impl Read) -> Result<Option<Value>, String> {
     let mut length = [0; 4];
-    match input.read(&mut length[..1]).map_err(|e| e.to_string())? {
+    match input
+        .read(&mut length[..1])
+        .map_err(|_| "machine.connection_failed")?
+    {
         0 => return Ok(None),
         _ => input
             .read_exact(&mut length[1..])
-            .map_err(|e| e.to_string())?,
+            .map_err(|_| "machine.connection_failed")?,
     }
     let length = u32::from_le_bytes(length) as usize;
     if length > LIMIT {
         return Err("mention.index_limit".into());
     }
     let mut bytes = vec![0; length];
-    input.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+    input
+        .read_exact(&mut bytes)
+        .map_err(|_| "machine.connection_failed")?;
     serde_json::from_slice(&bytes)
         .map(Some)
         .map_err(|_| "machine.invalid_response".into())
@@ -32,7 +37,7 @@ pub fn write(output: &mut impl Write, value: &Value) -> Result<(), String> {
         .write_all(&(bytes.len() as u32).to_le_bytes())
         .and_then(|_| output.write_all(&bytes))
         .and_then(|_| output.flush())
-        .map_err(|e| e.to_string())
+        .map_err(|_| "machine.connection_failed".into())
 }
 
 pub fn serve(
