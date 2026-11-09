@@ -81,17 +81,42 @@ pub async fn herdr_agent_snapshot(
     app: State<'_, Arc<Workflow>>,
     recovery: State<'_, Arc<crate::task_recovery::Recovery>>,
     project_id: String,
-) -> Result<crate::agent_status::AgentSnapshot, String> {
+) -> Result<crate::agent_status::AgentSnapshot, crate::agent_diagnostics::Diagnostic> {
+    let app = app.inner().clone();
+    let recovery = recovery.inner().clone();
+    let project = project_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let snapshot = crate::agent_diagnostics::snapshot(&app, &project);
+        if snapshot.is_ok() {
+            if let Ok(db) = app.db.lock() {
+                if let Ok(machine) = crate::machines::project_machine(&db, &project) { recovery.machine_available(&machine); }
+            }
+        }
+        snapshot
+    })
+        .await
+        .map_err(|e| crate::agent_diagnostics::failure(&project_id, "worker", &e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn herdr_agent_snapshots(
+    app: State<'_, Arc<Workflow>>,
+    recovery: State<'_, Arc<crate::task_recovery::Recovery>>,
+    project_ids: Vec<String>,
+) -> Result<std::collections::HashMap<String, crate::agent_diagnostics::SnapshotResult>, String> {
     let app = app.inner().clone();
     let recovery = recovery.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let routed = app.for_project(&project_id)?;
-        let snapshot = routed.agent_snapshot(&project_id);
-        if snapshot.is_ok() { recovery.machine_available(routed.herdr.machine_id()); }
-        snapshot
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        let snapshots = crate::agent_diagnostics::snapshots(&app, project_ids);
+        if let Ok(db) = app.db.lock() {
+            let machines = snapshots.iter().filter(|(_, value)| value.snapshot.is_some())
+                .filter_map(|(project, _)| crate::machines::project_machine(&db, project).ok())
+                .collect::<std::collections::HashSet<_>>();
+            drop(db);
+            for machine in machines { recovery.machine_available(&machine); }
+        }
+        snapshots
+    }).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]

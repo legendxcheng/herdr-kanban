@@ -220,6 +220,8 @@ pub fn request<T: DeserializeOwned>(
     if let Some(result) = crate::remote_reads::request(machine, request.clone()) {
         return serde_json::from_value(result?).map_err(|_| "machine.invalid_response".into());
     }
+    // One-shot operations still validate the profile before opening their connection.
+    verify_profile(machine)?;
     let input = serde_json::to_vec(&serde_json::json!({"version":1,"host_identity":machine.host_identity,"session":machine.session,"request":request})).map_err(|e|e.to_string())?;
     let bytes = run(helper_command(machine, false)?, input, 55)?;
     let response: Envelope =

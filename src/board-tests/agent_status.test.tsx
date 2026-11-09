@@ -5,9 +5,84 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { KanbanBoard } from "../KanbanBoard";
 import type { AgentSnapshot } from "../types";
+// @ts-expect-error Node types are not included in the frontend TypeScript project.
+import { readFileSync } from "node:fs";
 
 describe("实时 Agent 状态", () => {
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+  it("整批错误保留阶段和时间，可复制与打开日志目录，成功后清除", async () => {
+    bindTask(); board.availableAgents = [liveAgent(board.storedTask, "idle")];
+    await renderBoard("in_progress");
+    await waitFor(() => expect(cardDot(board.storedTask.name).getAttribute("data-status")).toBe("idle"));
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    const diagnostic = { at: "2026-10-31T09:00:00Z", project_id: project.id, machine_id: "remote-xc",
+      workspace_id: "w1", session: "default", pane_id: null, task_id: null, stage: "agent_list", code: "herdr.timeout", elapsed_ms: 1020 };
+    vi.mocked(invoke).mockImplementation(async (cmd, args, opts) => {
+      if (cmd === "herdr_agent_snapshot") throw diagnostic;
+      if (cmd === "open_agent_status_logs") return;
+      return base(cmd, args, opts);
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const prior = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    try {
+      fireEvent(window, new Event("focus"));
+      await screen.findByText("查询失败");
+      expect(cardDot(board.storedTask.name).getAttribute("title")).toContain("查询 Agent 列表 · herdr.timeout");
+      const card = cardDot(board.storedTask.name).closest(".task-card") as HTMLElement;
+      fireEvent.click(within(card).getByRole("button", { name: "任务详情" }));
+      expect(within(card).getByText("整个 Workspace 查询失败", { exact: false })).toBeTruthy();
+      expect(within(card).getByText("查询 Agent 列表：Herdr 响应超时")).toBeTruthy();
+      fireEvent.click(within(card).getByRole("button", { name: "复制诊断信息" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+      expect(JSON.parse(writeText.mock.calls[0][0])).toMatchObject({ ...diagnostic, selected_task_id: board.storedTask.id, scope: "workspace" });
+      fireEvent.click(within(card).getByRole("button", { name: "打开日志目录" }));
+      await waitFor(() => expect(invoke).toHaveBeenCalledWith("open_agent_status_logs"));
+      vi.mocked(invoke).mockImplementation(base);
+      fireEvent(window, new Event("focus"));
+      await waitFor(() => expect(cardDot(board.storedTask.name).getAttribute("data-status")).toBe("idle"));
+      expect(screen.queryByRole("region", { name: "状态查询诊断" })).toBeNull();
+      expectNoStatusWrite(); expect(sendPrompt).not.toHaveBeenCalled();
+    } finally {
+      if (prior) Object.defineProperty(navigator, "clipboard", prior);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
+  });
+  it("单任务错误只显示在对应卡片且恢复后不保留旧错误", async () => {
+    bindTask(); board.extraTasks = [secondTask()];
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    const pane = board.storedTask.binding!.target!.pane_id;
+    const diagnostic = { at: "2026-10-31T09:00:00Z", project_id: project.id, machine_id: "local",
+      workspace_id: "w1", session: "default", pane_id: pane, task_id: board.storedTask.id,
+      stage: "process_info", code: "herdr.timeout", elapsed_ms: 2100 };
+    vi.mocked(invoke).mockImplementation(async (cmd, args, opts) => cmd === "herdr_agent_snapshot"
+      ? { agents: [liveAgent(board.extraTasks[0], "working")], failures: [{ pane_id: pane, error: "herdr.timeout" }], diagnostics: [diagnostic] }
+      : base(cmd, args, opts));
+    await renderBoard("in_progress");
+    await screen.findByText("查询失败");
+    expect(cardDot(board.storedTask.name).getAttribute("title")).toContain("查询任务进程信息 · herdr.timeout");
+    expect(cardDot("任务 B").getAttribute("data-status")).toBe("working");
+    board.availableAgents = [liveAgent(board.storedTask, "idle"), liveAgent(board.extraTasks[0], "working")];
+    vi.mocked(invoke).mockImplementation(base);
+    fireEvent(window, new Event("focus"));
+    await waitFor(() => expect(cardDot(board.storedTask.name).getAttribute("data-status")).toBe("idle"));
+    expect(cardDot(board.storedTask.name).getAttribute("title")).not.toContain("herdr.timeout");
+  });
+  it("慢快照标为过期时仍可查看其中的单任务错误", async () => {
+    bindTask();
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    const pane = board.storedTask.binding!.target!.pane_id;
+    vi.mocked(invoke).mockImplementation(async (cmd, args, opts) => cmd === "herdr_agent_snapshot"
+      ? { agents: [], age_ms: 20_000, failures: [{ pane_id: pane, error: "herdr.timeout" }], diagnostics: [{
+        at: new Date().toISOString(), project_id: project.id, machine_id: "local", workspace_id: "w1", session: "default",
+        pane_id: pane, task_id: board.storedTask.id, stage: "process_info", code: "herdr.timeout", elapsed_ms: 20_000,
+      }] } : base(cmd, args, opts));
+    await renderBoard("in_progress");
+    await screen.findByText("状态过期");
+    expect(cardDot(board.storedTask.name).getAttribute("title")).toContain("查询任务进程信息 · herdr.timeout");
+    fireEvent.click(screen.getByRole("button", { name: "任务详情" }));
+    expect(screen.getByRole("button", { name: "复制诊断信息" })).toBeTruthy();
+  });
   it("未点开的任务在后台变为等待输入，焦点刷新期间保留已知状态", async () => {
     bindTask(); board.extraTasks = [secondTask()];
     board.availableAgents = [liveAgent(board.storedTask, "working"), liveAgent(board.extraTasks[0], "working")];
@@ -35,7 +110,7 @@ describe("实时 Agent 状态", () => {
     });
     fireEvent(window, new Event("focus"));
     await screen.findByText("查询失败");
-    expect(cardDot(board.storedTask.name).getAttribute("title")).toContain("上次：空闲，等待新指令（已过期）");
+    expect(cardDot(board.storedTask.name).getAttribute("title")).toContain("上次：等待你回复（已过期）");
     expect(cardDot(board.storedTask.name).getAttribute("data-status")).toBe("unknown");
     vi.mocked(invoke).mockImplementation(base);
     fireEvent(window, new Event("focus"));
@@ -72,7 +147,7 @@ describe("实时 Agent 状态", () => {
       await act(async () => { vi.setSystemTime(Date.now() + 16_000); fireEvent(window, new Event("focus")); });
       expect(cardDot(board.storedTask.name).getAttribute("data-status")).toBe("unknown");
       expect(screen.getByText("状态过期")).toBeTruthy();
-      expect(cardDot(board.storedTask.name).getAttribute("title")).toContain("上次：本轮已结束，待查看（已过期）");
+      expect(cardDot(board.storedTask.name).getAttribute("title")).toContain("上次：等待你回复（已过期）");
     } finally {
       await act(async () => { resolve({ agents: [], failures: [] }); });
     }
@@ -119,7 +194,7 @@ describe("实时 Agent 状态", () => {
     fireEvent(window, new Event("focus"));
     await screen.findByText("查询失败");
     expect(cardDot(board.storedTask.name).getAttribute("data-status")).toBe("unknown");
-    expect(cardDot(board.storedTask.name).getAttribute("title")).toContain("上次：本轮已结束，待查看（已过期）");
+    expect(cardDot(board.storedTask.name).getAttribute("title")).toContain("上次：等待你回复（已过期）");
     expect(cardDot("任务 B").getAttribute("data-status")).toBe("idle");
     vi.mocked(invoke).mockImplementation(base);
     fireEvent(window, new Event("focus"));
@@ -146,14 +221,39 @@ describe("实时 Agent 状态", () => {
   });
 
   it.each([
-    ["working", "运行中"], ["blocked", "等待用户反馈／审批"], ["done", "本轮已结束，待查看"],
-    ["idle", "空闲，等待新指令"], ["unknown", "状态未知／连接不可用 · 未识别状态"], ["new-state", "状态未知／连接不可用 · 未识别状态"],
+    ["working", "运行中"], ["blocked", "等待用户反馈／审批"], ["done", "等待你回复"],
+    ["idle", "等待你回复"], ["unknown", "状态未知／连接不可用 · 未识别状态"], ["new-state", "状态未知／连接不可用 · 未识别状态"],
   ])("圆点 %s 显示文字且不自动完成任务", async (status, label) => {
     bindTask(); board.availableAgents = [liveAgent(board.storedTask, status)];
     await renderBoard("in_progress");
     await waitFor(() => expect(cardDot(board.storedTask.name).getAttribute("title")).toBe(label));
     expect(cardDot(board.storedTask.name).getAttribute("aria-label")).toBe(label);
     expect(board.storedTask.status).toBe("in_progress"); expectNoStatusWrite();
+  });
+
+  it("已查看的空闲会话仍为绿色等待回复，重新工作后变蓝", async () => {
+    const style = document.createElement("style");
+    // Vitest stubs CSS imports; load the real stylesheet for the color assertions.
+    style.textContent = readFileSync("src/App.css", "utf8");
+    document.head.append(style);
+    try {
+      bindTask(); board.availableAgents = [liveAgent(board.storedTask, "done")];
+      await renderBoard("in_progress");
+      for (const status of ["done", "idle", "working", "done"]) {
+        board.availableAgents = [liveAgent(board.storedTask, status)];
+        fireEvent(window, new Event("focus"));
+        await waitFor(() => expect(cardDot(board.storedTask.name).getAttribute("data-status")).toBe(status));
+        const dot = cardDot(board.storedTask.name);
+        const working = status === "working";
+        expect(dot.getAttribute("title")).toBe(working ? "运行中" : "等待你回复");
+        expect(dot.getAttribute("aria-label")).toBe(working ? "运行中" : "等待你回复");
+        expect(getComputedStyle(dot).backgroundColor).toBe(working ? "rgb(96, 165, 250)" : "rgb(62, 207, 142)");
+      }
+      expect(board.storedTask.status).toBe("in_progress");
+      expectNoStatusWrite(); expect(sendPrompt).not.toHaveBeenCalled();
+    } finally {
+      style.remove();
+    }
   });
 
   it("未启动、已关闭和清理未决有不同提示", async () => {

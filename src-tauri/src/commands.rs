@@ -123,8 +123,9 @@ pub fn update_task(
 #[tauri::command]
 pub fn last_codex_settings(
     titles: State<crate::task_titles::TaskTitles>,
+    project_id: String,
 ) -> Result<crate::codex_settings::Settings, String> {
-    titles.last_codex_settings()
+    titles.last_codex_settings(&project_id)
 }
 
 #[tauri::command]

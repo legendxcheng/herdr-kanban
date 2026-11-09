@@ -23,6 +23,13 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
+function mockResources(implementation: (command: string, args: unknown) => unknown) {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "last_codex_settings") return { model: null, effort: null };
+    if (command === "codex_model_catalog") return { models: [], source: "cli_catalog", cached: false, error: null };
+    return implementation(command, args);
+  });
+}
 beforeEach(() => {
   setLocale("zh-CN");
   Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
@@ -34,7 +41,7 @@ it("shows remote wait and failure, retries without losing the draft, then saves 
   const pending = deferred<unknown[]>();
   let searches = 0;
   let saved = "";
-  vi.mocked(invoke).mockImplementation(async (command, args) => {
+  mockResources(async (command, args) => {
     if (command === "search_files") return ++searches === 1 ? pending.promise : [file];
     if (command === "search_skills") return [skill];
     if (command === "create_task") { saved = (args as { promptJson: string }).promptJson; return {}; }
@@ -74,7 +81,7 @@ it("shows remote wait and failure, retries without losing the draft, then saves 
 });
 
 it.each(["@", "$"])("shows empty results for %s and Escape dismisses the popover without closing the form", async trigger => {
-  vi.mocked(invoke).mockImplementation(async command => command.startsWith("search_") ? [] : undefined);
+  mockResources(async command => command.startsWith("search_") ? [] : undefined);
   render(form()); paste(trigger + "missing");
   expect(await screen.findByText(trigger === "@" ? "没有匹配的文件" : "没有匹配的技能")).toBeTruthy();
   fireEvent.keyDown(screen.getByRole("textbox", { name: "提示词" }), { key: "Escape" });
@@ -85,7 +92,7 @@ it.each(["@", "$"])("shows empty results for %s and Escape dismisses the popover
 it("prewarms on opening and lets current input finish before a stale query", async () => {
   const first = deferred<unknown[]>();
   const queries: string[] = [];
-  vi.mocked(invoke).mockImplementation(async (command, args) => {
+  mockResources(async (command, args) => {
     if (command !== "search_skills") return;
     queries.push((args as { query: string }).query);
     return queries.length === 1 ? first.promise : [skill];
@@ -107,7 +114,7 @@ it("prewarms on opening and lets current input finish before a stale query", asy
 
 it("isolates same-path projects and does not let a stalled remote search block local lookup", async () => {
   const old = deferred<unknown[]>();
-  vi.mocked(invoke).mockImplementation(async (command, args) => command === "search_skills" ? ((args as { projectId?: string }).projectId === project.id ? old.promise : [skill]) : undefined);
+  mockResources(async (command, args) => command === "search_skills" ? ((args as { projectId?: string }).projectId === project.id ? old.promise : [skill]) : undefined);
   const ui = render(form()); paste("$remote");
   await waitFor(() => expect(invoke).toHaveBeenCalledWith("search_skills", { rootPath: project.root_path, query: "remote", projectId: project.id }));
   ui.rerender(form({ ...project, id: "second-remote" }));
@@ -121,7 +128,7 @@ it("isolates same-path projects and does not let a stalled remote search block l
 
 it("explains a missing file-search directory and ignores results after closing", async () => {
   const pending = deferred<unknown[]>();
-  vi.mocked(invoke).mockImplementation(async command => command === "search_files" ? pending.promise : undefined);
+  mockResources(async command => command === "search_files" ? pending.promise : undefined);
   const ui = render(form({ ...project, root_path: "" })); paste("@file");
   expect(await screen.findByText("请先设置项目工作目录")).toBeTruthy();
   expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "search_files")).toBe(false);
@@ -133,7 +140,7 @@ it("explains a missing file-search directory and ignores results after closing",
 });
 
 it("refreshes cached candidates without losing the prompt or reloading on subsequent typing", async () => {
-  vi.mocked(invoke).mockImplementation(async command => command === "search_skills" ? [skill] : undefined);
+  mockResources(async command => command === "search_skills" ? [skill] : undefined);
   render(form()); paste("draft $remote");
   await screen.findByText("remote-skill");
   fireEvent.click(screen.getByRole("button", { name: "刷新候选列表" }));

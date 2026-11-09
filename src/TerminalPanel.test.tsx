@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { TerminalPanel } from './TerminalPanel';
@@ -124,4 +124,21 @@ it('serializes bounds updates and sends the latest layout after an in-flight upd
   await act(async () => { finish(); });
   await waitFor(() => expect(invoke).toHaveBeenLastCalledWith('terminal_bounds', expect.objectContaining({ bounds: expect.objectContaining({ visible: false }) })));
   act(() => { dialog.remove(); });
+});
+
+it('offers verified Workspace recovery after identity changes without invoking task repair', async () => {
+  let opens = 0;
+  vi.mocked(invoke).mockImplementation(async name => {
+    if (name === 'workspace_terminal_open' && ++opens === 1) throw 'binding.identity_changed';
+  });
+  const workspace = { id: 'project', name: 'game-h5', machine_id: 'remote', herdr_session: 'default', workspace_id: 'w9' } as Project;
+  render(<TerminalPanel task={null} workspace={workspace} machineName="xc" />);
+  const alert = await screen.findByRole('alert');
+  expect(alert.textContent).toContain('无法安全恢复原来的普通终端');
+  expect(alert.textContent).not.toContain('修复绑定');
+  fireEvent.click(screen.getByRole('button', { name: '核实并重连' }));
+  await screen.findByText('Herdr 已打开');
+  expect(opens).toBe(2);
+  expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === 'terminal_open' || name === 'repair_binding')).toHaveLength(0);
+  expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === 'workspace_terminal_open').every(([, args]) => (args as { projectId: string }).projectId === workspace.id)).toBe(true);
 });

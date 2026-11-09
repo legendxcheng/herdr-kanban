@@ -68,6 +68,14 @@ pub trait Herdr: Send + Sync {
     ) -> Result<bool, String> {
         Err("terminal.unsupported".into())
     }
+    /// Recover only an owned shell whose original operation marker still identifies it.
+    fn recover_workspace_terminal(
+        &self,
+        _target: &crate::workspace_terminal::Target,
+        _operation: &str,
+    ) -> Result<crate::workspace_terminal::Target, String> {
+        Err("binding.identity_changed".into())
+    }
     fn find_workspace_terminal(
         &self,
         _workspace: &str,
@@ -218,6 +226,9 @@ pub trait Herdr: Send + Sync {
             failures: vec![],
             age_ms: 0,
         })
+    }
+    fn discover_agent_batch(&self, workspaces: &[String]) -> Result<crate::agent_status::Discoveries, String> {
+        Ok(workspaces.iter().map(|id| (id.clone(), self.discover_agents(id))).collect())
     }
     fn validate(&self, workspace: &str, expected: &Target) -> Result<Target, String> {
         self.targets(workspace)?
@@ -374,20 +385,44 @@ pub fn binding(conn: &Connection, task: &str) -> Result<Binding, String> {
     })
 }
 
-pub fn pane_owner(conn: &Connection, target: &Target) -> Result<Option<String>, String> {
+/// Internal ownership is typed so non-task reservations cannot become task IDs.
+pub(crate) enum PaneOwner {
+    Task(String),
+    WorkspaceTerminal,
+    RetiredExecution,
+}
+impl PaneOwner {
+    pub(crate) fn occupied_by(&self) -> &str {
+        match self {
+            Self::Task(id) => id,
+            Self::WorkspaceTerminal => "workspace-terminal",
+            Self::RetiredExecution => "retired-execution",
+        }
+    }
+}
+
+pub(crate) fn pane_ownership(
+    conn: &Connection,
+    target: &Target,
+) -> Result<Option<PaneOwner>, String> {
     if crate::workspace_terminal::owns(conn, target)? {
-        return Ok(Some("workspace-terminal".into()));
+        return Ok(Some(PaneOwner::WorkspaceTerminal));
     }
     if crate::task_reset::quarantined(conn, target)? {
-        return Ok(Some("retired-execution".into()));
+        return Ok(Some(PaneOwner::RetiredExecution));
     }
     conn.query_row(
         "SELECT task_id FROM task_bindings WHERE session=?1 AND pane_id=?2 AND machine_id=?3",
         params![target.session, target.pane_id, target.machine_id],
-        |r| r.get(0),
+        |r| r.get::<_, String>(0),
     )
     .optional()
+    .map(|owner| owner.map(PaneOwner::Task))
     .map_err(err)
+}
+/// Keep the existing occupation labels for dispatch and lifecycle callers.
+pub fn pane_owner(conn: &Connection, target: &Target) -> Result<Option<String>, String> {
+    pane_ownership(conn, target).map(|owner| owner.map(|owner| owner.occupied_by().to_owned()))
 }
 pub(crate) fn ensure_available(conn: &Connection, target: &Target, task: &str) -> Result<(), String> {
     crate::idle_cleanup::ensure_unclaimed(conn, target, None)?;

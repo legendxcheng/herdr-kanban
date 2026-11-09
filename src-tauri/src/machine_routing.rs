@@ -10,6 +10,15 @@ pub fn adapter(
     current: &Arc<dyn Herdr>,
     id: &str,
 ) -> Result<Arc<dyn Herdr>, String> {
+    adapter_with_stages(db, current, id, |_, error| error)
+}
+
+fn adapter_with_stages(
+    db: &Arc<std::sync::Mutex<rusqlite::Connection>>,
+    current: &Arc<dyn Herdr>,
+    id: &str,
+    stage: fn(&str, String) -> String,
+) -> Result<Arc<dyn Herdr>, String> {
     if id == current.machine_id() {
         return Ok(current.clone());
     }
@@ -22,10 +31,10 @@ pub fn adapter(
     }
     let mut cli = crate::herdr::Cli::from_env();
     if machine.kind == "ssh" {
-        let machine = crate::remote_install::ensure_current(db, &machine)?;
-        crate::remote_transport::verify_profile(&machine)?;
-        let _: serde_json::Value =
-            crate::remote_transport::request(&machine, serde_json::json!({"method":"hello"}))?;
+        let machine = crate::remote_install::ensure_current(db, &machine)
+            .map_err(|e| stage("helper_setup", e))?;
+        // The actual request validates its connection and response identity.
+        // Do not open a separate SSH connection just to preflight every read.
         cli.session = machine.session.clone();
         cli.remote = Some(machine);
     }
@@ -33,6 +42,25 @@ pub fn adapter(
 }
 
 impl Workflow {
+    pub fn for_status_project(&self, project: &str) -> Result<Arc<Self>, String> {
+        let id = {
+            let db = self.db.lock().map_err(|e| e.to_string())?;
+            machines::project_machine(&db, project)?
+        };
+        self.for_status_machine(&id)
+    }
+    pub(crate) fn for_status_machine(&self, id: &str) -> Result<Arc<Self>, String> {
+        Ok(Arc::new(Self {
+            db: self.db.clone(),
+            herdr: adapter_with_stages(
+                &self.db,
+                &self.herdr,
+                id,
+                crate::agent_diagnostics::staged,
+            )
+            .map_err(|e| crate::agent_diagnostics::staged("project", e))?,
+        }))
+    }
     pub fn for_project(&self, project: &str) -> Result<Arc<Self>, String> {
         let id = {
             let db = self.db.lock().map_err(|e| e.to_string())?;

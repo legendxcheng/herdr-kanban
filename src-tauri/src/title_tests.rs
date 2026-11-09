@@ -160,7 +160,7 @@ fn task_creation_remembers_execution_settings_without_editing_existing_tasks() {
         tasks::list(&db.lock().unwrap(), "p").unwrap()[0].codex_settings,
         selected
     );
-    assert_eq!(service.last_codex_settings().unwrap(), selected);
+    assert_eq!(service.last_codex_settings("p").unwrap(), selected);
     service
         .update(
             &task.id,
@@ -170,7 +170,7 @@ fn task_creation_remembers_execution_settings_without_editing_existing_tasks() {
             None,
         )
         .unwrap();
-    assert_eq!(service.last_codex_settings().unwrap(), selected);
+    assert_eq!(service.last_codex_settings("p").unwrap(), selected);
     let mut invalid = new_task("failed");
     invalid.project_id = "missing".into();
     assert!(
@@ -178,11 +178,11 @@ fn task_creation_remembers_execution_settings_without_editing_existing_tasks() {
             .create_configured(invalid, Default::default())
             .is_err()
     );
-    assert_eq!(service.last_codex_settings().unwrap(), selected);
+    assert_eq!(service.last_codex_settings("p").unwrap(), selected);
     service
         .create_configured(new_task("default"), Default::default())
         .unwrap();
-    assert_eq!(service.last_codex_settings().unwrap(), Default::default());
+    assert_eq!(service.last_codex_settings("p").unwrap(), Default::default());
     assert_eq!(
         tasks::list(&db.lock().unwrap(), "p")
             .unwrap()
@@ -192,6 +192,44 @@ fn task_creation_remembers_execution_settings_without_editing_existing_tasks() {
             .codex_settings,
         selected
     );
+}
+
+#[test]
+fn workspace_model_preferences_are_isolated_and_only_creations_update_them() {
+    let db = database();
+    // Identical names and directories still belong to separate Workspaces.
+    db.lock().unwrap().execute("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) SELECT 'q',name,root_path,herdr_workspace,created_at FROM projects WHERE id='p'", []).unwrap();
+    let service = TaskTitles::new(db.clone(), Arc::new(NoTitle), Arc::new(|_| {}));
+    let first = crate::codex_settings::Settings {
+        model: Some("first-model".into()),
+        effort: Some("high".into()),
+    };
+    let second = crate::codex_settings::Settings {
+        model: Some("second-model".into()),
+        effort: Some("low".into()),
+    };
+    assert_eq!(service.last_codex_settings("p").unwrap(), Default::default());
+    assert_eq!(service.last_codex_settings("q").unwrap(), Default::default());
+    assert_eq!(service.last_codex_settings("missing").unwrap_err(), "workspace.project_missing");
+    service.create_configured(new_task("first workspace"), first.clone()).unwrap();
+    assert_eq!(service.last_codex_settings("q").unwrap(), Default::default());
+    let mut input = new_task("second workspace");
+    input.project_id = "q".into();
+    let task = service.create_configured(input, second.clone()).unwrap();
+    assert_eq!(service.last_codex_settings("p").unwrap(), first);
+    assert_eq!(service.last_codex_settings("q").unwrap(), second);
+    service.update_configured(&task.id, None, &task.prompt_json, task.priority, None, Some(&first)).unwrap();
+    assert_eq!(service.last_codex_settings("q").unwrap(), second);
+    service.create_configured(new_task("use Codex defaults"), Default::default()).unwrap();
+    tasks::delete(&mut db.lock().unwrap(), &task.id).unwrap();
+    assert_eq!(service.last_codex_settings("p").unwrap(), Default::default());
+    assert_eq!(service.last_codex_settings("q").unwrap(), second);
+    {
+        let conn = db.lock().unwrap();
+        conn.execute("UPDATE projects SET name='renamed' WHERE id='q'", []).unwrap();
+        db::init(&conn).unwrap();
+    }
+    assert_eq!(service.last_codex_settings("q").unwrap(), second);
 }
 
 #[test]
@@ -214,27 +252,27 @@ fn model_preferences_survive_database_reopen_and_transaction_failure() {
             .create_configured(input, selected.clone())
             .unwrap()
             .id;
-        db.lock().unwrap().execute_batch("CREATE TRIGGER reject_preference BEFORE UPDATE ON last_codex_settings BEGIN SELECT RAISE(ABORT,'test rollback'); END;").unwrap();
+        db.lock().unwrap().execute_batch("CREATE TRIGGER reject_preference BEFORE UPDATE ON workspace_codex_settings BEGIN SELECT RAISE(ABORT,'test rollback'); END;").unwrap();
         assert!(
             service
                 .create_configured(new_task("rolled back"), Default::default())
                 .is_err()
         );
         assert_eq!(tasks::list(&db.lock().unwrap(), "p").unwrap().len(), 1);
-        assert_eq!(service.last_codex_settings().unwrap(), selected);
+        assert_eq!(service.last_codex_settings("p").unwrap(), selected);
     }
     {
         let conn = Connection::open(&file).unwrap();
         db::init(&conn).unwrap();
         let db = Arc::new(Mutex::new(conn));
         let service = TaskTitles::new(db.clone(), Arc::new(NoTitle), Arc::new(|_| {}));
-        assert_eq!(service.last_codex_settings().unwrap(), selected);
+        assert_eq!(service.last_codex_settings("p").unwrap(), selected);
         assert_eq!(
             tasks::list(&db.lock().unwrap(), "p").unwrap()[0].codex_settings,
             selected
         );
         tasks::delete(&mut db.lock().unwrap(), &task_id).unwrap();
-        assert_eq!(service.last_codex_settings().unwrap(), selected);
+        assert_eq!(service.last_codex_settings("p").unwrap(), selected);
     }
     std::fs::remove_file(file).unwrap();
 }
@@ -260,7 +298,7 @@ fn task_model_edits_respect_execution_guard_and_preserve_preference() {
             Some(&Default::default()),
         )
         .unwrap();
-    assert_eq!(service.last_codex_settings().unwrap(), selected);
+    assert_eq!(service.last_codex_settings("p").unwrap(), selected);
     assert_eq!(
         tasks::list(&db.lock().unwrap(), "p").unwrap()[0].codex_settings,
         Default::default()

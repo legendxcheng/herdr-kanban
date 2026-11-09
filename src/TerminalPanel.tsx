@@ -17,6 +17,7 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
   const host = useRef<HTMLDivElement>(null);
   const [state, setState] = useState("terminal.empty");
   const [error, setError] = useLocalizedMessage();
+  const [workspaceRecovery, setWorkspaceRecovery] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const retries = useRef({ selection: "", count: 0 });
   const identity = JSON.stringify(task?.binding?.target);
@@ -27,6 +28,7 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
   if (retries.current.selection !== selection) retries.current = { selection, count: 0 };
   useEffect(() => {
     setError("");
+    setWorkspaceRecovery(false);
     if ((!task && !workspace) || !host.current) { setState("terminal.empty"); return; }
     if (!workspace && preparation) { setState(preparation); return; }
     if (!workspace && !canOpen) { setState("binding.repair_required"); return; }
@@ -44,7 +46,9 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
       if (!active || ended) return;
       ended = true;
       const code = String(e).replace(/^Error: /, "");
-      setState("terminal.disconnected"); setError(String(e));
+      setWorkspaceRecovery(!!workspace && ["binding.identity_changed", "workspace_terminal.occupied", "workspace_terminal.ambiguous"].includes(code));
+      setState("terminal.disconnected");
+      setError(workspace && code === "binding.identity_changed" ? "workspace_terminal.identity_changed" : String(e));
       void api.closeTerminal(connectionId).catch(() => {});
       const delay = [2000, 5000, 10000, 30000, 60000][retries.current.count];
       if (delay !== undefined && transientConnectionError(code)) {
@@ -123,7 +127,7 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
     {(task || workspace) && state !== "terminal.connected" && state !== "terminal.read_only" && <div className="terminal-feedback">
       {error && <p role="alert">{machineName ?? tr("machine.local")} · {error}</p>}
       {!preparation && state !== "terminal.connecting" && <div className="task-actions">
-        {(canOpen || workspace) && <button className="btn-secondary" onClick={() => { retries.current.count = 0; setAttempt((n) => n + 1); }}>{tr("terminal.reconnect")}</button>}
+        {(canOpen || workspace) && <button className="btn-secondary" onClick={() => { retries.current.count = 0; setAttempt((n) => n + 1); }}>{tr(workspaceRecovery ? "workspace_terminal.recover" : "terminal.reconnect")}</button>}
         {onRepair && <button className="btn-ghost" onClick={onRepair}>{tr("binding.repair")}</button>}
       </div>}
     </div>}

@@ -267,12 +267,15 @@ fn submit_observed_mode(
         if poll == 150 { return Err(error("flow.first_prompt_timeout")); }
         pause(ACK_INTERVAL);
     }
-    // send-text is raw terminal input, not a paste. Codex can discard raw LF
-    // key events, so frame multiline content as one literal bracketed paste.
-    // Keep the delimiters out of the durable prompt and exact receipt comparison.
+    // send-text bypasses Herdr's Windows paste conversion. Bracketed paste
+    // alone is insufficient: short Codex pastes on Windows drop bare LF.
+    // Encode each logical newline as one CR:
+    // CRLF can arrive as two newlines. Keep the original prompt intact for
+    // the durable snapshot and exact receipt.
     let pasted;
     let input = if prompt.contains(['\r', '\n', '\t']) {
-        pasted = format!("\u{1b}[200~{prompt}\u{1b}[201~");
+        let windows_text = prompt.replace("\r\n", "\n").replace('\n', "\r");
+        pasted = format!("\u{1b}[200~{windows_text}\u{1b}[201~");
         &pasted
     } else {
         prompt
@@ -439,6 +442,40 @@ mod tests {
     }
 
     #[test]
+    fn short_multiline_paste_survives_windows_console_line_feed_handling() {
+        let prompt = "/C:/Temp/test.md\n\n看看哪些性能问题可以解决。\n只回复 OK。";
+        let mut composer = String::new();
+        let mut observations = 0;
+        submit(
+            "pane",
+            prompt,
+            |args| {
+                if args.starts_with(&["pane", "send-text"]) {
+                    let text = args[3]
+                        .strip_prefix("\u{1b}[200~")
+                        .unwrap()
+                        .strip_suffix("\u{1b}[201~")
+                        .unwrap();
+                    // Replay the live Windows/Codex short-paste observations:
+                    // bare LF is dropped; CRLF gives two newlines; CR gives one.
+                    composer = text
+                        .replace("\r\n", "\r\r")
+                        .replace('\n', "")
+                        .replace('\r', "\n");
+                }
+                Ok(())
+            },
+            || {
+                observations += 1;
+                Ok(state(if observations > 4 { 2 } else { 1 }, "idle"))
+            },
+            |_| {},
+        )
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        assert_eq!(composer, prompt);
+    }
+
+    #[test]
     fn multiline_submission_reaches_the_composer_as_one_literal_paste() {
         let prompt = "第一行\n\n第二行\t保留缩进\n末尾 $kanban-dev";
         let mut pasted = String::new();
@@ -455,7 +492,7 @@ mod tests {
                         .strip_prefix("\u{1b}[200~")
                         .and_then(|text| text.strip_suffix("\u{1b}[201~"))
                         .unwrap_or("")
-                        .to_owned();
+                        .replace('\r', "\n");
                 }
                 if args.last() == Some(&"enter") {
                     enters += 1;

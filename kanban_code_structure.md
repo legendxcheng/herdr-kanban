@@ -4,11 +4,43 @@
 
 更新日期：2026-11-09（归档关闭 Pane）。单个归档和已完成列批量归档现在先核对并关闭任务仍绑定的 Pane，再原子提交归档与绑定释放；关闭失败或未知时保留卡片和绑定，可显式重试。无绑定任务仍可本地归档，删除语义不变。实现见 6.2.1，验证与共享工作区边界见[归档关闭验证](docs/verification/2026-11-09-archive-close-pane.md)。
 
+交付更新（2026-11-09，SSH 同步性能）：移除查询前独立 hello，按机器复用列表/状态/Git 只读连接，同机 Agent 状态按批共享列表读取。前端 330 项通过，连接与批量查询回归通过；真实 devpc 的列表同步由约 2.33 秒降至复用后的 0.23 秒，三个项目状态由 6.82 秒降至约 0.55 秒，首次连接分别 1.19 / 1.54 秒。已重新生成 NSIS 包（5,063,103 字节，SHA-256 `fbb10f9c4228143aab7ca48e7c055b1ce396c41efa8ec8548e78c9dc22b8712d`），未执行安装。实现见第 12 节；测量方向、全量测试波动及验收边界见 [SSH 同步性能验证](docs/verification/2026-11-09-ssh-read-performance.md)。
+
+交付更新（2026-11-09 09:59，SSH Codex 动态发现修复）：`build_kanban.bat -NoPause -NoOpen` 完成 Windows x64 Release／NSIS 构建。247 个源码及构建文件与打包快照一致，包含当前工作区既有改动；正式 GUI Release helper 在 PATH 为空且 APPDATA/LOCALAPPDATA 缺失的环境下已通过程序发现检查。安装包 `release/kanban/0.1.0/Herdr-Kanban-0.1.0-windows-x64-setup.exe` 为 5,042,263 字节，SHA-256 为 `bb1c38fe0b3ec2ad87d60eb9694394a564334b9cf6bfbc11605b4dbc4cd9be59`，与原始 NSIS 产物及校验文件一致。日志 `release/kanban/logs/build-20261109-095337-180004.log`，来源及产物记录为同目录 `source-20261109-095337.json`、`artifact-20261109-095337.json`。本次未安装，另一台电脑安装后的完整 GUI 送达尚未重验，见 [SSH Codex 发现验证](docs/verification/2026-11-09-codex-ssh-discovery.md)。
+
+交付更新（2026-11-09 07:44，首条提示词随启动输入）：通过 `build_kanban.bat -NoPause -NoOpen` 完成 Windows x64 Release／NSIS 构建，使用当前工作区快照（包含既有未提交改动）。247 个源码及构建清单文件与打包副本 SHA-256 全部一致，生产前端包含新确认状态；正式程序为 GUI subsystem，包含 `--codex-start` 入口。安装包 `release/kanban/0.1.0/Herdr-Kanban-0.1.0-windows-x64-setup.exe` 为 5,039,754 字节，SHA-256 为 `2f73781d15f3358572283a7917f371d18a70d94b8b8b5a0831c270d95d8a1451`，与原始 NSIS 产物及 `SHA256SUMS.txt` 一致。构建日志 `release/kanban/logs/build-20261109-073742-47528.log`，来源与产物核对分别为同目录 `source-20261109-073742.json`、`artifact-20261109-073742.json`。保留既有大 chunk／未使用代码提示；本次未安装、未替换运行中的应用，既有验收范围与标题 HTTP 测试限制沿用[启动输入验证](docs/verification/2026-11-09-startup-prompt.md)。
+
 更新日期：2026-11-09。[GitHub #48](https://github.com/legendxcheng/herdr-kanban/issues/48) 将新任务首条正文随原生 Codex 启动传入，移除启动后的 idle 等待、正文粘贴及提交按键。启动前固定输入与操作意图，原生进程恢复执行前持久化身份；响应丢失只核实原次启动。新增启动记录表及同一应用的 `--codex-start` 模式，旧明确未发送续发和已有会话 resume 保留。本机／SSH 文本引用矩阵各 10/10，原生 WebView2 连续启动各 10/10，丢响应后重开核实各 1/1；全量前端 327 项通过，Rust 全量仍有两项未修改的标题 HTTP 测试失败。实现见 6.6.8，证据和限制见[启动输入验证](docs/verification/2026-11-09-startup-prompt.md)。
 
 更新日期：2026-11-08。首次提示词派发增加 30 秒有界就绪等待；明确未写入的首次启动可经“继续首次发送”向原进程提交冻结正文，未知结果仍只核验。新增 `first_prompt.rs` 和 `continue_first_prompt` IPC，无数据库迁移。本机连续 10 次取得精确回执；SSH 连续样本仍有就绪超时及正文后状态波动，不能标记自动送达验收全通过。本机及 SSH 原生桌面已验证原进程续发、刷新及重开不重发。实现见 6.6.7，完整证据与限制见[首次提示词验证](docs/verification/2026-11-08-first-prompt.md)。
 
+交付更新（2026-11-08 07:50，自动核验与原终端重连）：通过 `build_kanban.bat -NoPause -NoOpen` 完成 Windows x64 Release／NSIS 构建，采用当前工作区完整快照（包含既有未提交改动）。自动恢复改动的 29 个源码与测试文件，以及全部 254 个源码和依赖清单文件，均与打包副本的 SHA-256 一致；生产前端已确认包含只读查看、重新自动核验及备注可选文案。交付文件 `release/kanban/0.1.0/Herdr-Kanban-0.1.0-windows-x64-setup.exe` 为 4,985,580 字节，SHA-256 为 `9f402552adada8513be617c634b3e3b9e7d0e3ff7fd0fe4bdbbd399447054612`，与原始 NSIS 产物及 `SHA256SUMS.txt` 一致。日志：`release/kanban/logs/build-20261108-074509-46752.log`。保留原有大 chunk 和未使用代码提示；本次仅重新打包，未执行安装升级或新增桌面验收，既有验证与限制见下方记录。
+
 更新日期：2026-11-07。[GitHub #46](https://github.com/legendxcheng/herdr-kanban/issues/46) 增加应用级有界自动核验、当前任务终端自动重连及待核实原终端只读查看；取消人工核实 Evidence 必填，系统记录确认来源与目标。恢复共用原身份、回执、会话及事务规则，不重放历史输入。Todo 的未知手动派发也可查看原终端及重新核验，不改变持久化业务状态。无数据库迁移；本机与 SSH 的真实工作流和独立原生桌面验收已执行，详细结果、审查与交付边界见[自动恢复验证](docs/verification/2026-11-07-task-auto-recovery.md)。实现入口见 6.6.6。
+
+更新日期：2026-11-03。修复 Herdr 重启后 Workspace 普通终端因 `terminal_id` 更新而永久无法重连：沿用原创建操作的唯一 Tab 标记，核对同一电脑/session/Workspace/Tab/pane、全 session 中旧 terminal 已不存在及目标无占用冲突后，事务更新绑定。普通终端异常改用专用说明和“核实并重连”入口；任务终端的严格身份核验保持原规则，无数据库迁移、新 IPC 或远端协议。终端相关 Rust 15 项、前端全量 318 项及生产构建通过，另以真实本机与 SSH 只读查询、隔离 SQLite 验证恢复。完整串行 Rust 为 334 通过、1 项未修改的标题 HTTP 测试失败、35 项跳过；真实桌面升级及服务重启后的完整窗口流程尚未验收。实现见 6.5.1，证据与限制见[重启恢复验证](docs/verification/2026-11-03-workspace-terminal-restart.md)。
+
+交付更新（2026-11-03 10:16，普通终端重启恢复）：通过 `build_kanban.bat -NoPause -NoOpen` 完成 Windows x64 Release／NSIS 构建，使用当前工作区快照（包含既有未提交改动）。8 个终端修复相关源码、测试及中英文文案文件与打包副本的 SHA-256 一致，前端产物已确认包含普通终端恢复提示。交付文件 `release/kanban/0.1.0/Herdr-Kanban-0.1.0-windows-x64-setup.exe` 为 4,948,819 字节，SHA-256 为 `6e51998d6a1eca55bb0b5a8a01e83084209a6a8a80fdff8ffdb8a30e4a266f7e`，与原始 NSIS 产物及 `SHA256SUMS.txt` 一致。日志：`release/kanban/logs/build-20261103-101113-22444.log`。未安装或替换运行中的应用，原测试及桌面验收限制保持。
+
+更新日期：2026-11-01。All Tasks 新建任务的 Workspace 选择框补齐共用表单样式，标签独占一行，控件撑满内容区且最小高度为 44 CSS px，保留原生选择与焦点管理。33 项相关组件回归、生产构建及中英文两种桌面尺寸的浏览器检查通过；未重新打包安装，真实桌面与系统 DPI 尚未验收。实现与验证边界见 6.2.6。
+
+更新日期：2026-11-01。任务卡片标题统一最多两行：进行中卡片移除单行省略和固定标题区高度，短标题保持约 78 CSS px，双行标题时自动增高至约 97 CSS px；状态灯和标题工具对齐首行。普通看板与 All Tasks 共用样式，无 IPC／数据变化。52 项相关组件测试、生产构建及浏览器 168 组布局检查通过，Windows x64 安装包已重建并核对校验和，真实桌面与不同系统 DPI 尚未验收；实现见 6.2.1，产物见下方交付记录。
+
+交付更新（2026-11-01 16:27，任务标题两行）：通过 `build_kanban.bat -NoPause -NoOpen` 完成 Windows x64 Release／NSIS 构建，采用当前工作区快照（包含既有未提交改动）。`src/App.css` 与打包副本的 SHA-256 一致，副本生成的 CSS 已核对包含两行截断、自适应标题区且无进行中单行覆盖。交付文件 `release/kanban/0.1.0/Herdr-Kanban-0.1.0-windows-x64-setup.exe` 为 4,948,358 字节，SHA-256 为 `39cf6ae2cf6dd15d431594d6be198766bfbae66ebae02d120405486574bcb7ab`，与原始 NSIS 产物及 `SHA256SUMS.txt` 一致。日志：`release/kanban/logs/build-20261101-162127-45664.log`。保留既有大 chunk 和未使用代码提示；未安装或替换运行中的应用，构建成功不代表真实桌面／Herdr 验收通过。
+
+更新日期：2026-11-01。新建任务的默认模型／思考强度改为按 Workspace 的稳定 Project ID 独立记忆，普通看板和 All Tasks 共用；只有成功创建事务更新默认值。schema 20 按各项目最新保留任务的配置一次性初始化，无历史时双默认，不复制旧全局偏好。表单隔离旧 Workspace 的迟到响应，默认值读取失败时保留正文并禁止误用临时默认值创建。实现与验证边界见 6.2.7。
+
+更新日期：2026-11-01。任务状态灯将 Herdr 的 `idle` 与 `done` 统一显示为绿色实心和“等待你回复”；已查看标记变化不再改变颜色或文案，恢复 `working` 后显示蓝色。仅调整前端样式及中英文文案，保留后台原始状态、排序和查询异常处理，无 IPC／数据库变化。状态组件 25 项测试通过，含加载真实 CSS 的 `done → idle → working → done` 颜色及文案回归；TypeScript 检查与生产构建通过，保留既有大 chunk 提示。本次未进行真实桌面／SSH 验收或重新打包安装，见 6.2.2。
+
+交付更新（2026-11-01）：随后通过 `build_kanban.bat -NoPause -NoOpen` 成功生成 Windows x64 NSIS 安装包，采用当前工作区快照（包含既有未提交改动）；状态灯样式、中英文文案及状态测试与快照哈希一致。交付文件 `release/kanban/0.1.0/Herdr-Kanban-0.1.0-windows-x64-setup.exe` 的 SHA-256 为 `3e303dac4aa38ef9742afa2b9277c1847b6766b9166a01d060df36480f574e9a`，与原始 NSIS 产物及 `SHA256SUMS.txt` 一致。构建日志：`release/kanban/logs/build-20261101-101339-52264.log`。未安装或替换运行中的应用，真实桌面／SSH 验收仍未覆盖。
+
+更新日期：2026-10-31。修复普通终端／已隔离旧会话中的 Agent 导致整个 Workspace 状态查询失败：内部占用归属改用 `PaneOwner`，仅真实任务进入任务状态核验，原占用保护与对外标记保持。补充任务记录缺失和绑定解析失败等明确诊断，见 6.2.2 和[普通终端状态修复验证](docs/verification/2026-10-31-workspace-agent-ownership.md)。
+
+该修复已重新生成 Windows x64 NSIS 安装包并核对 SHA-256。状态服务 9 项、前端状态 24 项、构建及本机真实只读验收通过；完整串行 Rust 326 项通过、1 项未修改的标题 HTTP 关闭测试失败、34 项跳过，未标记全绿。安装包来源、校验及真实远端未覆盖边界见[修复验证](docs/verification/2026-10-31-workspace-agent-ownership.md)。
+
+更新日期：2026-10-31。状态查询补充结构化错误详情、复制诊断及打开日志目录入口；`agent-status.jsonl` 在看板所在电脑记录限频失败和恢复，区分整 Workspace 与单任务查询。阶段贯穿远端连接及 Herdr 查询，保留原超时、重试和任务绑定规则；实现、测试及真实 SSH／安装版未覆盖边界见 6.2.2 和[状态诊断验证](docs/verification/2026-10-31-agent-status-diagnostics.md)。
+
+交付更新（2026-10-31）：上述状态诊断增量已通过正式脚本生成 Windows x64 NSIS 安装包，交付包与校验文件一致；产物、来源范围及 SHA-256 见[状态诊断验证](docs/verification/2026-10-31-agent-status-diagnostics.md)。未安装或替换运行中应用，真实远端故障仍待新版本捕获。
 
 更新日期：2026-10-31。自动标题切换为看板本机请求 DeepSeek `deepseek-flash`，本地／SSH 项目共用 HTTP 生成器，沿用两路 worker、持久化重试和编辑保护。项目私密文件在编译时内置 Key，正式打包入口验证配置；无数据库迁移或 IPC 变化。规格为 GitHub #45，实现与验证边界见 6.2.4 和[DeepSeek 标题验证](docs/verification/2026-10-31-deepseek-titles.md)。
 
@@ -22,6 +54,8 @@
 
 历史记录（2026-10-30，已由 2026-10-31 DeepSeek 接入替代）：自动标题曾按任务所属电脑调用本地／SSH Codex。旧验证及当时的 SSH 边界见[标题机器路由验证](docs/verification/2026-10-30-title-machine-routing.md)，当前调用链见 6.2.4。
 
+更新日期：2026-10-30。Windows Codex 短多行提示词在传输时使用单个 CR 表达每个换行，同时保留 bracketed paste；修复仅加粘贴边界仍会丢 LF 的情况。接通本机提交等待期间的精确回执回调，原正文、严格匹配和单次发送保持不变。287 项 Rust 常规测试、真实短文本与长文本启动回归通过；实现见 6.4.1，证据与交付边界见[短多行提交验证](docs/verification/2026-10-30-short-multiline-submit.md)。
+
 更新日期：2026-10-30。Codex 启动遇到确认的更新选择页时自动发送一次 Esc（Skip），等待同一进程交互就绪后继续原流程；其他弹窗、身份变化及不确定结果不自动回答或重放。无 IPC／数据库迁移。285 项 Rust 常规测试及真实本机 0.165.0 更新页跳过验证通过，运行中的安装版未替换；实现见 6.6.4，证据及边界见[更新提示 Skip 验证](docs/verification/2026-10-30-codex-startup-update-skip.md)。
 
 更新日期：2026-10-29。SSH 任务新建与精确恢复跳过模型目录预检，保留配置格式检查并将冻结的模型／思考强度直接传给 Herdr；本地启动仍查询目录校验。远端目录或缓存继续用于表单选择，查询失败提示可保留已有配置启动。无 IPC／数据库迁移，恢复与未知结果不重发。实现见 6.2.7，测试和真实 SSH 未覆盖边界见[SSH 模型预检修正](docs/verification/2026-10-29-ssh-model-preflight.md)。
@@ -30,7 +64,7 @@
 
 更新日期：2026-10-29。Workspace 顶部 NewTask 旁新增 OpenTerminal／打开终端（GitHub #43），在右侧打开独立普通 shell；按电脑/session/Workspace 持久化复用，未知创建只核实不重放。本机及 Windows SSH 使用同一服务，普通终端不依赖 Codex 状态，并受任务占用和清理保护。实现见 6.5.1，验证及远端环境限制见[Workspace 终端验收记录](docs/verification/2026-10-29-workspace-terminal.md)。
 
-更新日期：2026-10-29。InProgress 卡片默认压为两行：单行标题与编辑入口、优先级及提示词图标／完成／删除。模型与异常详情按需展开，来源信息并入操作行且保留身份颜色。浏览器组件实测折叠高度约 78 CSS px；实现见 6.2.1，验证与限制见[两行卡片验证记录](docs/verification/2026-10-29-compact-in-progress.md)。
+历史记录（2026-10-29）：InProgress 卡片压缩为标题区与操作行，模型与异常详情按需展开，来源信息并入操作行且保留身份颜色。当时采用单行标题，浏览器组件实测折叠高度约 78 CSS px；2026-11-01 起标题改为最多两行并自适应高度，当前实现见 6.2.1，原始验证与限制见[紧凑卡片验证记录](docs/verification/2026-10-29-compact-in-progress.md)。
 
 更新日期：2026-10-29。侧栏与 All Tasks 共用计算机／Workspace 两套身份颜色，按稳定 ID 自动分配并保存本机偏好；改名、排序、隐藏恢复及离线不会改色，连接状态仍由状态圆点和提示表达。来源信息使用结构化字段分别着色，兼容进行中卡片的紧凑来源和详情。实现与验证边界见 3.1 及[身份颜色验证记录](docs/verification/2026-10-29-identity-colors.md)。
 
@@ -52,7 +86,7 @@
 
 更新日期：2026-10-27。失败及待核实 Workspace 创建记录增加“移除记录”和应用内二次确认。移除仅持久化本地标记，保留已有项目、任务、Herdr 资源及原始创建证据；离线及停用电脑可用，拒绝已移除操作的重试/核实。实现与验证边界见 6.1.4 及[创建记录移除验收](docs/verification/2026-10-27-workspace-dismissal.md)。
 
-更新日期：2026-10-27。任务级 Codex 启动配置（GitHub #35–#40）：新建及可编辑 Todo 可选择模型/思考强度，最近一次成功创建的整组设置跨 Workspace 持久化；后台启动冻结配置，通过独立 CLI 参数应用，精确恢复不重发提示词。目录由实际执行电脑提供，支持缓存、刷新及失败提示。真实桌面、本机与 SSH 验证及安装边界见[模型设置验收记录](docs/verification/2026-10-27-task-model-settings.md)，实现见 6.2.7。
+历史记录（2026-10-27）：任务级 Codex 启动配置（GitHub #35–#40）支持新建及可编辑 Todo 选择模型/思考强度；当时的最近创建设置全局共用，已于 2026-11-01 改为各 Workspace 独立持久化。后台启动冻结配置，通过独立 CLI 参数应用，精确恢复不重发提示词。目录由实际执行电脑提供，支持缓存、刷新及失败提示。当时的真实桌面、本机与 SSH 验证及安装边界见[模型设置验收记录](docs/verification/2026-10-27-task-model-settings.md)，当前实现见 6.2.7。
 
 更新日期：2026-10-27。修正点击 Kanban 后原生终端被主窗口遮挡：主窗口持有系统前台时，先将终端排到其紧下方，待实际相邻后再将主窗口排到终端下方；保持焦点，不把整个应用降到其他窗口后面。新增真实前台切换回归在上一轮实现上失败、本轮通过；12 轮终端/宿主/外部窗口前台循环及 Rust 常规 213 项通过。00:25 构建的新 NSIS 包已更新到固定交付目录并核对校验和；实际 release 鼠标点击脚本尚未完整通过，未覆盖安装。上一轮仅有后台遮挡注入的验收不足，证据和当前边界见[前台切换验收记录](docs/verification/2026-10-27-native-window-activation.md)。
 
@@ -237,7 +271,8 @@ herdr-kanban/
 │     ├─ skill_discovery_tests.rs  项目/用户技能发现、优先级、去重与截取回归
 │     ├─ tasks.rs                  任务存储、优先级排序、归档事务、已完成批量处理及活跃任务守卫
 │     ├─ task_titles.rs            原子任务保存、标题请求与双 worker 调度、编辑保护和退出清理
-│     ├─ codex_settings.rs         任务配置、最近新建偏好、编辑守卫、启动快照与 argv
+│     ├─ codex_settings.rs         任务配置、各 Workspace 最近新建偏好及迁移、编辑守卫、启动快照与 argv
+│     ├─ codex_settings_tests.rs   Workspace 偏好迁移、默认值、事务失败及重复初始化回归
 │     ├─ codex_catalog.rs          执行环境目录查询、机器/目录缓存与配置能力校验
 │     ├─ model_acceptance.rs       显式 opt-in 的本机/SSH 真实模型启动与精确恢复验收
 │     ├─ title_prompt.rs           正文/引用名称摘要、输入限长及纯图片兜底
@@ -249,6 +284,7 @@ herdr-kanban/
 │     ├─ task_summary.rs / task_summary_tests.rs  可见 Workspace 未归档任务摘要、跨项目优先级排序与启动状态投影
 │     ├─ completed_task_tests.rs   批量范围、后台启动投影、部分失败回滚、归档重开与异常删除回归
 │     ├─ agent_status.rs           只读 Agent 发现、完整身份匹配及有效任务归属
+│     ├─ agent_diagnostics.rs      状态查询阶段、结构化错误、限频有界日志及打开日志目录 IPC
 │     ├─ herdr_agent_discovery.rs  后台状态查询、单 Agent 有界复查及逐 pane 错误保留
 │     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
 │     ├─ lifecycle.rs              自动分配、会话记录、完成清理与启动核实
@@ -285,18 +321,20 @@ herdr-kanban/
 │     ├─ codex_receipt.rs          有界只读会话证据：精确消息、时间窗口、会话与进程身份复核
 │     ├─ herdr_codex_submit.rs     Windows 正文/粘贴边界/候选关闭/单次 Enter 与有界提交核验
 │     ├─ dispatch_trace.rs         按派发操作逐步记录输入请求/确认/失败及观察恢复，不记录正文
+│     ├─ herdr_submit_tests.rs     本机真实 CLI 适配器的回执回调接线及不重发回归
 │     ├─ codex_process.rs          Windows 进程写锁观测、恢复启动证据及会话切换拒绝
 │     ├─ shared_tab.rs             查找唯一 kanban Tab、选择分屏位置及真实拓扑回归
 │     ├─ pane_allocation.rs        同 workspace 分配互斥、创建前快照与未知结果隔离
 │     ├─ mention_search.rs / mention_search_tests.rs  完整远端索引、预热、刷新、限量缓存和身份隔离
 │     ├─ search_connection.rs / search_wire.rs  查询/控制共用的持久 SSH 子进程、有界帧协议及超时清理
-│     ├─ ssh_read_pool.rs / remote_reads.rs  应用级只读通道池、连接身份、停用及在途取消
+│     ├─ ssh_read_pool.rs          应用级只读通道池、连接身份、停用及在途取消
 │     ├─ machine_connection_attempt.rs  接入检查代次、取消及发布边界
 │     ├─ remote_control.rs / remote_control_tests.rs  单次启动私有控制连接、身份固定及断线不重放回归
 │     ├─ start_timing.rs           有界启动阶段计时日志，不记录提示词内容
 │     ├─ native_terminal.rs        任务定位、独立 WezTerm/官方 Herdr 客户端复用及关闭
 │     ├─ workspace_terminal.rs     Workspace 普通终端创建意图、持久化复用、身份与占用保护
-│     ├─ herdr_workspace_terminal.rs  普通 pane 身份核验、唯一创建标记查找与带 cwd 的 Tab 创建
+│     ├─ herdr_workspace_terminal.rs  普通 pane 身份核验、全 session 创建标记查找、重启后同位置恢复与带 cwd 的 Tab 创建
+│     ├─ herdr_workspace_terminal_tests.rs  原始 CLI + SQLite 的重启恢复/拒绝回归及 opt-in 本机/SSH 只读验收
 │     ├─ native_view_session.rs    电脑/session 保留客户端、短期选择、本机空闲回收及连接阶段日志
 │     ├─ native_client_connection.rs  私有管道连接、原样转发及单 pane 显示/恢复超时
 │     ├─ native_client_wire.rs      endpoint generation 1 zoom 信封、回执及单 pane 快照确认
@@ -485,7 +523,7 @@ flowchart TD
 | `task_sessions` | 按 task_id 保存 Codex 会话 UUID、目录和更新时间；与活跃 pane 独立 |
 | `task_execution_resets`、`retired_execution_targets` | schema 16：重置请求与代次、原任务与历史执行作用域映射、旧快照／会话／目录，以及旧 terminal 隔离证据；不因删除原卡片而清除 |
 | `start_requests` | 启动操作快照：项目/workspace、目录、提示词文档、是否需要首次派发、原状态及阶段；按操作 ID 关联生命周期记录 |
-| `task_codex_settings`、`last_codex_settings` | 任务独立配置和数据库范围的最近成功创建整组偏好；创建事务原子提交两者，任务删除不清空偏好 |
+| `task_codex_settings`、`workspace_codex_settings` | 任务独立配置和按 project_id 保存的 Workspace 最近成功创建整组偏好；创建事务原子提交两者，任务删除不清空偏好，Project 删除级联清理其偏好；旧 last_codex_settings 单例表保留兼容历史结构，当前读写不再使用 |
 | `start_codex_settings` | 按生命周期 operation_id 冻结模型与思考强度；受理启动同事务保存，保留核实证据 |
 | `codex_catalog_cache` | 以 machine_id + cwd 为键持久化目录；目录不代表账户授权，启动前仍重新校验 |
 | `lifecycle_operations` | 启动/完成操作 UUID、pending/unknown/succeeded/failed、目标、错误和核实依据；每任务最多一条未决记录 |
@@ -495,7 +533,7 @@ flowchart TD
 | `workspace_exclusions` | 用户本地删除后的 session + workspace ID；防止自动重新导入 |
 | `task_working_directories` | 按任务保存首次启动/派发目录；同步项目目录不覆盖历史上下文 |
 | `workspace_terminals` | schema 18：按 machine/session/workspace 唯一保存普通 shell 的创建操作 ID、初始 cwd、完整 pane/terminal/Tab 身份及 creating/ready/failed 状态；独立于任务和 Project 删除生命周期，未知结果保留创建意图 |
-| `schema_migrations` | 当前 18；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用，10 加完成时间与生命周期索引，11 加标题请求与失效触发器，12 加执行电脑身份和隔离约束，13 加显示偏好，14 补机器连接元数据，15 加任务配置、最近偏好、配置快照及目录缓存，16 加任务执行代次、重置历史及旧目标隔离，17 加 Workspace 创建记录移除标记，18 加 Workspace 普通终端；初始化可重复执行 |
+| `schema_migrations` | 当前 20；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用，10 加完成时间与生命周期索引，11 加标题请求与失效触发器，12 加执行电脑身份和隔离约束，13 加显示偏好，14 补机器连接元数据，15 加任务配置、全局最近偏好、配置快照及目录缓存，16 加任务执行代次、重置历史及旧目标隔离，17 加 Workspace 创建记录移除标记，18 加 Workspace 普通终端，19 加标题重试次数和到期时间，20 将最近新建模型偏好按 Workspace 独立持久化并一次性回填；初始化可重复执行 |
 | `task_title_requests` | task_id 主键并级联删除，唯一请求 UUID、最多 2000 字符输入快照、created_ms、edit_version、状态及稳定错误码；schema 19 新增 attempts、next_attempt_ms 和到期索引，pending/running/retry_wait 与开发生命周期独立；新请求重启续跑，旧失败/中断记录仅手动重试 |
 | `prompt_images`、`image_drafts` | 图片 ID、项目归属、名称、MIME、字节数、尺寸及内容摘要；草稿按项目/可选任务独立持有，重启释放未保存草稿 |
 | `draft_image_refs`、`task_image_refs`、`operation_image_refs` | 分别保护可撤销的草稿、已保存正文和已受理操作；归档保留引用，删除不抹除已有启动/派发证据 |
@@ -520,7 +558,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | 命令 | 主要输入 | 返回/副作用 |
 | --- | --- | --- |
 | `list_projects` | 无 | 缓存导航 `Project[]`；只返回已选择显示且未确认 missing 的项目，按持久化 workspace 顺序排序 |
-| `last_codex_settings` | 无 | 本数据库最近成功新建的模型/强度；没有历史时双默认 |
+| `last_codex_settings` | projectId（必填） | 指定 Workspace 最近成功新建的模型/强度；项目存在但没有偏好时双默认，项目不存在返回 workspace.project_missing；只读本地数据库，无需执行电脑在线 |
 | `codex_model_catalog` | projectId、refresh? | 从 Project 解析执行机器/目录，有界查询或返回缓存及失败提示；不信任前端指定执行机器 |
 | `navigation_state` | 无 | 返回是否已配置显示选择、未显示项目中含 pending/unknown 任务操作的恢复入口；只读本地数据库 |
 | `workspace_choices` | machineId | 查询指定电脑/session 的完整在线候选，包含 Project 关联、shown 与未决创建 blocked 标记 |
@@ -540,7 +578,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `board_tasks` | projectIds | 后台线程在同一数据库锁内读取当前可见范围的完整 Task；复用普通列表正文、绑定、生命周期与清理状态组装，按全局优先级排序；不查询 Herdr |
 | `task_summary` | projectIds | 后台线程一次本地 SQL，范围与当前可见 Project 取交集；返回 id / project_id / name / status（投影列）/ priority / created_at，跨项目按优先级、创建时间、ID 排序，不读取正文、绑定或查询 Herdr |
 | `task_overview` | projectIds、dayStart、dayEnd | 后台线程持数据库锁执行单次聚合；返回各 project_id 的 todo / in_progress / done / today_done；日期参数为本地当天起止转换的 RFC3339 时间，区间左闭右开；不读取提示词或查询 Herdr |
-| `create_task` | projectId、priority、可选 name/promptJson/draftId/locale/codexSettings | 新 UI 不传 name；事务保存摘要标题、正文/图片、生成意图、任务模型及最近配置，立即返回 todo Task；旧调用省略配置为双默认，显式 name 保留原名且不生成 |
+| `create_task` | projectId、priority、可选 name/promptJson/draftId/locale/codexSettings | 新 UI 不传 name；事务保存摘要标题、正文/图片、生成意图、任务模型及其所属 Workspace 的最近配置，立即返回 todo Task；旧调用省略配置为双默认，显式 name 保留原名且不生成 |
 | `update_task` | id、promptJson、priority、可选 name/draftId/codexSettings | name 省略则保留库内最新标题；配置省略保留原值，修改需通过任务编辑守卫；同一事务更新正文、图片和配置，失败保留原数据，编辑不更新最近新建偏好 |
 | `open_image_draft` | projectId、可选 taskId | 返回草稿 UUID；编辑时保护原任务图片，支持取消和撤销 |
 | `import_prompt_image` | draftId、name、mime、base64 data | 校验 PNG/JPEG/WebP，返回稳定图片元数据；解码和文件写入不持应用数据库 Mutex |
@@ -568,6 +606,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `read_skill_content` | skillMdPath | UTF-8 SKILL.md 全文 |
 | `herdr_list_agents` | projectId | 后端解析 session + workspace ID，返回 occupied_by、verified_task_id、完整实时 target 和状态；不修改任务或绑定 |
 | `herdr_agent_snapshot` | projectId | 看板后台只读状态快照：返回已核验 agents、逐 pane failures 和观察年龄；不打开或聚焦终端 |
+| `open_agent_status_logs` | 无 | 打开当前看板数据库所在目录，包含 agent-status.jsonl；支持 KANBAN_DATA_DIR，不接受外部指定目录 |
 | `dispatch_to_herdr` | taskId、agentName（pane ID）、promptText、operationId、可选 promptJson | 后端从项目解析 workspace；有图正文由后端冻结、解析及校验，再经原独占派发流程；旧无图文本调用兼容 |
 | `resolve_dispatch` | taskId、operationId、sent、evidence | 人工核实未知结果，evidence 备注可空，自动记录判断来源/目标/时间，不重发 |
 | `repair_binding` | taskId、paneId | 显式验证并替换独占绑定，不重发 |
@@ -672,11 +711,13 @@ schema 13 的 `project_visibility(project_id, visible)` 保存明确显示/隐�
 
 ### 6.2.1 紧凑卡片与归档
 
-Todo／Done 卡片标题最多两行，完整名称通过悬停查看；右上角为编辑笔图标，完成卡片旁有归档图标，删除为底部图标。去掉可见时间、重复状态标签与常驻派发目标，优先级文字标签的悬停提示展示目标。紧凑按钮样式仅作用于卡片，不改变终端恢复控件。
+任务卡片标题统一最多两行，适用于普通看板和 All Tasks 的 Todo／InProgress／Done：短标题保持一行，长标题自然换行，超出第二行时省略，完整名称通过悬停查看；右上角为编辑笔图标，完成卡片旁有归档图标，删除为底部图标。去掉可见时间、重复状态标签与常驻派发目标，优先级文字标签的悬停提示展示目标。紧凑按钮样式仅作用于卡片，不改变终端恢复控件。
 
-2026-10-29 起，`TaskCard` 按 `taskColumn(task) === "in_progress"` 使用两行布局，包含投影到进行中列的待核实启动任务。标题单行省略；操作行保留优先级、独立只读提示词图标、文字“完成 / Done”及删除，完整操作名通过 aria-label/title 保留。两行各 28px、间距 4px、上下内边距各 8px，折叠高度约 78 CSS px。模型与来源详情由标题旁信息按钮展开；All Tasks 来源在操作行压缩显示，内容宽度不超过 230px 时收进信息入口，机器／Workspace 颜色与全文仍保留。内容宽度不超过 170px 时缩小操作图标横向占位及优先级字号。
+`TaskCard` 按 `taskColumn(task) === "in_progress"` 使用标题区与操作行的紧凑布局，包含投影到进行中列的待核实启动任务。2026-11-01 起标题区最小高度为 28px，随最多两行的标题自然增高，状态灯对齐首行文字中心，标题工具保持顶部对齐；操作行保留优先级、独立只读提示词图标、文字“完成 / Done”及删除，完整操作名通过 aria-label/title 保留。操作行高 28px、与标题区间距 4px、上下内边距各 8px；折叠详情时短标题卡片约 78 CSS px，双行标题卡片约 97 CSS px。模型与来源详情由标题旁信息按钮展开；All Tasks 来源在操作行压缩显示，内容宽度不超过 230px 时收进信息入口，机器／Workspace 颜色与全文仍保留。内容宽度不超过 170px 时缩小操作图标横向占位及优先级字号。
 
-准备中、需核实和异常状态占据操作行左侧，按钮支持键盘展开并通过 `aria-expanded` / `aria-controls` 关联详情；错误、完整准备阶段、重试、核实、退回 Todo 与清理入口放入详情区，展开时允许增高。查看提示词仍独立于未决状态 fieldset；完成、重试、重置、删除沿用各自禁用条件。信息与操作事件不触发选卡，既有按钮拖拽防护继续生效。不新增 IPC、持久化或迁移。浏览器与自动化边界见上述验证记录。
+准备中、需核实和异常状态占据操作行左侧，按钮支持键盘展开并通过 `aria-expanded` / `aria-controls` 关联详情；错误、完整准备阶段、重试、核实、退回 Todo 与清理入口放入详情区，展开时允许增高。查看提示词仍独立于未决状态 fieldset；完成、重试、重置、删除沿用各自禁用条件。信息与操作事件不触发选卡，既有按钮拖拽防护继续生效。不新增 IPC、持久化或迁移。
+
+2026-11-01 两行标题验证：compact_cards、selection、summary、summary_interactions、deletion 共 5 个组件测试文件 52 项通过，`npm run build`（TypeScript 与 Vite）通过，保留既有大 chunk 提示。浏览器加载真实 `TaskCard`、`App.css` 和 `taskSummary.css`，在中英文界面及 158／164／180／220／280／350px 卡宽下检查 14 种组合共 168 组，覆盖短标题、中文长标题、英文长标题、无空格长词、All Tasks 来源、准备中、待核实、失败、标题生成中及 Todo／Done。标题高度为一行 22px 或两行 44px，未发现横向溢出、标题与工具重叠、标题区与操作行重叠或按钮越界；进行中短标题高度为 78px，双行标题为 97px，状态灯对齐首行。浏览器另验证详情点击展开、Enter 收起不触发选卡，标题点击与编辑按钮回调各自生效。独立预览、测量和截图位于 `.scratch/two-line-titles/`；组件测试模拟 Tauri IPC，浏览器预览无后端调用，均不代表真实 Tauri/WebView2、Herdr 或不同系统 DPI 验收。随后已完成 Windows x64 安装包构建及校验，见文首 16:27 交付记录；未安装或替换运行中的应用。
 
 `archive_task → Workflow::archive_task（task_archive.rs）→ lifecycle::complete_started`：在同一 SQLite 事务核对 done、未归档及批量项目范围，并预占 complete 生命周期操作。有绑定时在任务所属本机或 SSH 电脑重新核验完整目标身份、保存精确 Codex 会话、关闭 Pane 并查询确认消失；外部调用不持数据库锁。归档时间、绑定释放和 complete 成功在同一最终事务提交，防止关闭后、归档前被并发重新启动。无绑定时仅运行本地归档事务及既有未决守卫，不要求远端在线。成功后释放本应用查看连接；不发送 prompt。重复归档幂等，任务正文、priority、快照、会话及操作历史保留。
 
@@ -696,11 +737,17 @@ IPC 使用后台线程逐项处理。归档的每个去重 ID 在事务内重新
 
 ### 6.2.2 实时 Agent 状态与等待反馈置顶（GitHub #15）
 
+2026-10-31 普通终端归属修正：`workflow::pane_ownership` 返回内部 `PaneOwner::Task / WorkspaceTerminal / RetiredExecution`，`assign_agents` 仅对 Task 查询任务记录与绑定。普通终端或隔离目标即使运行 Codex，仍保留 `occupied_by` 且没有 `verified_task_id`，不再把占用标记当作任务 ID 引发整批 `Query returned no rows`。原 `pane_owner` 保留字符串兼容入口，派发和生命周期占用保护不变。状态映射错误区分 `project_identity`、`ownership`、`task_lookup`、`binding` 阶段；缺记录与绑定解析失败等以安全明确错误码返回，不再统一吞成 `status.external_error`。无 schema 或 IPC 字段变更，测试与真实 SSH 边界见[修复验证](docs/verification/2026-10-31-workspace-agent-ownership.md)。
+
+2026-10-31 错误诊断增量：`herdr_agent_snapshot → agent_diagnostics::snapshot → for_status_project → agent_snapshot`。状态路由在 helper 准备、profile 核验和连接阶段附加上下文；`herdr_agent_discovery` 在列表、单 Agent 和进程查询边界附加阶段，传回原错误码。诊断服务补充机器、Project、session、Workspace、pane/任务 ID、时间和本次总耗时；整批错误作为结构化 IPC rejection，逐 pane 错误以快照 `diagnostics` 返回，`failures.error` 保留稳定错误码。前端 `useAgentStatus` 保存错误并在成功时清除，兼容旧字符串错误。`AgentQueryDetails` 放在任务详情中，展示具体阶段／原因／范围／时间，支持复制诊断和打开实际日志目录；悬停也显示阶段和错误码。详情操作不触发任务选择或终端操作。
+
+日志位于看板数据库同目录的 `agent-status.jsonl`（默认 `%APPDATA%\herdr-kanban`，支持 `KANBAN_DATA_DIR`），按 Project/pane 记录失败、错误变化和恢复；同错误限频 60 秒，内存去重有界，复用 2 MiB 有界日志写入器。只持久化稳定错误码，不保留 stderr、提示词或环境内容；日志写失败不影响状态读取。没有数据库迁移，也没有调整原查询时限、重试和任务业务语义。前端 314 项及构建通过，Rust 串行完整回归 324 项通过、34 项环境测试跳过；首次并发标题测试波动、真实 SSH／WebView2／打包安装边界详见[状态诊断验证](docs/verification/2026-10-31-agent-status-diagnostics.md)。
+
 `useAgentStatus → herdr_agent_snapshot → Workflow::agent_snapshot → Herdr::discover_agents`：新增只读 IPC 返回 `agents` 与逐 pane 的 `failures`。原 `herdr_list_agents` 派发候选接口保持不变，两者共用任务归属核验。Herdr 外部查询不持 SQLite 锁，返回后再次核对项目关联。pane 占用仍由 `occupied_by` 表示；仅当前项目中未归档、无未决生命周期操作、绑定 valid 且完整身份一致的任务获得 `verified_task_id`。身份比较使用 machine、session、workspace、pane、terminal、Agent 类型和进程标识，不使用标题或历史状态。前端再与当前任务绑定比较，未决操作、清理失败、身份变化、缺失或查询错误显示 unknown。
 
 `herdr_agent_discovery.rs` 在后台读取 Agent 列表并核验进程；沿用项目级并发池，单 Workspace 内顺序检查，状态专用 CLI 子请求限时 1 秒，普通操作原有超时不变。列表状态无法识别或进程检查失败时，仅对该 pane 再读取一次 `agent get` 和进程信息，检查 workspace/pane/terminal/Agent 未被替换。失败保留 pane ID 和错误，不再静默丢弃成“会话未找到”。远端通过同版本 helper 的 `agent_status_targets` 方法执行相同只读流程，并恢复已验证的 machine ID。快照还返回从列表采样开始计量的 `age_ms`；前端取 IPC 发起时间与收到时间减年龄中更早者，避免 SSH 返回延迟把旧结果当成新结果。冷 helper 或慢路由首轮可能保守显示过期，后续轮询继续恢复。查询不打开、聚焦、重连终端或发送输入；仍无法识别时保持未知，不猜测已完成。
 
-任务卡片标题左侧显示 8px 圆点：working 蓝色、blocked 橙色、done 绿色、idle 灰色、unknown 灰色空心；悬停和无障碍名称使用中英翻译键。done 解释为“本轮已结束，待查看”，不修改业务任务状态；idle 是空闲等待输入，blocked 仅表示 Herdr 识别到审批或提问界面，不分析回复中的自然语言。未启动任务显示“未启动”；正常关闭、无活跃绑定的任务显示“会话已关闭”，异常恢复提示继续保留。
+任务卡片标题左侧显示 8px 圆点：working 蓝色、blocked 橙色、done／idle 统一绿色实心、unknown 灰色空心；悬停和无障碍名称使用中英翻译键。自 2026-11-01 起，done／idle 统一解释为“等待你回复”（英文 Waiting for your reply），过期历史提示也使用同一文案；查看导致 Herdr 的 done 转为 idle 时仍保持绿色，检测到新一轮 working 后变蓝。不修改业务任务状态或 Herdr 原始状态，不新增回复追踪及已读存储。blocked 仅表示 Herdr 识别到审批或提问界面，不分析回复中的自然语言。未启动任务保留灰色实心及“未启动”；正常关闭、无活跃绑定的任务保留灰色实心及“会话已关闭”，异常恢复提示继续保留。
 
 当前项目可见时每 3 秒尝试刷新；焦点切换复用已有查询，不清空状态，也不作废同轮有效响应。任务内容刷新及可见性变化仍隔离旧响应；隐藏时暂停查询并将观察标为过期，切项目或卸载不接受旧结果。在途请求按 Project、machine、session 和 workspace 合并，本机与远端继续使用独立并发池。查询时保留最近观察，更新时间从实际请求开始计算；失败或超过 15 秒后取消旧状态的实时颜色和排序效力，提示“查询失败”／“状态过期”，悬停可见上次状态。失败、绑定变化、会话缺失与 Herdr 未识别分别提示，正常查询自动恢复。更新中的提示只放在悬停文字，避免每三秒挤动标题。实时列表不写回 Task/binding/数据库，状态变化不会改变 TerminalPanel 连接身份。查询沿用现有 Herdr CLI 的有界子请求；大量 Agent 或慢进程检查可能延长单轮耗时，不保证严格 3 秒内更新。
 
@@ -756,7 +803,7 @@ DeepSeek 接入的实际验证与限制见[DeepSeek 标题验证](docs/verificat
 
 Todo 面板与 TerminalPanel 条件互斥。切到 Todo 卸载 TerminalPanel，通过原 `terminal_close(connectionId)` 关闭本应用查看连接，不完成任务、不关闭底层 Agent pane、不发送提示词。点击进行中任务或关闭编辑面板后按原选择逻辑重新连接。无新增数据库、Rust 接口或迁移。组件测试验证关闭/重开调用和不派发；本次真实原生窗口切换未完成，详见 [验收记录](docs/verification/2026-10-26-todo-editor-panel.md)。
 
-### 6.2.6 All Tasks 跨 Workspace 页内交互（2026-10-26，GitHub #26）
+### 6.2.6 All Tasks 跨 Workspace 页内交互（2026-11-01 更新，GitHub #26）
 
 `ProjectSidebar → App → TaskSummaryBoard → TaskBoard`。普通 `KanbanBoard` 以单 Project 包装同一个 `TaskBoard`；卡片、编辑／派发／恢复弹层、拖拽和右侧区域共用。All Tasks 保持导航选中，点击任务在当前页面编辑或查看终端，不再切回所属 Workspace。原 #22 的只读摘要接口仍保留，但交互页面改用 `api.boardTasks → commands::board_tasks → tasks::list_visible`。
 
@@ -765,6 +812,8 @@ Todo 面板与 TerminalPanel 条件互斥。切到 Todo 卸载 TerminalPanel，�
 所有表单、资源引用、派发和绑定修复从 `task.project_id` 查找真实 Project；终端显示对应电脑身份。Todo 使用右侧 TaskEditPanel，保存后保持面板；进行中任务选择原生 Herdr 终端，其他状态使用原编辑弹窗。初次进入汇总不自动连接其他任务，明确选择、启动／派发或关闭编辑面板后沿用对应选择流程。调宽、最大化／恢复与普通看板共用；切视图只释放本 App 查看连接，不停止底层 Agent。
 
 拖拽和卡片按钮调用既有启动、完成、恢复、核实和派发 IPC，不新增生命周期协议。移动前复核最新本地任务，保留忙碌防重、未知结果核实及原会话恢复不重发约束。新建按钮／N 先进入 `CreateTaskDialog` 选择已显示 Workspace，再复用任务表单；没有项目时提示添加，所选项目不再显示时保留新建草稿并禁止保存。
+
+2026-11-01 Workspace 选择框：`CreateTaskDialog.ProjectChoice` 的标签改用独立 `field-label`，以 `htmlFor/id` 关联原生 select；select 复用 `field-input` 的全宽、16px 字号、9px/12px 内边距、圆角与焦点提示，`App.css` 中的局部 `task-workspace-select` 类补充块级布局、44px 最小高度与指针样式。原选择、继续按钮校验、Tab 循环、Escape 关闭及入口焦点恢复保持原调用链，无 IPC 或数据库变化。`summary_interactions`、`summary`、`language` 三组现有组件回归共 33 项通过（模拟 Tauri IPC），`npm run build`（含 TypeScript）通过，保留既有大 chunk 提示。浏览器以实际组件及 CSS 的隔离预览检查中英文 × 900×600/1280×800 四组布局，选择框均为 44×502 CSS px，标签间距为 8px，无横向溢出；另验证长名称选择、继续按钮启用、Tab/Shift+Tab、Escape 与焦点恢复。预览、测量和截图位于 `.scratch/workspace-select/`；上述结果不代表原生 WebView2、Herdr 或系统 DPI 验收，未重新打包安装或替换运行中的应用。
 
 `TaskEditorHandle` 提供 `projectId` 和 `requestLeave`。App 在汇总切回原先选中的项目时也保护草稿，隐藏操作检查实际正在编辑的项目。新建、任务切换、关闭及启动／派发沿用继续编辑／放弃／保存并继续；保存后强制新读取，派发准备再读取最新内容，失败不回退旧正文。选择、编辑、新建和派发准备共用交互代次，迟到结果不会在用户切走后打开旧目标。
 
@@ -776,17 +825,21 @@ Todo 面板与 TerminalPanel 条件互斥。切到 Todo 卸载 TerminalPanel，�
 
 验证在 App／Tauri IPC 交互边界及真实 SQLite 查询边界进行；继承普通看板回归并新增汇总交互用例，包含保存前旧轮询、点击期间刷新、旧范围批次完成、远端查询占满和迟到派发准备。真实桌面、本机／SSH Herdr 结果及未覆盖项独立记录于[本次验收记录](docs/verification/2026-10-26-all-tasks-interactions.md)，不能沿用 #22 只读跳转的历史通过结果。
 
-### 6.2.7 任务模型与思考强度（2026-10-29 更新，GitHub #35–#40）
+### 6.2.7 任务模型与思考强度（2026-11-01 更新，原始任务设置规格 GitHub #35–#40）
 
-`TaskForm` 统一承载普通看板、All Tasks 新建及 Todo 编辑。新建初始化从 `last_codex_settings` 读取整组偏好，完成前禁用提交；已有任务加载自身配置。模型/强度参与 dirty 基线及离开保护，保存成功后才允许后续启动。只有无会话、无绑定、无 pending/unknown 启动或派发且从未成功派发的 Todo 可修改，后端同事务校验。已启动任务展示只读“启动配置”，不声称是原生会话的实时设置。
+`TaskForm` 统一承载普通看板、All Tasks 新建及 Todo 编辑。新建初始化调用 `last_codex_settings(projectId)` 读取目标 Workspace 的整组偏好，All Tasks 先选择所属项目再加载；成功读取当前 Project 前禁用提交和模型选择。请求随 Project ID 变化重新发起，卸载或旧项目的迟到结果不会覆盖当前设置；读取失败显示错误、保留正文并继续禁止创建，避免把临时双默认写为偏好。已有任务加载自身配置。模型/强度参与 dirty 基线及离开保护，保存成功后才允许后续启动。只有无会话、无绑定、无 pending/unknown 启动或派发且从未成功派发的 Todo 可修改，后端同事务校验。已启动任务展示只读“启动配置”，不声称是原生会话的实时设置。
 
 `codex_catalog` 通过 Project 解析执行机器和 cwd，调用目标环境 `codex debug models`（15 秒、8 MiB 上限）；SSH 沿用已验证 helper 协议及部署检查。目录按机器/目录缓存，刷新失败保留缓存并显示错误。列表及强度来自目录；默认模型能力无法确定时不提供单独显式强度，切换模型或跨机继承不兼容时保留选择并阻止保存。表单及保存时对已有目录中的不支持组合保持原有校验；目录不可读且无缓存时仍可保存已有／继承配置，不自动改成默认模型。
 
 缓存目录不保证账户有调用权限。本地显式配置启动前仍查询实际环境，目录检查失败时不分配 pane 或发送提示词。SSH 的辅助程序环境与 Herdr pane 环境可能不同，因此远端新建与精确恢复不再调用目录预检，直接按冻结参数交给 Herdr 启动；`Settings::validate` 在创建 pane 前检查参数格式。真实启动错误继续走既有失败／待核实流程，不静默降级、不重放请求。远端表单的缓存及失败提示明确说明启动不依赖目录查询，查询与刷新功能保留。
 
-`TaskTitles::create_configured` 在既有正文/图片/标题事务中保存 `task_codex_settings` 并更新 `last_codex_settings`。取消、失败、编辑、启动、后台标题更新、归档和删除不改最近偏好。schema 15 对旧任务及没有历史的数据库返回双默认；标题生成仍独立使用既有低成本模型配置。
+`TaskTitles::create_configured` 在既有正文/图片/标题事务中保存 `task_codex_settings`，从已创建任务的 project_id 推导归属并更新 `workspace_codex_settings`；不接受另一个前端指定的偏好所属项目。每个 Workspace 按稳定 Project ID 保存整组设置，同名、同路径和不同电脑项目互不覆盖，应用重启保留。取消、失败、编辑、启动、后台标题更新、归档和任务删除不改最近偏好；用户在新建时选择双默认并成功保存，会把该 Workspace 重置为双默认。Project 删除级联清理对应偏好，改名或隐藏仍保留。
+
+schema 20 迁移在事务中创建 Workspace 偏好表，并按各 Project 的 `created_at DESC, id DESC` 最近保留任务初始化，包含归档任务。最新任务没有独立配置、无任务或新项目均为双默认，不借用其他 Workspace 或旧全局单例的设置。迁移标记与回填同事务提交，失败回滚后可重试；重复初始化不会从后来编辑或删除的任务重算默认值。历史记录无法还原已删除任务或编辑前的原创建设置，因此迁移依据的是当前仍保存的最新任务配置。标题生成仍独立使用既有低成本模型配置。
 
 `submit_start` 在受理事务中写入 `start_codex_settings`；worker 读取同一 operation_id 的冻结配置，仅本地显式配置进入 `checking_model` 阶段，之后由 `prepare_codex_configured` 追加独立 `--model` 与 `-c model_reasoning_effort="…"` argv。双默认不追加参数，不修改全局配置或提示词。精确 resume 带原会话 ID 和任务显式配置，严格进程证据识别只增加受控后缀布局，保持旧/native/npm 路径兼容及不重发规则；保留进程只重连，不覆盖用户在聊天中的手动切换。显式配置任务向未证明配置的新 Agent 手动派发被阻止并提示自动启动；仅保留绑定与最近成功启动目标身份均一致的原进程允许继续派发。
+
+2026-11-01 Workspace 默认值增量验证：`npm test` 全部 42 个文件、317 项通过，包含普通看板与 All Tasks 的目标项目读取、跨项目迟到偏好／目录结果隔离、读取失败保留正文及禁止创建；图片粘贴与远端引用测试补齐正式默认值／目录接口替身。`npm run build`（含 TypeScript）通过，保留既有大 chunk 提示。Rust 使用 `cargo test --offline --locked --lib <filter> -- --test-threads=1`，过滤器 `codex_settings::tests`（2）、`task_titles::tests`（21 通过、1 项真实请求跳过）、`db::tests`（1）、`lifecycle::tests::background_start`（16）、`lifecycle::tests::reset`（6），合计 46 通过、1 跳过；覆盖旧数据回填、迁移失败回滚后重试、重复初始化、Workspace 隔离、成功创建／失败回滚、任务编辑／删除后保留偏好及真实 SQLite 文件关闭重开。Rust 保留既有终端未使用字段／方法警告。本次仅执行上述 Rust 范围；前端模拟 Tauri IPC，不代表真实桌面或 SSH 验收；未打包安装、替换运行中应用或迁移用户正在使用的数据库。
 
 ### 6.2.8 异常任务查看提示词与退回 Todo（2026-10-27）
 
@@ -905,7 +958,7 @@ sequenceDiagram
 
 `herdr_codex_submit.rs` 统一处理自动启动和手动派发的 Windows Codex 输入。只向 interactive_ready、非 launch_pending 的 idle/done 目标发送；已在工作或状态不明时在正文发送前拒绝，以免把旧轮次结束当成新提示词受理。
 
-实际发送顺序为 `pane send-text` 正文 → 单独发送 Right → 等待 300ms → 单独发送 Escape 关闭末尾技能候选 → 等待 100ms → 单独发送一次 Enter。`send-text` 是原始终端输入；2026-10-28 起，含 CR、LF 或 Tab 的正文在传输时添加 bracketed paste 边界，避免 Codex 将换行当作按键而丢弃；边界不写入派发快照或参与回执正文匹配。每个后续写入前重新检查任务有效性和完整目标身份；不增加第二个 Enter，也不叠加 `agent prompt`。提示词正文和 `$技能名` 保持原样。
+实际发送顺序为 `pane send-text` 正文 → 单独发送 Right → 等待 300ms → 单独发送 Escape 关闭末尾技能候选 → 等待 100ms → 单独发送一次 Enter。`send-text` 是原始终端输入；含 CR、LF 或 Tab 的正文添加 bracketed paste 边界。2026-10-30 真实回归确认仅加边界仍会使短文本的 LF 消失，CRLF 则可能产生双换行，因此传输副本先将 CRLF 合并为 LF，再将 LF 编码为单个 CR；长短文本均核对 Codex 最终收到的完整正文。数据库正文、技能引用和严格回执匹配不变，传输边界不进入快照。每个后续写入前重新检查任务有效性和完整目标身份；不增加第二个 Enter，也不叠加 `agent prompt`。
 
 2026-10-30（#44）状态观察共享整次提交最多两次重试，每次间隔 300ms，仅处理 `machine.timeout`、`machine.connection_failed`、`herdr.timeout`、`herdr.unavailable`。每次重新执行完整任务及目标身份检查；busy、身份变化、协议错误、删除或重置直接停止。次数限制不替代每次 CLI/SSH 原有截止时间，因此不是整次提交的 600ms 总时限。正文及按键调用不进入重试。
 
@@ -914,6 +967,8 @@ sequenceDiagram
 正文之后停止且尚未发起 Enter 时返回 `dispatch.enter_not_sent_verify_required`，Enter 已发起后遇错返回 `dispatch.enter_unknown_verify_required`；原核验窗口耗尽仍使用 `dispatch.submit_verify_required`。中英文提示区分阶段，错误阶段/原因保存到既有派发 evidence，自动启动沿用生命周期 error 显示，手动派发沿用弹窗反馈。两类情况均保留 unknown 和独占，允许精确回执补确认；不因此重发历史正文或按键。
 
 原有 10 秒状态确认期间继续探测精确回执；状态窗口结束后，增加最多 30 秒、每 500ms 一次的只读回执补查（最多 61 次探测，各 CLI 请求仍有独立超时）。此阶段不再凭迟到状态序号单独认定成功，不重复正文或回车；每次回执读取前后检查任务操作、目标及会话，删除、重置或身份变化会中止。命中证据仍交给 Workflow 重新核验并事务提交；耗尽窗口则保留 unknown 和原核实入口。自动启动的后台线程在补查期间保持 dispatching，手动派发也共用该逻辑；没有新增 IPC、数据库迁移或后台无限轮询。历史已丢失换行的正文不做宽松匹配，仍需原有人工确认入口。
+
+2026-10-30 修正 `Cli::send_checking_receipt` 的本机分支：此前本机改走不带回执的 `send_prompt_checked`，等待期间实际调用恒为 false 的占位回调，仅超时后还能由 Workflow 补查。现在本机与远端统一传递真实 `received` 回调；`herdr_submit_tests` 经真实本机 CLI 适配器、固定 idle 序号的命令替身验证首个精确回执能结束等待，正文和 Enter 仍各一次。没有自动修复或重发历史 unknown 任务。
 
 Enter 前重新采集该目标的 `state_change_seq`，随后每约 200ms 查询一次，核验窗口最多 10 秒；每次 CLI 调用仍受独立请求超时约束。同一身份的序号必须增加，且当前状态为 working/blocked/idle/done 才确认受理，兼容很快结束的轮次；原有 idle/done 和 unknown 均不能单独证明提交。状态确认及上述回执补查均未确认，或遇到其他发送后不确定结果时，先保留 unknown，工作流随后再尝试只读会话证据补确认：`codex_receipt.rs` 核对实时目标身份和 Codex 会话，读取 `CODEX_HOME`（未设置时使用用户 `.codex`）下对应会话日志；仅接受派发操作创建之后、核验之前且正文完全一致的唯一用户消息。文件头必须匹配会话 UUID，已有保存会话不得变化；读取前后复核身份。扫描最多 10 万项/2 秒，只读取文件头及末尾 16 MiB；缺失、截断、歧义、旧消息或证据不可读均不能推断成功。证据成立才提交 sent 和会话；否则保留独占与核实入口，任何路径都不重发。`/quit` 属于准备流程的退出命令，不等待新一轮状态，改由调用方核验原进程退出及 shell 就绪。
 
@@ -961,17 +1016,21 @@ Herdr 侧栏默认收起且完全隐藏，保留原生快捷键主动展开。�
 
 2026-11-09 #49：任务查看及每秒授权观察通过独立 `view_identity` 只读通道，在远端执行原有目标→Codex 会话→目标复核，避免每一步重建 SSH；原生打开不再额外调用搜索通道重复校验。查看选择与就绪仍核验当前本地授权，连接状态不代表派发成功。连接创建、复用、授权、就绪及关闭原因写入 `terminal/connection-events.jsonl`，保留一个轮转文件，不记录正文与认证信息。原生连接池摘除资源后在锁外停止和记录日志。
 
-### 6.5.1 Workspace 普通终端（2026-10-29，GitHub #43）
+### 6.5.1 Workspace 普通终端（2026-11-03 更新，GitHub #43）
 
 单 Workspace 的 NewTask 旁提供 OpenTerminal／打开终端，All Tasks 不显示。`KanbanBoard` 显式保存普通终端选择；后台任务刷新不会将其切回任务。点击任务卡片或启动任务恢复对应任务区域；打开普通终端先经过已有 Todo 草稿保护和选择代次检查。`TerminalPanel` 增加可选 Workspace 目标，仍使用同一 bounds、关闭、最大化、错误与重连接口；标题显示 Workspace 与执行电脑。
 
-调用链为按钮 → `workspace_terminal_open` → `NativeTerminalManager::open` 的 Workspace 分支 → `Workflow::for_project` → `ensure_workspace_terminal`。`workspace_terminal.rs` 在已有 machine/session/workspace 分配锁内读取持久化目标；普通终端的实时校验使用完整 pane 列表的 Workspace、Tab、pane、terminal 身份，不依赖 Agent 注册、前台进程 PID 或 idle 状态。目标被移动或同 pane ID 被替换时拒绝连接；只有成功读取全 session 并确认原目标不存在才创建替代。
+调用链为按钮 → `workspace_terminal_open` → `NativeTerminalManager::open` 的 Workspace 分支 → `Workflow::for_project` → `ensure_workspace_terminal`。`workspace_terminal.rs` 在已有 machine/session/workspace 分配锁内读取持久化目标；普通终端的实时校验使用完整 pane 列表的 Workspace、Tab、pane、terminal 身份，不依赖 Agent 注册、前台进程 PID 或 idle 状态。`workspace_terminal_live` 保持严格相等；身份变化时单独调用 `recover_workspace_terminal`，只允许原位置的底层 terminal 更新。只有成功读取全 session、确认旧目标不存在且原创建标记也不存在时才创建替代；标记移往其他位置或 Workspace 时拒绝重复创建。
+
+**服务重启后的恢复（2026-11-03）。** Herdr 恢复 session 时可保留 Workspace/Tab/pane ID 并重新生成 `terminal_id`。`shell_recover` 按原 `operation_id` 在全 session 的 Tab 清单中找到唯一 `kanban-terminal-<操作 UUID>`，要求恰有一个 pane，且电脑/session/Workspace/Tab/pane 与原绑定完全相同。随后读取完整 pane 清单，确认旧 terminal 不在任何位置、候选新 terminal/pane 只出现一次且身份一致；仅 marker 一致或仅 pane ID 一致均不能恢复。返回后 Workflow 再次严格核验候选、检查取消及项目归属，在 SQLite 事务内拒绝任务预占、隔离历史 terminal 和其他 Workspace 普通终端的冲突，并以原 operation/target_json/ready 状态作条件更新。只改 `target_json`，保留原创建操作和初始 cwd；迟到结果无法覆盖新绑定，无 schema 迁移。这个恢复入口仅属于普通 shell，不用于任务 Codex 绑定。
+
+已有普通终端发生身份变化时，`TerminalPanel` 显示普通终端专用说明；身份异常、创建标记歧义或占用冲突提供“核实并重连 / Verify and reconnect”，沿用 `workspace_terminal_open` 重新执行完整核实，无额外 IPC。不能安全恢复时保留原记录和拦截，不提供跳过核验、清除未知创建记录或强制接管入口。其他网络失败保留普通重连。恢复不向 shell 发送命令或按键；Herdr 重启前已结束的进程、环境和运行中命令不能由更新绑定恢复。
 
 新建先在所属执行电脑检查 Project 的 `root_path`，再持久化创建意图，使用 `tab create --cwd ... --no-focus` 建立独立 Tab，标签为 `kanban-terminal-<操作 UUID>`。后缀作为创建回执丢失后的唯一核实标记，避免接管同名用户 Tab；找回必须恰有一个匹配 Tab 和 pane。返回的精确目标落库后即使用户已切走也保留，查看取消不销毁 shell。明确未执行的创建失败可重试；超时、异常响应和落库失败保持 `creating`，下次仅查询创建标记，不因暂未查到而重发，显示待核实错误。已有目标复用不会发送 `cd`、Enter 或其他输入，保留手动目录、环境、输出和进行中的批处理。
 
 远端沿用冻结的机器路由、现有 helper `cli_output` 和官方 SSH 原生客户端桥接，不新增远端协议。helper 准备后使用操作级控制连接复用查询与创建请求；失败不回退本机。原生视图所有者区分 Task 与 Workspace，任务完成/删除不能关闭 Workspace 查看连接。`pane_owner` 和空闲清理明确保护已认领普通终端，即使用户后来手动在其中启动 Agent。应用退出只关闭本应用查看客户端；持久化终端由 Herdr server 继续管理。
 
-验证与环境限制见[Workspace 终端验收记录](docs/verification/2026-10-29-workspace-terminal.md)。本次未替换运行中的安装版。
+原始功能验收见[Workspace 终端验收记录](docs/verification/2026-10-29-workspace-terminal.md)，重启恢复回归、真实本机/SSH 只读证据及当前限制见[重启恢复验证](docs/verification/2026-11-03-workspace-terminal-restart.md)。本次未替换运行中的安装版。
 
 ### 6.6 自动分配、完成关闭与恢复（GitHub #10）
 
@@ -1080,6 +1139,7 @@ Windows 进程查询可能先观察到 shell，而 Herdr 的 Agent 注册状态�
 
 ### 6.6.8 首条提示词随启动输入（2026-11-09，GitHub #48）
 
+- 2026-11-09 SSH 程序发现修复：`title_executable` 优先显式配置及进程 PATH，缺失入口时读取当前用户/系统保存的 PATH，再尝试既有兼容位置。standalone 经所选入口旁的 `resolve-codex.ps1` 动态解析原生程序，启动和共用标题命令不再猜测 standalone 内部路径，不缓存版本；npm 原生布局保留。发现过程仅操作子进程环境，使用有界隐藏 PowerShell。6 项发现/启动器回归、实际安装的精简环境验证、87 项生命周期及 2 项进程回归通过；旧包与新 helper 的同请求对比确认查找错误已消除。另一台电脑安装后的 GUI 送达尚未重验，详见 [SSH Codex 发现验证](docs/verification/2026-11-09-codex-ssh-discovery.md)。
 - `lifecycle::run_start` 在无已保存会话的新任务分支调用 `startup_prompt::start_with_prompt`；已保留进程及 `resume <UUID>` 不携带历史首条输入。冻结正文、模型、思考强度、工作目录和执行代次沿用原受理流程，图片在实际启动前重新校验。
 - 增量表 `startup_prompt_operations(operation_id, request_json)` 区分新旧协议。新输入与原 shell 身份在外部请求前，同事务写入该表及 `dispatch_operations(unknown)`；重开不会把缺失旧 send-text/Enter 日志当作未发送。取得新进程后仅在原上下文内更新绑定／操作目标，已发现会话立即固定，唯一精确回执通过现有事务完成送达。
 - `herdr_startup_prompt` 先只读取得新 pane 的 shell PID，再 stage 冻结请求到目标机的用户目录。`pane run` 只承载短 PowerShell 启动器命令；`codex_launcher` 读取请求并把完整正文作为 `--` 后的单个原生参数交给 Codex，仍为交互式 TUI。正文不经过 PowerShell、cmd 或模型读取文件的提示词替代；兼容 standalone launcher 与 npm 的原生 Windows 可执行文件。
@@ -1213,9 +1273,11 @@ Herdr 对外仍使用 `Cli` 与 `Herdr`。内部 `herdr_cli` 承担进程执行�
 
 ## 12. SSH 执行电脑（2026-10-27 更新）
 
-2026-11-09 #49：引用索引与目标查询同样使用应用级只读连接池，缓存 TTL 与连接生命周期独立；协议半帧/管道错误归一为可重试的连接错误，身份和格式错误仍分别报告。机器连接检查通过取消令牌及发布检查防止停用或退出后的迟到启用；DB 和各连接池的启停顺序由短转换锁协调，安装不持有此锁。普通终端打开 IPC 增加可选 `reconnect`：自动重连只读取原保存目标，不进入 shell 创建流程。无数据库迁移。
+2026-11-09 同步性能修正：`machine_routing` 不再为每次操作先建立独立 SSH 执行 `hello`；配置核验移至实际建连，一次性操作和任务专用控制连接仍核验目标。`remote_reads.rs` 为同机列表、Agent 状态、Git 各复用一条只读连接，三类查询不共用等待队列。每次响应仍由帧协议校验主机/session/请求 ID；配置或 helper 身份变化时重建，故障丢弃连接且不重放本次请求，下次轮询再连接；2026-11-09 #49 起共享 `ssh_read_pool` 应用级保留，不再空闲回收，停用电脑和退出应用取消在途读取并释放连接。任务启动、派发及回执观察不进入共享只读连接。
 
-`remote_reads` 为列表、状态、Git 和 `view_identity` 选择独立只读通道，复用应用级池；启动与派发仍使用操作专用控制连接，不进入共享队列。
+`remoteAgentReads.ts` 在同一轮询微任务内按机器合并项目，新增 `herdr_agent_snapshots(projectIds)` IPC；本机单项目读取保留。后端从数据库解析机器归属，`agent_diagnostics::snapshots` 按机器调用 `discover_agent_batch`，远端 `agent_status_batch` 每批只读取一次 Workspace 列表和 Agent 列表，再逐 pane 观察。项目错误独立返回，任务归属在发布结果前重新核对；隐藏窗口不发新批次，旧范围结果仍由既有代次规则隔离。无数据库迁移。验证及性能数据见 [SSH 同步性能验证](docs/verification/2026-11-09-ssh-read-performance.md)。
+
+2026-11-09 #49：引用索引与目标查询同样使用应用级只读连接池，缓存 TTL 与连接生命周期独立；协议半帧/管道错误归一为可重试的连接错误，身份和格式错误仍分别报告。机器连接检查通过取消令牌及发布检查防止停用或退出后的迟到启用；DB 和各连接池的启停顺序由短转换锁协调，安装不持有此锁。普通终端打开 IPC 增加可选 `reconnect`：自动重连只读取原保存目标，不进入 shell 创建流程。无数据库迁移。
 
 一个看板使用一份本地 SQLite，不共享数据库。`machines.rs` 的 schema 12 将旧数据统一归属 `local`；Project 以 machine/session/workspace 唯一，绑定以 machine/session/pane 唯一，执行目标 JSON、派发/生命周期操作、启动快照、工作目录、会话和分配记录均保留 machine_id。名称可改，已有任务的项目不可换电脑。停用机器不删除历史。
 

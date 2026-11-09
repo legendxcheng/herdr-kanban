@@ -115,10 +115,24 @@ export interface HerdrAgent {
   title: string;
 }
 
+export interface AgentDiagnostic {
+  at: string;
+  project_id: string;
+  machine_id: string;
+  workspace_id: string;
+  session: string;
+  pane_id?: string | null;
+  task_id?: string | null;
+  stage: string;
+  code: string;
+  elapsed_ms: number;
+}
+
 export interface AgentSnapshot {
   agents: HerdrAgent[];
   failures: { pane_id: string; error: string }[];
   age_ms?: number;
+  diagnostics?: AgentDiagnostic[];
 }
 
 export interface DispatchRecord {

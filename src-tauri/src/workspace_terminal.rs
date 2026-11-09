@@ -64,10 +64,44 @@ impl Workflow {
                 let target: Target = serde_json::from_str(&saved).map_err(err)?;
                 self.check_shell_scope(project, &target)?;
                 // Full-session inventory distinguishes a moved terminal from a closed one.
-                if self.herdr.workspace_terminal_live(&target)? {
-                    check()?;
-                    self.check_shell_scope(project, &target)?;
-                    return Ok(target);
+                match self.herdr.workspace_terminal_live(&target) {
+                    Ok(true) => {
+                        check()?;
+                        self.check_shell_scope(project, &target)?;
+                        return Ok(target);
+                    }
+                    Ok(false) => {
+                        // The old IDs may be gone while the owned Tab survives
+                        // at a different slot. That is not permission to duplicate it.
+                        if self
+                            .herdr
+                            .find_workspace_terminal(&workspace, &operation)?
+                            .is_some()
+                        {
+                            return Err("binding.identity_changed".into());
+                        }
+                    }
+                    Err(message) if message == "binding.identity_changed" => {
+                        check()?;
+                        let restored =
+                            self.herdr.recover_workspace_terminal(&target, &operation)?;
+                        if restored == target
+                            || restored
+                                != (Target {
+                                    terminal_id: restored.terminal_id.clone(),
+                                    ..target.clone()
+                                })
+                        {
+                            return Err("binding.identity_changed".into());
+                        }
+                        if !self.herdr.workspace_terminal_live(&restored)? {
+                            return Err("workspace_terminal.missing".into());
+                        }
+                        check()?;
+                        self.restore_shell(project, &operation, &saved, &restored)?;
+                        return Ok(restored);
+                    }
+                    Err(message) => return Err(message),
                 }
             } else if state == "creating" {
                 // A lost response is not permission to replay creation, even if a read
@@ -174,6 +208,48 @@ impl Workflow {
             return Err("binding.identity_changed".into());
         }
         Ok(())
+    }
+
+    fn restore_shell(
+        &self,
+        project: &str,
+        operation: &str,
+        saved: &str,
+        target: &Target,
+    ) -> Result<(), String> {
+        self.check_shell_scope(project, target)?;
+        let mut db = self.db.lock().map_err(err)?;
+        let tx = db.transaction().map_err(err)?;
+        crate::machines::ensure_enabled(&tx, &target.machine_id)?;
+        if crate::projects::project_identity_on(&tx, project, &target.machine_id, &target.session)?
+            != target.workspace_id
+        {
+            return Err("binding.identity_changed".into());
+        }
+        // Check every reservation directly: pane_owner intentionally reports our
+        // existing Workspace reservation first and could hide a conflicting task.
+        let occupied: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM task_bindings WHERE machine_id=?1 AND session=?2
+                AND (pane_id=?3 OR json_extract(target_json,'$.terminal_id')=?4))
+             OR EXISTS(SELECT 1 FROM retired_execution_targets
+                WHERE COALESCE(json_extract(target_json,'$.machine_id'),'local')=?1
+                AND json_extract(target_json,'$.session')=?2 AND json_extract(target_json,'$.terminal_id')=?4)
+             OR EXISTS(SELECT 1 FROM workspace_terminals WHERE machine_id=?1 AND session=?2 AND workspace_id<>?5
+                AND (json_extract(target_json,'$.pane_id')=?3 OR json_extract(target_json,'$.terminal_id')=?4))",
+            params![target.machine_id,target.session,target.pane_id,target.terminal_id,target.workspace_id], |r|r.get(0)
+        ).map_err(err)?;
+        if occupied {
+            return Err("workspace_terminal.occupied".into());
+        }
+        let changed = tx.execute(
+            "UPDATE workspace_terminals SET target_json=?1 WHERE machine_id=?2 AND session=?3 AND workspace_id=?4
+             AND operation_id=?5 AND target_json=?6 AND state='ready'",
+            params![serde_json::to_string(target).map_err(err)?,target.machine_id,target.session,target.workspace_id,operation,saved]
+        ).map_err(err)?;
+        if changed != 1 {
+            return Err("binding.identity_changed".into());
+        }
+        tx.commit().map_err(err)
     }
 }
 

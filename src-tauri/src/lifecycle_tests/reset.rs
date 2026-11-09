@@ -237,7 +237,7 @@ fn reset_keeps_image_ownership_references_and_settings_editable_without_changing
     assert_eq!(task.priority,crate::models::TaskPriority::Urgent);
     assert_eq!(task.codex_settings,settings);
     assert!(task.codex_settings_editable);
-    assert_eq!(crate::codex_settings::last(&db).unwrap(),settings);
+    assert_eq!(crate::codex_settings::last(&db,"p1").unwrap(),settings);
     assert_eq!(db.query_row("SELECT COUNT(*) FROM task_image_refs WHERE task_id='a'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
     assert_eq!(db.query_row("SELECT COUNT(*) FROM operation_image_refs WHERE operation_id=?1",[&flow],|r|r.get::<_,i64>(0)).unwrap(),1);
 }

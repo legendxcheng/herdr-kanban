@@ -40,10 +40,11 @@ function ProjectChoice({ projects, machines, onClose, onChoose }: {
     }}>
       <h3 id={id}>{tr("summary.choose_project")}</h3>
       {!projects.length && <p>{tr("summary.empty_workspaces")}</p>}
-      <label>{tr("summary.choose_project")}<select ref={select} value={target?.id ?? ""} onChange={e => setSelected(e.target.value)}>
+      <label className="field-label" htmlFor={`${id}-workspace`}>{tr("summary.choose_project")}</label>
+      <select id={`${id}-workspace`} className="field-input task-workspace-select" ref={select} value={target?.id ?? ""} onChange={e => setSelected(e.target.value)}>
         <option value="">{tr("summary.choose_placeholder")}</option>
         {projects.map(p => <option key={p.id} value={p.id}>{machineLabel(p.machine_id ?? "local", machines.find(m => m.id === p.machine_id)?.name)} · {p.name}</option>)}
-      </select></label>
+      </select>
       <div className="dialog-actions"><button className="btn-secondary" onClick={onClose}>{tr("common.cancel")}</button>
         <button className="btn-primary" disabled={!target} onClick={() => { if (target) onChoose(target); }}>{tr("summary.continue")}</button></div>
     </section>

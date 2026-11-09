@@ -2,7 +2,7 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { tr } from "./i18n";
 import type {
-  CodexSettings, CodexCatalog, AgentSnapshot,
+  CodexSettings, CodexCatalog, AgentSnapshot, AgentDiagnostic,
   Machine, SavedMachine, EnrollmentStatus, WorkspaceChoices, NavigationState, Project, ProjectGitStatus, ProjectSnapshot, WorkspaceOperation, Task, TaskSummary, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
 } from "./types";
 
@@ -44,7 +44,7 @@ export const createTask = (projectId: string, priority: TaskPriority, promptJson
 export const retryTaskTitle = (id: string, requestId: string) => invoke<void>("retry_task_title", { id, requestId });
 export const updateTask = (id: string, name: string | undefined, promptJson: string, priority: TaskPriority, draftId?: string, codexSettings?: CodexSettings) =>
   invoke<void>("update_task", { id, name, promptJson, priority, draftId, ...(codexSettings ? { codexSettings } : {}) });
-export const lastCodexSettings = () => invoke<CodexSettings>("last_codex_settings");
+export const lastCodexSettings = (projectId: string) => invoke<CodexSettings>("last_codex_settings", { projectId });
 export const codexModelCatalog = (projectId: string, refresh = false) => invoke<CodexCatalog>("codex_model_catalog", { projectId, refresh });
 export interface PromptImage { id: string; name: string; mime: string; bytes: number; width: number; height: number }
 export const openImageDraft = (projectId: string, taskId?: string) => invoke<string>("open_image_draft", { projectId, taskId });
@@ -98,6 +98,9 @@ export const herdrListAgents = (projectId: string) =>
   invoke<HerdrAgent[]>("herdr_list_agents", { projectId });
 export const herdrAgentSnapshot = (projectId: string) =>
   invoke<AgentSnapshot>("herdr_agent_snapshot", { projectId });
+export const herdrAgentSnapshots = (projectIds: string[]) =>
+  invoke<Record<string, { snapshot: AgentSnapshot | null; error: AgentDiagnostic | null }>>("herdr_agent_snapshots", { projectIds });
+export const openAgentStatusLogs = () => invoke<void>("open_agent_status_logs");
 export const dispatchToHerdr = (
   taskId: string, agentName: string, workspace: string, promptText: string, operationId: string, promptJson?: string,
 ) => invoke<DispatchRecord>("dispatch_to_herdr", {

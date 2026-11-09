@@ -4,57 +4,61 @@ use crate::agent_status::{Discovery, DiscoveryFailure};
 
 impl Cli {
     pub(super) fn discover_agent_statuses(&self, workspace: &str) -> Result<Discovery, String> {
+        self.discover_agent_status_batch(&[workspace.into()])?
+            .remove(workspace).ok_or("herdr.invalid_response")?
+    }
+
+    pub(super) fn discover_agent_status_batch(&self, workspaces: &[String]) -> Result<crate::agent_status::Discoveries, String> {
         if let Some(machine) = &self.remote {
-            let mut discovery: Discovery = crate::remote_transport::request(
-                machine,
-                serde_json::json!({"method":"agent_status_targets", "workspace":workspace}),
-            )?;
-            for target in &mut discovery.targets {
-                target.machine_id = machine.id.clone();
+            let mut discoveries: crate::agent_status::Discoveries = crate::remote_transport::request(
+                machine, serde_json::json!({"method":"agent_status_batch", "workspaces":workspaces}),
+            ).map_err(|e| crate::agent_diagnostics::staged("transport", e))?;
+            for discovery in discoveries.values_mut().filter_map(|d| d.as_mut().ok()) {
+                for target in &mut discovery.targets { target.machine_id = machine.id.clone(); }
             }
-            return Ok(discovery);
+            return Ok(discoveries);
         }
-        let spaces = self.status_json(&["workspace", "list"])?;
-        let matches = spaces
-            .pointer("/result/workspaces")
-            .and_then(Value::as_array)
-            .ok_or("herdr.invalid_response")?
-            .iter()
-            .filter(|w| w["workspace_id"] == workspace)
-            .count();
-        if matches != 1 {
-            return Err("binding.workspace_ambiguous".into());
-        }
+        if workspaces.is_empty() { return Ok(Default::default()); }
         let sampled = std::time::Instant::now();
-        let doc = self.status_json(&["agent", "list"])?;
-        let agents = doc
-            .pointer("/result/agents")
-            .and_then(Value::as_array)
-            .ok_or("herdr.invalid_response")?;
-        let agents: Vec<_> = agents
-            .iter()
-            .filter(|a| a["workspace_id"] == workspace)
-            .map(|a| Ok((field(a, "pane_id")?, a)))
-            .collect::<Result<_, String>>()?;
-        let mut discovery = Discovery::default();
-        // Each status read has a short deadline. Keep process checks sequential
-        // within a Workspace; project-level concurrency is already bounded by the caller.
-        for (pane, agent) in agents {
-            match self.observe_status(workspace, agent) {
-                Ok(target) => discovery.targets.push(target),
-                Err(error) => discovery.failures.push(DiscoveryFailure {
-                    pane_id: pane.into(),
-                    error,
-                }),
-            }
+        let spaces = self.status_read("workspace_list", &["workspace", "list"])?;
+        let spaces = spaces.pointer("/result/workspaces").and_then(Value::as_array)
+            .ok_or_else(|| crate::agent_diagnostics::staged("workspace_list", "herdr.invalid_response".into()))?;
+        let doc = self.status_read("agent_list", &["agent", "list"])?;
+        let agents = doc.pointer("/result/agents").and_then(Value::as_array)
+            .ok_or_else(|| crate::agent_diagnostics::staged("agent_list", "herdr.invalid_response".into()))?;
+        let mut results = crate::agent_status::Discoveries::new();
+        for workspace in workspaces {
+            if results.contains_key(workspace) { continue; }
+            let result = (|| {
+                if spaces.iter().filter(|w| w["workspace_id"] == *workspace).count() != 1 {
+                    return Err(crate::agent_diagnostics::staged("workspace_list", "binding.workspace_ambiguous".into()));
+                }
+                let mut discovery = Discovery::default();
+                for agent in agents.iter().filter(|a| a["workspace_id"] == *workspace) {
+                    let pane = field(agent, "pane_id")?;
+                    match self.observe_status(workspace, agent) {
+                        Ok(target) => discovery.targets.push(target),
+                        Err(error) => discovery.failures.push(DiscoveryFailure { pane_id: pane.into(), error }),
+                    }
+                }
+                discovery.age_ms = sampled.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                Ok(discovery)
+            })();
+            results.insert(workspace.clone(), result);
         }
-        discovery.age_ms = sampled.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        Ok(discovery)
+        Ok(results)
+    }
+
+    fn status_read(&self, stage: &str, args: &[&str]) -> Result<Value, String> {
+        self.status_json(args)
+            .map_err(|e| crate::agent_diagnostics::staged(stage, e))
     }
 
     fn status_target(&self, workspace: &str, agent: &Value) -> Result<Target, String> {
-        let info =
-            self.status_json(&["pane", "process-info", "--pane", field(agent, "pane_id")?])?;
+        let info = self.status_read(
+            "process_info",
+            &["pane", "process-info", "--pane", field(agent, "pane_id")?],
+        )?;
         self.target_from_process_info(workspace, agent, &info)
     }
 
@@ -67,10 +71,10 @@ impl Cli {
                 return Ok(target);
             }
         }
-        let doc = self.status_json(&["agent", "get", field(agent, "pane_id")?])?;
-        let current = doc
-            .pointer("/result/agent")
-            .ok_or("herdr.invalid_response")?;
+        let doc = self.status_read("agent_get", &["agent", "get", field(agent, "pane_id")?])?;
+        let current = doc.pointer("/result/agent").ok_or_else(|| {
+            crate::agent_diagnostics::staged("agent_get", "herdr.invalid_response".into())
+        })?;
         if ["workspace_id", "pane_id", "terminal_id", "agent"]
             .iter()
             .any(|key| current[*key] != agent[*key])
@@ -89,6 +93,25 @@ mod tests {
         fn drop(&mut self) {
             std::fs::remove_dir_all(&self.0).unwrap();
         }
+    }
+
+    #[test]
+    fn batch_reads_inventory_once_and_isolates_missing_workspaces() {
+        let fixture = Fixture(std::env::temp_dir().join(format!("kanban-status-batch-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir(&fixture.0).unwrap();
+        let executable = fixture.0.join("herdr.cmd");
+        std::fs::write(&executable, concat!(
+            "@echo off\r\necho read>>\"%~dp0reads\"\r\n",
+            "if \"%~3 %~4\"==\"workspace list\" (\r\necho {\"result\":{\"workspaces\":[{\"workspace_id\":\"w1\"},{\"workspace_id\":\"w2\"}]}}\r\nexit /b 0\r\n)\r\n",
+            "if \"%~3 %~4\"==\"agent list\" (\r\necho {\"result\":{\"agents\":[]}}\r\nexit /b 0\r\n)\r\nexit /b 3\r\n",
+        )).unwrap();
+        let cli = Cli { executable, session: "default".into(), remote: None };
+        let results = cli.discover_agent_status_batch(&["w1".into(), "missing".into(), "w2".into(), "w1".into()]).unwrap();
+        assert_eq!(results.len(), 3);
+        assert!(results["w1"].as_ref().unwrap().targets.is_empty());
+        assert!(results["w2"].is_ok());
+        assert!(results["missing"].as_ref().unwrap_err().contains("binding.workspace_ambiguous"));
+        assert_eq!(std::fs::read_to_string(fixture.0.join("reads")).unwrap().lines().count(), 2);
     }
 
     #[test]
@@ -199,6 +222,10 @@ mod tests {
         assert_eq!(result.targets[0].status, "idle");
         assert_eq!(result.failures.len(), 1);
         assert_eq!(result.failures[0].pane_id, "w1:p1");
+        assert_eq!(
+            crate::agent_diagnostics::error_parts(&result.failures[0].error, "snapshot"),
+            ("process_info".into(), "herdr.timeout".into())
+        );
         assert!(
             result.age_ms < 5_000,
             "healthy sample aged {}ms",
@@ -227,7 +254,10 @@ mod tests {
         for project in projects {
             let snapshot = match app.agent_snapshot(&project) {
                 Ok(snapshot) => snapshot,
-                Err(error) if error == "binding.workspace_ambiguous" => {
+                Err(error)
+                    if crate::agent_diagnostics::error_parts(&error, "snapshot").1
+                        == "binding.workspace_ambiguous" =>
+                {
                     println!("project={project} unavailable={error}");
                     continue;
                 }

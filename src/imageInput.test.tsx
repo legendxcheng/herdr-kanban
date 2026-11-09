@@ -13,6 +13,8 @@ beforeEach(() => {
   Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: () => new DOMRect() });
   vi.mocked(invoke).mockReset().mockImplementation(async (command) => {
     switch (command) {
+      case "last_codex_settings": return { model: null, effort: null };
+      case "codex_model_catalog": return { models: [], source: "cli_catalog", cached: false, error: null };
       case "open_image_draft": return "draft-1";
       case "import_prompt_image": return image;
       case "preview_prompt_image": return "data:image/png;base64,AA==";

@@ -1,4 +1,5 @@
 mod agent_status;
+mod agent_diagnostics;
 mod codex_catalog;
 mod codex_settings;
 mod commands;
@@ -27,7 +28,6 @@ mod remote_helper;
 mod remote_images;
 mod remote_install;
 mod remote_resources;
-mod remote_reads;
 mod remote_transport;
 mod search_connection;
 mod search_wire;
@@ -66,6 +66,7 @@ mod terminal;
 mod title_cli;
 mod title_deepseek;
 mod title_executable;
+mod remote_reads;
 mod title_process;
 mod title_prompt;
 mod work_commands;
@@ -151,13 +152,14 @@ pub fn run() {
                     .shutdown();
                 window.state::<task_titles::TaskTitles>().shutdown();
                 window.state::<Arc<mention_search::Search>>().shutdown();
-                remote_reads::shutdown();
                 window.state::<Arc<task_recovery::Recovery>>().shutdown();
+                remote_reads::shutdown();
             }
         })
         .invoke_handler(tauri::generate_handler![
             work_commands::task_recovery_status,
             work_commands::retry_task_recovery,
+            agent_diagnostics::open_agent_status_logs,
             idle_cleanup::preview_idle_cleanup,
             idle_cleanup::execute_idle_cleanup,
             idle_cleanup::idle_cleanup_result,
@@ -211,6 +213,7 @@ pub fn run() {
             commands::read_skill_content,
             work_commands::herdr_list_agents,
             work_commands::herdr_agent_snapshot,
+            work_commands::herdr_agent_snapshots,
             work_commands::start_task,
             work_commands::continue_first_prompt,
             work_commands::complete_task,

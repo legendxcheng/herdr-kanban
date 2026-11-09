@@ -3,6 +3,16 @@ use super::*;
 #[test]
 #[ignore = "requires an explicit kanban-acceptance workspace and real Herdr/Codex"]
 fn live_multiline_start_has_exact_receipt_and_one_submission() {
+    live_multiline_start(false);
+}
+
+#[test]
+#[ignore = "requires an explicit kanban-acceptance workspace and real Herdr/Codex"]
+fn live_path_first_multiline_start_has_exact_receipt_and_one_submission() {
+    live_multiline_start(true);
+}
+
+fn live_multiline_start(path_first: bool) {
     let name = std::env::var("KANBAN_LIVE_WORKSPACE").unwrap();
     assert!(name.starts_with("kanban-acceptance-"));
     let cwd = std::env::var("KANBAN_LIVE_CWD").unwrap();
@@ -24,6 +34,14 @@ fn live_multiline_start_has_exact_receipt_and_one_submission() {
         "This is an input transport test {}. Reply exactly KANBAN_RECEIPT_OK. Do not use tools or change files.\n第一行：保留换行\n\n第二行：\t保留中文、制表符与空行\n最后一行 $kanban-dev",
         uuid::Uuid::new_v4()
     );
+    let prompt = if path_first {
+        format!(
+            "/C:/Temp/kanban-transport-{}.md\n\n这是输入测试。不要读文件、使用工具或执行任务。\n只回复 KANBAN_RECEIPT_OK。",
+            uuid::Uuid::new_v4()
+        )
+    } else {
+        prompt
+    };
     let operation = uuid::Uuid::new_v4().to_string();
     let result = app.start_task("a", &prompt, &operation);
     let target = app

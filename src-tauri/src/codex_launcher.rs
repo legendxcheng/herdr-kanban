@@ -112,28 +112,26 @@ fn windows_argument_len(arg: &str) -> usize {
 }
 fn resolve() -> Result<PathBuf, String> {
     let selected = crate::title_executable::resolve();
+    resolve_native(&selected)
+}
+
+fn resolve_native(selected: &Path) -> Result<PathBuf, String> {
     if selected
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("exe"))
         && selected.is_file()
     {
-        return Ok(selected);
+        return Ok(selected.into());
     }
     if selected
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("cmd"))
     {
         let root = selected.parent().ok_or("startup.native_codex_missing")?;
-        // The official standalone launcher resolves this installation; do not pass
-        // multiline input through its .cmd wrapper.
-        if root.join("resolve-codex.ps1").is_file() {
-            if let Some(home) = std::env::var_os("USERPROFILE") {
-                let p =
-                    PathBuf::from(home).join(".codex/packages/standalone/current/bin/codex.exe");
-                if p.is_file() {
-                    return Ok(p);
-                }
-            }
+        if let Some(native) = crate::title_executable::standalone_native(selected)
+            .map_err(|_| "startup.native_codex_missing")?
+        {
+            return Ok(native);
         }
         for package in [
             "node_modules/@openai/codex",
@@ -350,6 +348,98 @@ fn resume(_: u32) -> Result<(), String> {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    #[test]
+    fn standalone_resolver_tracks_updates_and_rejects_invalid_results() {
+        let root = std::env::temp_dir()
+            .join(format!("codex-resolver-{}", uuid::Uuid::new_v4()))
+            .join("中文 path & ' quoted");
+        std::fs::create_dir_all(&root).unwrap();
+        let entry = root.join("codex.cmd");
+        let resolver = root.join("resolve-codex.ps1");
+        std::fs::write(&entry, "").unwrap();
+        std::fs::write(&resolver, "[Console]::WriteLine([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'selected.txt')))").unwrap();
+        // The same launcher follows an update, including arbitrary release layouts.
+        for release in ["old release", "new release"] {
+            let native = root.join(release).join("codex.exe");
+            std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+            std::fs::write(&native, "").unwrap();
+            std::fs::write(root.join("selected.txt"), native.to_str().unwrap()).unwrap();
+            assert_eq!(resolve_native(&entry).unwrap(), native);
+            assert_eq!(
+                crate::title_executable::command(&entry)
+                    .unwrap()
+                    .get_program(),
+                native
+            );
+        }
+        for invalid in [
+            root.join("missing.exe").to_string_lossy().into_owned(),
+            "relative.exe".into(),
+            "one.exe\ntwo.exe".into(),
+        ] {
+            std::fs::write(root.join("selected.txt"), invalid).unwrap();
+            assert_eq!(
+                resolve_native(&entry).unwrap_err(),
+                "startup.native_codex_missing"
+            );
+        }
+        std::fs::write(&resolver, "exit 1").unwrap();
+        assert_eq!(
+            resolve_native(&entry).unwrap_err(),
+            "startup.native_codex_missing"
+        );
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn npm_native_layouts_remain_supported() {
+        for package in [
+            "node_modules/@openai/codex",
+            "node_modules/@openai/codex-win32-x64",
+            "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64",
+        ] {
+            for subdir in ["bin", "codex"] {
+                let root = std::env::temp_dir().join(format!("codex-npm-{}", uuid::Uuid::new_v4()));
+                let native = root
+                    .join(package)
+                    .join(format!("vendor/x86_64-pc-windows-msvc/{subdir}/codex.exe"));
+                std::fs::create_dir_all(native.parent().unwrap()).unwrap();
+                std::fs::write(root.join("codex.cmd"), "").unwrap();
+                std::fs::write(&native, "").unwrap();
+                assert_eq!(resolve_native(&root.join("codex.cmd")).unwrap(), native);
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "Read-only installed Codex discovery with minimal SSH-like environment"]
+    fn installed_codex_is_discovered_without_process_path_or_appdata() {
+        const CHILD: &str = "KANBAN_INSTALLED_CODEX_DISCOVERY_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            let native = resolve().unwrap();
+            let output = Command::new(&native).arg("--version").output().unwrap();
+            assert!(output.status.success());
+            assert!(String::from_utf8_lossy(&output.stdout).contains("codex-cli"));
+            println!(
+                "native={} version={}",
+                native.display(),
+                String::from_utf8_lossy(&output.stdout).trim()
+            );
+            return;
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "codex_launcher::tests::installed_codex_is_discovered_without_process_path_or_appdata", "--ignored", "--nocapture"])
+            .env(CHILD, "1").env("PATH", "").env_remove("LOCALAPPDATA").env_remove("APPDATA")
+            .env_remove("KANBAN_CODEX_EXECUTABLE").output().unwrap();
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn native_process_receives_exact_multiline_long_prompt_and_settings() {
         let root = std::env::temp_dir().join(format!("startup-argv-{}", uuid::Uuid::new_v4()));

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AgentSnapshot, HerdrAgent, Project } from "./types";
+import type { AgentDiagnostic, AgentSnapshot, HerdrAgent, Project } from "./types";
 import * as api from "./api";
+import { readRemoteAgents } from "./remoteAgentReads";
 
 export interface AgentRead {
   updating: boolean;
@@ -8,6 +9,18 @@ export interface AgentRead {
   observedAt?: number;
   paused?: boolean;
   failures?: AgentSnapshot["failures"];
+  diagnostics?: AgentDiagnostic[];
+  error?: AgentDiagnostic;
+}
+
+// Older backends and IPC failures may still reject with a string. Never stringify
+// a structured diagnostic into [object Object] or expose arbitrary CLI stderr.
+export function agentDiagnostic(error: unknown, projectId: string, startedAt: number): AgentDiagnostic {
+  if (error && typeof error === "object" && "stage" in error && "code" in error && "at" in error
+    && typeof error.stage === "string" && typeof error.code === "string" && typeof error.at === "string") return error as AgentDiagnostic;
+  const code = String(error).replace(/^Error: /, "").split(":")[0];
+  return { at: new Date().toISOString(), project_id: projectId, machine_id: "", workspace_id: "", session: "",
+    stage: "ipc", code: /^[a-z_]+\.[a-z_.]+$/.test(code) ? code : "status.external_error", elapsed_ms: Date.now() - startedAt };
 }
 
 // Share discovery across StrictMode/navigation and bound remote work independently of task reads.
@@ -19,9 +32,17 @@ const isVisible = () => document.visibilityState !== "hidden";
 function pump(pool: Pool) {
   while (activeReads[pool] < (pool === "local" ? 2 : 3) && queues[pool].length) queues[pool].shift()!();
 }
-function readAgents(projectId: string, key: string, pool: Pool) {
+function readAgents(projectId: string, key: string, pool: Pool, machine: string) {
   const existing = flights.get(key);
   if (existing) return existing;
+  if (pool === "remote") {
+    const startedAt = Date.now();
+    const request = readRemoteAgents(machine, projectId).then(snapshot => snapshot ? { snapshot,
+      observedAt: Math.min(startedAt, Date.now() - Math.max(0, snapshot.age_ms ?? 0)),
+    } : null).finally(() => { if (flights.get(key) === request) flights.delete(key); });
+    flights.set(key, request);
+    return request;
+  }
   const request = new Promise<{ snapshot: AgentSnapshot; observedAt: number } | null>((resolve, reject) => {
     queues[pool].push(() => {
       activeReads[pool]++;
@@ -50,6 +71,7 @@ export function useAgentStatus(projects: Project[]) {
     let generation = 0;
     const entries = (JSON.parse(scope) as string[][]).filter(p => p[1]);
     const pools = new Map(entries.map(p => [p[0], p[3] === "local" ? "local" as const : "remote" as const]));
+    const machines = new Map(entries.map(p => [p[0], p[3]]));
     const keys = new Map(entries.map(p => [p[0], JSON.stringify(p)]));
     const ids = entries.map(p => p[0]);
     const running = new Set<string>();
@@ -74,14 +96,16 @@ export function useAgentStatus(projects: Project[]) {
       do {
         repeat.delete(id);
         const current = generation;
+        const startedAt = Date.now();
         updateRead(id, { updating: true, paused: false });
         try {
-          const result = await readAgents(id, keys.get(id)!, pools.get(id)!);
+          const result = await readAgents(id, keys.get(id)!, pools.get(id)!, machines.get(id)!);
           if (active && current === generation && result) updateRead(id,
-            { updating: false, failed: false, observedAt: result.observedAt, failures: result.snapshot.failures }, result.snapshot.agents);
-        } catch {
+            { updating: false, failed: false, error: undefined, diagnostics: result.snapshot.diagnostics,
+              observedAt: result.observedAt, failures: result.snapshot.failures }, result.snapshot.agents);
+        } catch (error) {
           // Keep the last observation as history, never present it as a fresh success.
-          if (active && current === generation) updateRead(id, { updating: false, failed: true });
+          if (active && current === generation) updateRead(id, { updating: false, failed: true, error: agentDiagnostic(error, id, startedAt) });
         }
         if (active) setNow(Date.now());
       } while (active && repeat.has(id) && isVisible());

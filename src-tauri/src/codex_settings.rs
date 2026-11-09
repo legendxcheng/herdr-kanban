@@ -46,7 +46,29 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
         operation_id TEXT PRIMARY KEY REFERENCES lifecycle_operations(id), model TEXT, effort TEXT);
         CREATE TABLE IF NOT EXISTS codex_catalog_cache (
         machine_id TEXT NOT NULL, cwd TEXT NOT NULL, catalog TEXT NOT NULL, PRIMARY KEY(machine_id,cwd));
-        INSERT OR IGNORE INTO schema_migrations(version) VALUES(15);")
+        INSERT OR IGNORE INTO schema_migrations(version) VALUES(15);")?;
+    if !db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=20)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )? {
+        let tx = db.unchecked_transaction()?;
+        // The old singleton cannot identify its Workspace. Seed each Project from
+        // its newest retained task (including archived tasks), or Codex defaults.
+        tx.execute_batch(
+            "CREATE TABLE workspace_codex_settings (
+                project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+                model TEXT, effort TEXT);
+            INSERT INTO workspace_codex_settings(project_id,model,effort)
+                SELECT p.id,s.model,s.effort FROM projects p
+                LEFT JOIN tasks t ON t.id=(SELECT newest.id FROM tasks newest
+                    WHERE newest.project_id=p.id ORDER BY newest.created_at DESC,newest.id DESC LIMIT 1)
+                LEFT JOIN task_codex_settings s ON s.task_id=t.id;
+            INSERT INTO schema_migrations(version) VALUES(20);",
+        )?;
+        tx.commit()?;
+    }
+    Ok(())
 }
 
 pub fn read(db: &Connection, task: &str) -> Result<Settings, String> {
@@ -65,10 +87,11 @@ pub fn read(db: &Connection, task: &str) -> Result<Settings, String> {
     .map_err(|e| e.to_string())
 }
 
-pub fn last(db: &Connection) -> Result<Settings, String> {
+pub fn last(db: &Connection, project: &str) -> Result<Settings, String> {
     db.query_row(
-        "SELECT model,effort FROM last_codex_settings WHERE id=1",
-        [],
+        "SELECT s.model,s.effort FROM projects p
+        LEFT JOIN workspace_codex_settings s ON s.project_id=p.id WHERE p.id=?1",
+        [project],
         |r| {
             Ok(Settings {
                 model: r.get(0)?,
@@ -77,8 +100,8 @@ pub fn last(db: &Connection) -> Result<Settings, String> {
         },
     )
     .optional()
-    .map(|v| v.unwrap_or_default())
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "workspace.project_missing".into())
 }
 
 pub fn editable(db: &Connection, task: &str) -> Result<bool, String> {
@@ -114,9 +137,10 @@ pub fn save(
     .map_err(|e| e.to_string())?;
     if remember {
         db.execute(
-            "INSERT INTO last_codex_settings(id,model,effort) VALUES(1,?1,?2)
-            ON CONFLICT(id) DO UPDATE SET model=excluded.model,effort=excluded.effort",
-            params![settings.model, settings.effort],
+            "INSERT INTO workspace_codex_settings(project_id,model,effort)
+            SELECT project_id,?2,?3 FROM tasks WHERE id=?1
+            ON CONFLICT(project_id) DO UPDATE SET model=excluded.model,effort=excluded.effort",
+            params![task, settings.model, settings.effort],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -142,3 +166,7 @@ pub fn freeze(db: &Connection, task: &str, operation: &str) -> Result<Settings, 
     )
     .map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+#[path = "codex_settings_tests.rs"]
+mod tests;

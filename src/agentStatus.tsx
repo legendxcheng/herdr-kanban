@@ -1,4 +1,4 @@
-import type { HerdrAgent, HerdrTarget, Task } from "./types";
+import type { AgentDiagnostic, HerdrAgent, HerdrTarget, Task } from "./types";
 import { tr, useLocale } from "./i18n";
 import type { AgentRead } from "./useAgentStatus";
 
@@ -30,6 +30,7 @@ export interface AgentPresentation {
   status: AgentStatus;
   note?: "loading" | "updating" | "query_failed" | "stale" | "binding_mismatch" | "agent_missing" | "unrecognized" | "pending";
   previous?: AgentStatus;
+  diagnostic?: AgentDiagnostic;
 }
 
 export function taskAgentPresentation(task: Task, agents: HerdrAgent[], busy: boolean, read: AgentRead | undefined, now: number): AgentPresentation {
@@ -40,13 +41,19 @@ export function taskAgentPresentation(task: Task, agents: HerdrAgent[], busy: bo
   }
   if (task.binding?.state !== "valid" || !task.binding.target) return { status: "unknown", note: "binding_mismatch" };
   if (read?.failed || read?.paused || (read?.observedAt !== undefined && now - read.observedAt > 15_000)) {
-    return { status: "unknown", note: read.failed ? "query_failed" : "stale", previous: status !== "unknown" ? status : undefined };
+    return { status: "unknown", note: read.failed ? "query_failed" : "stale", previous: status !== "unknown" ? status : undefined,
+      diagnostic: read.failed ? read.error : read.diagnostics?.find(item => item.pane_id === task.binding!.target!.pane_id) };
   }
   if (read?.observedAt === undefined) return { status: "unknown", note: "loading" };
   const failure = read.failures?.find(failure => failure.pane_id === task.binding!.target!.pane_id);
   if (failure) {
-    if (failure.error === "binding.identity_changed") return { status: "unknown", note: "binding_mismatch" };
-    return { status: "unknown", note: "query_failed", previous: status !== "unknown" ? status : undefined };
+    const diagnostic = read.diagnostics?.find(item => item.pane_id === failure.pane_id) ?? {
+      at: new Date(read.observedAt).toISOString(), project_id: task.project_id, machine_id: task.binding.target.machine_id ?? "local",
+      workspace_id: task.binding.target.workspace_id, session: task.binding.target.session, pane_id: failure.pane_id,
+      task_id: task.id, stage: "process_identity", code: failure.error, elapsed_ms: 0,
+    };
+    if (failure.error === "binding.identity_changed") return { status: "unknown", note: "binding_mismatch", diagnostic };
+    return { status: "unknown", note: "query_failed", previous: status !== "unknown" ? status : undefined, diagnostic };
   }
   if (status === "unknown") {
     const live = agents.find(agent => agent.pane_id === task.binding!.target!.pane_id);
@@ -59,6 +66,7 @@ export function AgentStatusDot({ status, presentation }: { status: AgentStatus; 
   useLocale();
   const note = presentation?.note;
   const label = [tr(`agent_status.${status}`), note && tr(`agent_observation.${note}`),
+    presentation?.diagnostic && `${tr(`agent_diagnostic.stage.${presentation.diagnostic.stage}`)} · ${presentation.diagnostic.code}`,
     presentation?.previous && tr("agent_observation.previous", { status: tr(`agent_status.${presentation.previous}`) })].filter(Boolean).join(" · ");
   return <span className="agent-status-indicator" title={label}>
     <span className="agent-status-dot" data-status={status} role="img" aria-label={label} title={label} />

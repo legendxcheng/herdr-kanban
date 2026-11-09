@@ -7,6 +7,9 @@ pub(crate) use cli::agent_start_rejected_busy;
 #[path = "agent_start_tests.rs"]
 mod agent_start_tests;
 #[cfg(all(test, windows))]
+#[path = "herdr_submit_tests.rs"]
+mod submit_tests;
+#[cfg(all(test, windows))]
 #[path = "first_prompt_cli_tests.rs"]
 mod first_prompt_cli_tests;
 #[path = "codex_process.rs"]
@@ -192,6 +195,13 @@ impl Herdr for Cli {
     ) -> Result<Option<crate::workspace_terminal::Target>, String> {
         self.shell_find(workspace, operation)
     }
+    fn recover_workspace_terminal(
+        &self,
+        target: &crate::workspace_terminal::Target,
+        operation: &str,
+    ) -> Result<crate::workspace_terminal::Target, String> {
+        self.shell_recover(target, operation)
+    }
     fn create_workspace_terminal(
         &self,
         workspace: &str,
@@ -243,6 +253,9 @@ impl Herdr for Cli {
         }
         let doc = self.json(&["workspace", "list"])?;
         self.parse_workspaces(&doc)
+    }
+    fn discover_agent_batch(&self, workspaces: &[String]) -> Result<crate::agent_status::Discoveries, String> {
+        self.discover_agent_status_batch(workspaces)
     }
     fn move_workspace(
         &self,
@@ -608,11 +621,7 @@ impl Herdr for Cli {
         check_current: &dyn Fn() -> Result<(), String>,
         received: &dyn Fn() -> Result<bool, String>,
     ) -> Result<(), SendError> {
-        if self.remote.is_some() {
-            self.send_prompt_with_receipt(target, prompt, check_current, received)
-        } else {
-            self.send_prompt_checked(target, prompt, check_current)
-        }
+        self.send_prompt_with_receipt(target, prompt, check_current, received)
     }
     fn send_first_prompt(
         &self, target: &Target, prompt: &str, expected_session: Option<&str>,

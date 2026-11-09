@@ -213,8 +213,8 @@ impl TaskTitles {
         )
     }
 
-    pub fn last_codex_settings(&self) -> Result<crate::codex_settings::Settings, String> {
-        crate::codex_settings::last(&*self.db.lock().map_err(err)?)
+    pub fn last_codex_settings(&self, project: &str) -> Result<crate::codex_settings::Settings, String> {
+        crate::codex_settings::last(&*self.db.lock().map_err(err)?, project)
     }
 
     pub fn create_configured(

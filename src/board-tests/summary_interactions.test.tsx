@@ -97,16 +97,26 @@ it("汇总派发使用远端 Workspace 和保存后的内容，成功后显示�
 });
 
 it("汇总新建明确选择远端 Workspace，保存到该项目并留在汇总", async () => {
+  const base = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation((cmd, args, options) => {
+    if (cmd === "last_codex_settings") return Promise.resolve((args as { projectId: string }).projectId === remote.id
+      ? { model: "remote-model", effort: "high" } : { model: "local-model", effort: "low" });
+    if (cmd === "codex_model_catalog") return Promise.resolve({ models: [{ id: "remote-model", name: "Remote Model", efforts: ["high"] }], source: "cli_catalog", cached: false, error: null });
+    return base(cmd, args, options);
+  });
   await enter();
   fireEvent.click(screen.getByRole("button", { name: /新建任务/ }));
   const choose = await screen.findByRole("dialog", { name: "选择任务所属 Workspace" });
   fireEvent.change(within(choose).getByRole("combobox"), { target: { value: remote.id } });
   fireEvent.click(within(choose).getByRole("button", { name: "继续" }));
   const form = await screen.findByRole("dialog", { name: "新建任务" });
+  await waitFor(() => expect((within(form).getByRole("combobox", { name: "AI 模型" }) as HTMLSelectElement).value).toBe("remote-model"));
+  expect((within(form).getByRole("combobox", { name: "思考强度" }) as HTMLSelectElement).value).toBe("high");
   fireEvent.paste(within(form).getByRole("textbox", { name: "提示词" }), { clipboardData: { getData: (type: string) => type === "text/plain" ? "远端新任务正文" : "", files: [] } });
   fireEvent.click(within(form).getByRole("button", { name: "添加任务" }));
   await screen.findByText("新任务", { selector: ".task-name" });
-  expect(invoke).toHaveBeenCalledWith("create_task", expect.objectContaining({ projectId: remote.id, promptJson: expect.stringContaining("远端新任务正文") }));
+  expect(invoke).toHaveBeenCalledWith("last_codex_settings", { projectId: remote.id });
+  expect(invoke).toHaveBeenCalledWith("create_task", expect.objectContaining({ projectId: remote.id, promptJson: expect.stringContaining("远端新任务正文"), codexSettings: { model: "remote-model", effort: "high" } }));
   expect(screen.getByRole("button", { name: "汇总看板" }).getAttribute("aria-pressed")).toBe("true");
 });
 
@@ -172,6 +182,7 @@ it("汇总隔离跨机器实时状态，手选终端不重发且保持全局优�
   const base = vi.mocked(invoke).getMockImplementation()!;
   vi.mocked(invoke).mockImplementation((cmd, args, opts) => cmd === "herdr_agent_snapshot"
     ? Promise.resolve({ agents: [(args as { projectId: string }).projectId === remote.id ? liveAgent(stored[1], "blocked") : liveAgent(stored[0], "working")], failures: [] })
+    : cmd === "herdr_agent_snapshots" ? Promise.resolve({ [remote.id]: { snapshot: { agents: [liveAgent(stored[1], "blocked")], failures: [] }, error: null } })
     : base(cmd, args, opts));
   await enter();
   await waitFor(() => expect(cardDot("远端待办").getAttribute("data-status")).toBe("blocked"));
@@ -243,23 +254,29 @@ it("四个远端慢查询期间本机状态仍可刷新", async () => {
   bindTask(); stored[0] = { ...board.storedTask, status: "in_progress" };
   const scope = [project, ...Array.from({ length: 4 }, (_, i) => ({ ...remote, id: `remote-${i}` }))];
   const base = vi.mocked(invoke).getMockImplementation()!;
-  const pending: ((value: { agents: []; failures: [] }) => void)[] = [];
+  const pending: (() => void)[] = [];
   let localStatus = "working";
   vi.mocked(invoke).mockImplementation((cmd, args, opts) => {
     if (cmd === "herdr_agent_snapshot") return (args as { projectId: string }).projectId === project.id
-      ? Promise.resolve({ agents: [liveAgent(stored[0], localStatus)], failures: [] }) : new Promise(resolve => { pending.push(resolve); });
+      ? Promise.resolve({ agents: [liveAgent(stored[0], localStatus)], failures: [] }) : Promise.reject("unexpected unbatched remote read");
+    if (cmd === "herdr_agent_snapshots") return new Promise(resolve => {
+      const ids = (args as { projectIds: string[] }).projectIds;
+      pending.push(() => resolve(Object.fromEntries(ids.map(id => [id, { snapshot: { agents: [], failures: [] }, error: null }]))));
+    });
     return base(cmd, args, opts);
   });
   const view = render(<TaskSummaryBoard projects={scope} />);
   try {
     await waitFor(() => expect(cardDot(stored[0].name).getAttribute("data-status")).toBe("working"));
     await act(async () => {});
+    expect(invoke).toHaveBeenCalledWith("herdr_agent_snapshots", { projectIds: ["remote-0", "remote-1", "remote-2", "remote-3"] });
+    expect(pending).toHaveLength(1);
     localStatus = "blocked";
     fireEvent(window, new Event("focus"));
     await waitFor(() => expect(cardDot(stored[0].name).getAttribute("data-status")).toBe("blocked"));
   } finally {
     view.unmount();
-    while (pending.length) await act(async () => { pending.splice(0).forEach(resolve => resolve({ agents: [], failures: [] })); });
+    while (pending.length) await act(async () => { pending.splice(0).forEach(resolve => resolve()); });
   }
 });
 

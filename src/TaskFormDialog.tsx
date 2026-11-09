@@ -41,7 +41,8 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, u
   const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? "normal");
   const [codexSettings, setCodexSettings] = useState<CodexSettings>(task?.codex_settings ?? defaultCodexSettings);
   const [savedSettings, setSavedSettings] = useState(codexSettings);
-  const [settingsLoading, setSettingsLoading] = useState(!task);
+  const [settingsProjectId, setSettingsProjectId] = useState<string>();
+  const settingsLoading = !task && settingsProjectId !== project.id;
   const [settingsValid, setSettingsValid] = useState(true);
   const settingsEdited = useRef(false);
   const settingsLocked = !!task && !(task.codex_settings_editable ?? (task.status === "todo" && !task.flow?.session_id && !task.binding?.target && !["pending", "unknown"].includes(task.flow?.state ?? "") && !task.binding?.operation));
@@ -66,12 +67,19 @@ function TaskForm({ project, task, onClose, onSaved, panel = false, editorRef, u
   useEffect(() => {
     if (task) return;
     let active = true;
-    api.lastCodexSettings().then(settings => {
-      if (active && !settingsEdited.current && settings) { setCodexSettings(settings); setSavedSettings(settings); }
-    }).catch(reason => { if (active) setError(String(reason)); })
-      .finally(() => { if (active) setSettingsLoading(false); });
+    settingsEdited.current = false;
+    setSettingsProjectId(undefined);
+    setCodexSettings(defaultCodexSettings);
+    setSavedSettings(defaultCodexSettings);
+    setError("");
+    api.lastCodexSettings(project.id).then(settings => {
+      if (active) {
+        if (!settingsEdited.current) { setCodexSettings(settings); setSavedSettings(settings); }
+        setSettingsProjectId(project.id);
+      }
+    }).catch(reason => { if (active) setError(String(reason)); });
     return () => { active = false; };
-  }, [task?.id]);
+  }, [project.id, task?.id]);
 
   useEffect(() => {
     if (panel) return;

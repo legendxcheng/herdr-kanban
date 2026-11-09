@@ -7,6 +7,7 @@ import { errorText, tr, useLocalizedMessage } from "./i18n";
 import { canResetTask, flowPending, flowUnresolved, preparationLabel, taskColumn, taskHasTerminalView } from "./taskFlow";
 import { AgentStatusDot, type AgentStatus, type AgentPresentation } from "./agentStatus";
 import { identityColor } from "./identityColors";
+import { AgentQueryDetails } from "./AgentQueryDetails";
 
 interface TaskCardProps {
   task: Task;
@@ -132,7 +133,7 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, recover
           {retryingTitle && <span className="spinner" />}{tr("title.retry")}
         </button>}
         {titlePending && <span role="status" aria-label={titleStatus} title={titleStatus}><Icon name="progress" /></span>}
-        {compact && (hasModel || source) && <button className="btn-icon" onClick={toggleDetails}
+        {compact && (hasModel || source || agentPresentation?.diagnostic) && <button className="btn-icon" onClick={toggleDetails}
           aria-label={tr("task.details")} title={tr("task.details")} aria-expanded={detailsOpen} aria-controls={detailsId}><Icon name="info" /></button>}
         <fieldset disabled={disabled || flowPending(task)} className="task-tools">
           {taskColumn(task) === "done" && <button className="btn-icon" onClick={handleArchive} disabled={!!archiveReason}
@@ -164,7 +165,8 @@ export function TaskCard({ task, source, agentStatus, agentPresentation, recover
           <button disabled={deleting || archiving || removing} onClick={handleDelete} className="btn-icon btn-danger" aria-label={tr("task.delete")} title={tr("task.delete")}><Icon name="trash" /></button>
         </div>
       </div>
-      <div id={detailsId} hidden={compact && !(detailsOpen && (hasModel || source || statusKey))} className={compact ? "task-compact-details" : undefined} {...(compact ? controls : {})}>
+      <div id={detailsId} hidden={compact && !(detailsOpen && (hasModel || source || statusKey || agentPresentation?.diagnostic))} className={compact ? "task-compact-details" : undefined} {...(compact ? controls : {})}>
+      {agentPresentation?.diagnostic && <AgentQueryDetails diagnostic={agentPresentation.diagnostic} task={task} />}
       {compact && source && <p className="task-notice">{sourceContent}</p>}
       {compact && <p className="task-notice">{tr("priority.label")}: {tr(`priority.${task.priority}`)}</p>}
       {(task.codex_settings?.model || task.codex_settings?.effort) && <p className="task-model" title={tr("model.startup")}>{task.codex_settings.model ?? tr("model.default")} · {task.codex_settings.effort ?? tr("model.default")}</p>}
