@@ -14,6 +14,18 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// Missing evidence is retryable; a positively identified different session is not.
+pub(crate) fn check_session(expected: Option<&str>, observed: Option<&str>) -> Result<(), String> {
+    if let Some(expected) = expected {
+        let observed = observed.ok_or("flow.session_unverified")?;
+        uuid::Uuid::parse_str(observed).map_err(|_| "flow.session_invalid")?;
+        if observed != expected {
+            return Err("flow.session_mismatch".into());
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn observe_identity(
     herdr: &(impl crate::workflow::Herdr + ?Sized),
     target: &Target,
@@ -139,15 +151,9 @@ impl Workflow {
             return Err("machine.identity_changed".into());
         }
         let session = self.herdr.view_identity(&authorization.target)?;
-        if authorization
-            .session_id
-            .as_ref()
-            .is_some_and(|expected| session.as_ref() != Some(expected))
-        {
-            return Err("flow.session_mismatch".into());
-        }
+        check_session(authorization.session_id.as_deref(), session.as_deref())?;
         if authorization.read_only {
-            uuid::Uuid::parse_str(session.as_deref().ok_or("flow.session_missing")?)
+            uuid::Uuid::parse_str(session.as_deref().ok_or("flow.session_unverified")?)
                 .map_err(|_| "flow.session_invalid")?;
         }
         authorization.session_id = session;
@@ -157,9 +163,7 @@ impl Workflow {
     pub fn validate_view(&self, task: &str, expected: &Authorization) -> Result<(), String> {
         self.check_view(task, expected)?;
         let session = self.herdr.view_identity(&expected.target)?;
-        if expected.session_id.is_some() && session != expected.session_id {
-            return Err("flow.session_mismatch".into());
-        }
+        check_session(expected.session_id.as_deref(), session.as_deref())?;
         self.check_view(task, expected)
     }
 }

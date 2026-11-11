@@ -139,5 +139,5 @@ export function TerminalPanel({ task, workspace, machineName, onRepair, maximize
 
 function transientConnectionError(message: string) {
   return ["terminal.disconnected", "terminal.stale", "terminal.client_connect", "terminal.client_focus_timeout", "terminal.window_timeout",
-    "machine.timeout", "machine.connection_failed", "herdr.timeout", "herdr.unavailable"].includes(message.split(":")[0]);
+    "machine.timeout", "machine.connection_failed", "herdr.timeout", "herdr.unavailable", "flow.session_unverified"].includes(message.split(":")[0]);
 }

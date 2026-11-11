@@ -68,6 +68,21 @@ it('opens the original unknown task in the mode granted by the backend without c
   await screen.findByText('Herdr 已打开');
 });
 
+it.each(['flow.session_unverified', 'flow.session_mismatch'])('retries only temporarily unidentified sessions: %s', async error => {
+  vi.useFakeTimers();
+  let opens = 0;
+  vi.mocked(invoke).mockImplementation(async name => {
+    if (name === 'terminal_open' && ++opens === 1) throw error;
+  });
+  render(<TerminalPanel task={task} />);
+  await act(async () => {});
+  expect(screen.getByRole('alert').textContent).toContain(error === 'flow.session_unverified' ? '暂未识别' : '不一致');
+  await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+  expect(opens).toBe(error === 'flow.session_unverified' ? 2 : 1);
+  if (error === 'flow.session_unverified') expect(screen.getByText('Herdr 已打开')).toBeTruthy();
+  expect(vi.mocked(invoke).mock.calls.every(([name]) => ['terminal_open', 'terminal_close', 'terminal_bounds'].includes(name))).toBe(true);
+});
+
 it('reports the native rectangle and hides for dialogs without releasing the Agent', async () => {
   render(<TerminalPanel task={task} />);
   await screen.findByText('Herdr 已打开');

@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-11-11。任务终端将暂未识别会话与已识别到不同会话分别报告，前者沿用有界只读重连。修复绑定先核对所选终端与任务保存的 Codex 会话，提交时复核原绑定、会话和执行代次；不覆盖历史会话。前端 335 项、生命周期 99 项及真实 SSH 只读修复/查看核验通过，生产前端构建通过；全量 Rust 首轮失败及复跑情况、未覆盖的桌面/安装边界见[会话重连验证](docs/verification/2026-11-11-session-binding-recovery.md)。
+
 更新日期：2026-11-09。GitHub #49 将已访问远端电脑的原生查看连接及共享只读连接保留至 Kanban 退出，取消远端 60/90 秒空闲回收和 3 组查看客户端淘汰；同机切换复用，传输 reset 后当前任务及普通终端有界重连。停用与连接检查按代次取消，自动重连不创建替代 shell 或重放业务输入。详情及独立提交、实际验证边界见 [SSH 连接生命周期验证](docs/verification/2026-11-09-ssh-connection-lifetime.md)。
 
 更新日期：2026-11-09（归档关闭 Pane）。单个归档和已完成列批量归档现在先核对并关闭任务仍绑定的 Pane，再原子提交归档与绑定释放；关闭失败或未知时保留卡片和绑定，可显式重试。无绑定任务仍可本地归档，删除语义不变。实现见 6.2.1，验证与共享工作区边界见[归档关闭验证](docs/verification/2026-11-09-archive-close-pane.md)。
@@ -609,7 +611,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `open_agent_status_logs` | 无 | 打开当前看板数据库所在目录，包含 agent-status.jsonl；支持 KANBAN_DATA_DIR，不接受外部指定目录 |
 | `dispatch_to_herdr` | taskId、agentName（pane ID）、promptText、operationId、可选 promptJson | 后端从项目解析 workspace；有图正文由后端冻结、解析及校验，再经原独占派发流程；旧无图文本调用兼容 |
 | `resolve_dispatch` | taskId、operationId、sent、evidence | 人工核实未知结果，evidence 备注可空，自动记录判断来源/目标/时间，不重发 |
-| `repair_binding` | taskId、paneId | 显式验证并替换独占绑定，不重发 |
+| `repair_binding` | taskId、paneId | 核对所选终端身份及已保存会话后替换独占绑定，不重发、不更换历史会话 |
 | `terminal_open` | taskId、connectionId、bounds、output Channel | 校验任务、定位 pane，并启动 WezTerm 中的官方 Herdr client；窗口发现后返回，Channel 仅通知关闭 |
 | `workspace_terminal_open` | projectId、connectionId、bounds、output Channel | 后端按 Project 路由电脑，创建或复用持久化普通终端，复用同一原生查看器；不创建任务、不启动或派发 Codex |
 | `terminal_bounds` | connectionId、bounds | 同步内容区 CSS 矩形、WebView 宽高和可见性；拒绝旧连接、非有限及越界值 |
@@ -1115,6 +1117,10 @@ Windows 进程查询可能先观察到 shell，而 Herdr 的 Agent 注册状态�
 真实本机/SSH、模拟 IPC、测试与构建证据分开记录于[验收文档](docs/verification/2026-10-27-idle-cleanup.md)。安装版与当前业务 Workspace 未用于清理验证。
 
 ### 6.6.6 任务自动核验、原终端只读查看与自动重连（2026-11-07，GitHub #46）
+
+2026-11-11 会话识别与绑定修复：`task_view::check_session` 将缺少当前 ID 报为 `flow.session_unverified`，仅已取得不同 ID 时报告 `flow.session_mismatch`；Windows 精确 resume 写锁证据不足同样报告未核实，而非断言对话不同。`TerminalPanel` 对未核实会话沿用 2/5/10/30/60 秒有界重连，切换选择取消重试；不同会话不自动重试。精确 resume 的启动观察仍保留原有 5 秒上限。
+
+`Workflow::repair` 在无 SQLite 锁时读取所选目标的完整身份与当前会话，有历史会话时必须精确一致；无历史会话的旧绑定仍可显式修复。仅同一进程沿用原绑定保存的启动写锁证据。保存事务再次检查未决操作、机器、占用、执行代次以及原绑定和会话未变化；失败不改绑定，成功不改 `task_sessions`，不发送或关闭终端。既有会话恢复到新的终端后可显式选择该终端完成修复；无法识别或错误会话不会出现保存成功后仍被同一会话检查拦住的情况。新测试位于 `lifecycle_tests/binding_recovery.rs`；未新增数据库迁移或 IPC。真实远端验证只覆盖会话上报正常的只读服务链，未验证 Windows 写锁异常或原生桌面点击流程，见[验证记录](docs/verification/2026-11-11-session-binding-recovery.md)。
 
 `lib → task_recovery::Recovery` 在应用生命周期内扫描有效 unknown 启动和派发，复用 Workflow 的精确回执、已 sent 记录和精确原会话恢复。扫描不依赖当前项目或列表读取；每轮立即检查，再分别退避 2/5/10/30/60 秒，至多六次。机器传输失败后，以独立 60 秒健康观察检测重新连通并启动新一轮；普通页面刷新不重置次数。健康观察和任务核验共用本机两槽、远端三槽，并在任务撤销后保留在途请求的容量占用。停用机器、归档、删除和执行代次变化继续撤销权限；未知完成/清理/Workspace 创建不纳入自动恢复。
 

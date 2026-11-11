@@ -167,17 +167,22 @@ impl Cli {
                     // start an auto-review helper; require the single exact lock.
                     if live.codex_resume_locks.is_empty() {
                         if Instant::now() >= deadline {
-                            return Err("flow.session_mismatch".into());
+                            return Err("flow.session_unverified".into());
                         }
                         thread::sleep(Duration::from_millis(150));
                         continue;
                     }
                 }
-                if self.session_id(&live)?.as_deref() == Some(expected) {
+                let observed = self.session_id(&live)?;
+                if observed.as_deref() == Some(expected) {
                     break;
                 }
                 if Instant::now() >= deadline {
-                    return Err("flow.session_mismatch".into());
+                    return Err(if observed.is_some() {
+                        "flow.session_mismatch"
+                    } else {
+                        "flow.session_unverified"
+                    }.into());
                 }
                 thread::sleep(Duration::from_millis(150));
             }
@@ -465,7 +470,8 @@ fn codex_resume_session(doc: &Value, target: &Target) -> Result<Option<String>, 
     if codex_process::owns_session(group, id, &target.codex_resume_locks) {
         Ok(Some(id.into()))
     } else {
-        Err("flow.session_mismatch".into())
+        // A failed lock observation cannot identify the active conversation.
+        Err("flow.session_unverified".into())
     }
 }
 

@@ -66,9 +66,12 @@ fn live_completion_preserves_a_pane_with_ambiguous_resume_identity() {
         db.execute("INSERT INTO task_sessions(task_id,codex_session_id,cwd,updated_at) VALUES (?1,?2,?3,'now')",params![task.id,original,cwd]).unwrap();
         task
     };
-    app.repair(&task.id, &targets[0].pane_id).unwrap();
+    assert_eq!(app.repair(&task.id, &targets[0].pane_id).unwrap_err(), "flow.session_unverified");
+    // Seed a historical binding to exercise completion independently of repair's new check.
+    app.db.lock().unwrap().execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state) VALUES (?1,?2,?3,?4,'valid')",
+        params![task.id,targets[0].session,targets[0].pane_id,serde_json::to_string(&targets[0]).unwrap()]).unwrap();
     let outcome = app.complete_task(&task.id, &operation()).unwrap();
-    assert_eq!(outcome.warning.as_deref(), Some("flow.session_mismatch"));
+    assert_eq!(outcome.warning.as_deref(), Some("flow.session_unverified"));
     assert!(app.herdr.pane_exists(&targets[0]).unwrap());
     let tasks = tasks::list(&app.db.lock().unwrap(), "test").unwrap();
     assert!(tasks[0].cleanup_required);
@@ -252,7 +255,7 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
         std::thread::sleep(Duration::from_millis(100));
     }
     let outcome = app.complete_task(&ids[0], &operation()).unwrap();
-    assert_eq!(outcome.warning.as_deref(), Some("flow.session_mismatch"));
+    assert_eq!(outcome.warning.as_deref(), Some("flow.session_unverified"));
     assert!(app.herdr.pane_exists(&target).unwrap());
     let task = tasks::list(&app.db.lock().unwrap(), "test")
         .unwrap()

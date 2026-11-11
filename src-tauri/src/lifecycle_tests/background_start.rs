@@ -229,11 +229,16 @@ fn configured_task_can_continue_in_its_retained_process_but_not_a_repaired_exter
     app.dispatch("a", &pane, "follow up", &op()).unwrap();
     assert_eq!(fake.0.lock().unwrap().sent, vec!["first", "follow up"]);
     app.complete_task("a", &op()).unwrap();
+    let session = saved(&app, "a");
     fake.0
         .lock()
         .unwrap()
         .panes
         .insert("external".into(), (target("external"), None));
+    assert_eq!(app.repair("a", "external").unwrap_err(), "flow.session_unverified");
+    // Repair may select an external process only after it identifies the original conversation.
+    // That identity still does not prove the task's model settings were applied to this process.
+    fake.0.lock().unwrap().panes.get_mut("external").unwrap().1 = session;
     app.repair("a", "external").unwrap();
     assert_eq!(
         app.dispatch("a", "external", "do not send", &op())

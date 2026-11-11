@@ -445,6 +445,7 @@ mod background_start;
 mod completion;
 mod archive;
 mod recovery;
+mod binding_recovery;
 mod first_prompt;
 mod startup_prompt;
 mod reset;

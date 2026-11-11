@@ -441,21 +441,46 @@ pub(crate) fn ensure_available(conn: &Connection, target: &Target, task: &str) -
 
 impl Workflow {
     pub fn repair(&self, task: &str, pane: &str) -> Result<(), String> {
-        let epoch = crate::task_reset::epoch(&*self.db.lock().map_err(err)?, task)?;
+        let (epoch, original, expected_session) = {
+            let db = self.db.lock().map_err(err)?;
+            crate::lifecycle::ensure_idle(&db, task, None)?;
+            crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
+            let original = binding(&db, task)?;
+            if original.operation.is_some() {
+                return Err("dispatch.verify_required".into());
+            }
+            (crate::task_reset::epoch(&db, task)?, original,
+             crate::lifecycle::view(&db, task)?.session_id)
+        };
         let workspace = self.workspace(task)?;
-        let target = self
+        let mut target = self
             .herdr
             .targets(&workspace)?
             .into_iter()
             .find(|t| t.pane_id == pane)
             .ok_or("binding.missing")?;
+        // Listing agents omits startup evidence. Reuse it only for the same process;
+        // never transfer the old process's locks to a replacement terminal.
+        if let Some(old) = original.target.as_ref().filter(|old| old.same_identity(&target)) {
+            target.codex_resume_locks = old.codex_resume_locks.clone();
+        }
+        // External identity reads must finish before taking the SQLite write lock.
+        let observed = self.herdr.view_identity(&target)?;
+        crate::task_view::check_session(expected_session.as_deref(), observed.as_deref())?;
         let mut conn = self.db.lock().map_err(err)?;
         let tx = conn.transaction().map_err(err)?;
         crate::lifecycle::ensure_idle(&tx, task, None)?;
+        crate::machines::ensure_enabled(&tx, self.herdr.machine_id())?;
         crate::task_reset::check_epoch(&tx, task, epoch)?;
         ensure_project_target(&tx, task, &target, self.herdr.session())?;
-        if binding(&tx, task)?.operation.is_some() {
+        let current = binding(&tx, task)?;
+        if current.operation.is_some() {
             return Err("dispatch.verify_required".into());
+        }
+        if current.target != original.target || current.state != original.state
+            || crate::lifecycle::view(&tx, task)?.session_id != expected_session
+        {
+            return Err("binding.identity_changed".into());
         }
         ensure_available(&tx, &target, task)?;
         tx.execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state,machine_id) VALUES (?1,?2,?3,?4,'valid',COALESCE(json_extract(?4,'$.machine_id'),'local')) ON CONFLICT(task_id) DO UPDATE SET machine_id=excluded.machine_id,session=excluded.session,pane_id=excluded.pane_id,target_json=excluded.target_json,state='valid'",
