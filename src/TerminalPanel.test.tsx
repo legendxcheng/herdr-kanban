@@ -14,6 +14,21 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+it.each(['task', 'workspace'] as const)('updates a %s nickname including maximized view without reconnecting', async kind => {
+  const workspace = { id: 'remote-project', name: 'Workspace', machine_id: 'remote' } as Project;
+  const props = kind === 'task' ? { task } : { task: null, workspace };
+  const view = render(<TerminalPanel {...props} machineName="Remote · devpc" />);
+  await screen.findByText('Herdr 已打开');
+  const command = kind === 'task' ? 'terminal_open' : 'workspace_terminal_open';
+  const originalOpen = vi.mocked(invoke).mock.calls.find(([name]) => name === command);
+  view.rerender(<TerminalPanel {...props} machineName="Remote · 公司台式机" maximized />);
+  expect(screen.getByText('Remote · 公司台式机').title).toBe('Remote · 公司台式机');
+  expect(document.querySelector('.terminal-panel-maximized')).toBeTruthy();
+  await act(async () => {});
+  expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === command)).toEqual([originalOpen]);
+  expect(vi.mocked(invoke).mock.calls.some(([name]) => name === 'terminal_close')).toBe(false);
+});
+
 it('reconnects the selected Workspace shell after a reset without creating or dispatching a task', async () => {
   vi.useFakeTimers();
   const channels: { onmessage: (packet: unknown) => void }[] = [];

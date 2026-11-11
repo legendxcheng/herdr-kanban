@@ -737,7 +737,9 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 .machine-group { display: flex; flex-direction: column; gap: 4px; }
 .machine-group > .error, .machine-group > .hint, .machine-group > [role="status"] { margin: 6px 12px; font-size: 12px; overflow-wrap: anywhere; }
 .machine-entry { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--border); }
-.machine-entry > strong { min-width: 90px; }
+.machine-entry > strong { min-width: 90px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.machine-nickname-form { flex: 0 0 100%; min-width: 0; display: grid; gap: 8px; }
+.machine-nickname-form input { width: 100%; min-width: 0; }
 .machine-entry > span { flex: 1; min-width: 150px; color: var(--text-muted); font-size: 12px; }
 /* Task-owned Codex startup choices share the existing task form. */
 .codex-settings-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }

@@ -45,6 +45,52 @@ async function enterSummary() {
 }
 function summaries(tasks: Task[]): Task[] { return tasks.map(t => ({ ...t, status: taskColumn(t) })); }
 
+it("updates computer choices, task sources and the active terminal after an offline nickname edit", async () => {
+  bindTask();
+  stored = [{ ...board.storedTask, id: "nickname-task", name: "昵称验收任务", project_id: remote.id, status: "in_progress" }];
+  snapshot();
+  let savedMachines = machines.map(m => ({ ...m, helper_name: "helper" }));
+  const base = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args, options) => {
+    if (command === "list_machines") return savedMachines.map(m => ({ ...m }));
+    if (command === "saved_machines") return [
+      { id: "profile", label: "Devpc profile", target: "devpc", session: "default", enabled: true },
+      { id: "unimported", label: "Unimported", target: "otherpc", session: "default", enabled: true },
+    ];
+    if (command === "rename_machine") {
+      const { id, name } = args as { id: string; name: string };
+      savedMachines = savedMachines.map(m => m.id === id ? { ...m, name } : m);
+      return;
+    }
+    if (command === "workspace_choices") return { machine_id: "local", session: "default", workspaces: [] };
+    return base(command, args, options);
+  });
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: /^测试项目 · Remote · Devpc/ }));
+  await screen.findByText("Herdr 已打开");
+  const machineColor = document.querySelector<HTMLElement>(`[data-project-id="${remote.id}"] .project-machine-name`)!.style.color;
+  const opens = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "terminal_open").length;
+  fireEvent.click(screen.getByRole("button", { name: "管理电脑" }));
+  const manage = within(screen.getByRole("dialog", { name: "管理电脑" }));
+  fireEvent.click(manage.getByRole("button", { name: "修改昵称" }));
+  fireEvent.change(manage.getByLabelText("电脑昵称"), { target: { value: "公司台式机" } });
+  offline = true;
+  fireEvent.click(manage.getByRole("button", { name: "保存" }));
+  await manage.findByRole("option", { name: "公司台式机 · devpc · default" });
+  expect(manage.getByRole("option", { name: "Unimported · otherpc · default" })).toBeTruthy();
+  fireEvent.click(manage.getByRole("button", { name: "关闭" }));
+  expect(document.querySelector(`[data-project-id="${remote.id}"] .project-machine-name`)?.textContent).toBe("公司台式机");
+  expect(document.querySelector<HTMLElement>(`[data-project-id="${remote.id}"] .project-machine-name`)?.style.color).toBe(machineColor);
+  expect(document.querySelector(".terminal-machine")?.textContent).toBe("Remote · 公司台式机");
+  expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "terminal_open")).toHaveLength(opens);
+  expect(vi.mocked(invoke).mock.calls.some(([cmd]) => cmd === "terminal_close")).toBe(false);
+  await enterSummary();
+  expect(open("昵称验收任务").closest(".task-card")?.querySelector(".machine-source")?.textContent).toBe("Remote · 公司台式机");
+  fireEvent.click(screen.getAllByRole("button", { name: "添加 Workspace" })[0]);
+  expect(await screen.findByRole("option", { name: "Remote · 公司台式机" })).toBeTruthy();
+  expect(sendPrompt).not.toHaveBeenCalled();
+});
+
 it("shares identity colors between sidebar and summary across rename, reorder, hide and offline refresh", async () => {
   stored = [task("本机颜色", project), task("远端颜色", remote), task("同源颜色", remote, "done")];
   snapshot();

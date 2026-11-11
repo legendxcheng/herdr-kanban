@@ -14,12 +14,41 @@ export function MachineDialog({ machines, onChanged, onClose, onConnected }: {
   const [error, setError] = useLocalizedMessage();
   const [operation, setOperation] = useState<EnrollmentStatus | null>(null);
   const [verified, setVerified] = useState(false);
+  const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
+  const nicknameOpener = useRef<HTMLButtonElement | null>(null);
   const dialog = useRef<HTMLElement>(null);
   const alive = useRef(false);
   const locked = useRef(false);
   const generation = useRef(0);
   const callbacks = useRef({onChanged,onConnected}); callbacks.current = {onChanged,onConnected};
   const waiting = operation?.state === "waiting";
+  const unavailable = busy || waiting || editing !== null;
+  const profileOptions = profiles.filter(p => p.enabled).map(p => ({
+    id: p.id,
+    label: `${machines.find(machine => machine.profile_id === p.id)?.name ?? p.label} · ${p.target} · ${p.session}`,
+  }));
+  useEffect(() => {
+    if (!editing && !busy && nicknameOpener.current) {
+      nicknameOpener.current.focus();
+      nicknameOpener.current = null;
+    }
+  }, [editing, busy]);
+  function cancelNickname() {
+    if (locked.current) return;
+    setEditing(null); setError("");
+  }
+  function saveNickname() {
+    if (!editing || locked.current) return;
+    const name = editing.name.trim();
+    if (!name) { setError("machine.nickname_required"); return; }
+    void run(async () => {
+      await api.renameMachine(editing.id, name);
+      if (alive.current) {
+        setEditing(null);
+        callbacks.current.onChanged();
+      }
+    });
+  }
   async function reload() {
     const items = await api.savedMachines();
     if (alive.current) { setProfiles(items); setProfile(current => items.some(p => p.id === current && p.enabled) ? current : items.find(p => p.enabled)?.id ?? ""); }
@@ -87,10 +116,10 @@ export function MachineDialog({ machines, onChanged, onClose, onConnected }: {
     void poll();
     return () => { active = false; window.clearTimeout(timer); };
   }, [operation?.id, operation?.state]);
-  const close = () => { if (!locked.current) onClose(); };
+  const close = () => { if (!locked.current) { if (editing) cancelNickname(); else onClose(); } };
   return <div className="dialog-overlay" onMouseDown={close}>
     <section ref={dialog} tabIndex={-1} className="dialog workspace-dialog" role="dialog" aria-modal="true" aria-label={tr(onConnected ? "machine.add_remote" : "machine.manage")} onMouseDown={e => e.stopPropagation()} onKeyDown={e => {
-      if(e.key === "Escape") close();
+      if(e.key === "Escape") { e.preventDefault(); close(); }
       if(e.key === "Tab") {
         const controls = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)') ?? []);
         if(e.shiftKey && (document.activeElement === controls[0] || document.activeElement === dialog.current)) { e.preventDefault(); controls[controls.length-1]?.focus(); }
@@ -100,25 +129,37 @@ export function MachineDialog({ machines, onChanged, onClose, onConnected }: {
       <h3>{tr(onConnected ? "machine.add_remote" : "machine.manage")}</h3>
       <p className="hint">{tr("machine.steps")}</p><p className="hint">{tr("machine.help")}</p>
       {!onConnected && machines.map(machine => <div className="machine-entry" key={machine.id}>
-        <strong>Remote · {machine.name}</strong><span>{machine.ssh_target} · {machine.session}</span>
+        <strong title={`Remote · ${machine.name}`}>Remote · {machine.name}</strong><span>{machine.ssh_target} · {machine.session}</span>
         {(machine.disabled || !machine.helper_name) && <span>{tr(!machine.helper_name ? "machine.setup_required" : "machine.disabled_short")}</span>}
-        <button disabled={busy || waiting} className="btn-secondary" onClick={() => { const name = prompt(tr("machine.rename"), machine.name); if(name?.trim()) void run(async () => { await api.renameMachine(machine.id,name.trim()); callbacks.current.onChanged(); }); }}>{tr("machine.rename")}</button>
-        <button disabled={busy || waiting || !machine.profile_id} className="btn-secondary" onClick={() => void run(() => connect(machine.profile_id!))}>{tr("machine.check_connect")}</button>
-        {!machine.disabled && <button disabled={busy || waiting} className="btn-secondary" onClick={() => { if(confirm(tr("machine.remove_confirm"))) void run(async () => { await api.removeMachine(machine.id); callbacks.current.onChanged(); }); }}>{tr("machine.remove")}</button>}
+        <button disabled={unavailable} className="btn-secondary" onClick={event => {
+          nicknameOpener.current = event.currentTarget;
+          setError(""); setVerified(false); setEditing({ id: machine.id, name: machine.name });
+        }}>{tr("machine.rename")}</button>
+        <button disabled={unavailable || !machine.profile_id} className="btn-secondary" onClick={() => void run(() => connect(machine.profile_id!))}>{tr("machine.check_connect")}</button>
+        {!machine.disabled && <button disabled={unavailable} className="btn-secondary" onClick={() => { if(confirm(tr("machine.remove_confirm"))) void run(async () => { await api.removeMachine(machine.id); callbacks.current.onChanged(); }); }}>{tr("machine.remove")}</button>}
+        {editing?.id === machine.id && <form className="dialog-section machine-nickname-form" onSubmit={event => { event.preventDefault(); saveNickname(); }}>
+          <label htmlFor="machine-nickname">{tr("machine.nickname")}</label>
+          <input id="machine-nickname" autoFocus value={editing.name} disabled={busy}
+            onChange={event => { setEditing({ ...editing, name: event.target.value }); setError(""); }} />
+          <div className="dialog-actions">
+            <button type="button" className="btn-secondary" disabled={busy} onClick={cancelNickname}>{tr("common.cancel")}</button>
+            <button type="submit" className="btn-primary" disabled={busy}>{tr(busy ? "common.saving" : "common.save")}</button>
+          </div>
+        </form>}
       </div>)}
       <div className="dialog-section"><label htmlFor="machine-profile">{tr("machine.saved")}</label>
-        <select id="machine-profile" disabled={busy || waiting} value={profile} onChange={e => { setProfile(e.target.value); setVerified(false); }}><option value="">{tr("machine.choose")}</option>{profiles.filter(p => p.enabled).map(p => <option key={p.id} value={p.id}>{p.label} · {p.target} · {p.session}</option>)}</select>
-        <button className="btn-primary" disabled={busy || waiting || !profile} onClick={() => void run(() => connect(profile))}>{tr(busy ? "machine.connecting" : "machine.connect")}</button>
-        <button className="btn-secondary" disabled={busy || waiting} onClick={() => void run(async () => { await reload(); })}>{tr("workspace.refresh")}</button>
+        <select id="machine-profile" disabled={unavailable} value={profile} title={profileOptions.find(p => p.id === profile)?.label} onChange={e => { setProfile(e.target.value); setVerified(false); }}><option value="">{tr("machine.choose")}</option>{profileOptions.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
+        <button className="btn-primary" disabled={unavailable || !profile} onClick={() => void run(() => connect(profile))}>{tr(busy && !editing ? "machine.connecting" : "machine.connect")}</button>
+        <button className="btn-secondary" disabled={unavailable} onClick={() => void run(async () => { await reload(); })}>{tr("workspace.refresh")}</button>
       </div>
-      <div className="dialog-section"><label htmlFor="machine-target">{tr("machine.ssh_alias")}</label><input id="machine-target" placeholder="devpc" value={target} disabled={busy || waiting} onChange={e => setTarget(e.target.value)} />
-        <label htmlFor="machine-session">{tr("machine.session")}</label><input id="machine-session" value={session} disabled={busy || waiting} onChange={e => setSession(e.target.value)} />
+      <div className="dialog-section"><label htmlFor="machine-target">{tr("machine.ssh_alias")}</label><input id="machine-target" placeholder="devpc" value={target} disabled={unavailable} onChange={e => setTarget(e.target.value)} />
+        <label htmlFor="machine-session">{tr("machine.session")}</label><input id="machine-session" value={session} disabled={unavailable} onChange={e => setSession(e.target.value)} />
         <p className="hint">{tr("machine.enroll_help")}</p>
-        <button className="btn-primary" disabled={busy || waiting || !target.trim() || !session.trim()} onClick={() => enroll(false)}>{tr("machine.connect_existing")}</button>
-        <button className="btn-secondary" disabled={busy || waiting || !target.trim() || !session.trim()} onClick={() => enroll(true)}>{tr("machine.enroll")}</button>
+        <button className="btn-primary" disabled={unavailable || !target.trim() || !session.trim()} onClick={() => enroll(false)}>{tr("machine.connect_existing")}</button>
+        <button className="btn-secondary" disabled={unavailable || !target.trim() || !session.trim()} onClick={() => enroll(true)}>{tr("machine.enroll")}</button>
       </div>
       {waiting && <p role="status">{tr("machine.enroll_waiting")}</p>}
-      {busy && <p role="status">{tr("machine.connecting")}</p>}
+      {busy && <p role="status">{tr(editing ? "common.saving" : "machine.connecting")}</p>}
       {verified && <p role="status">{tr("machine.verified")}</p>}
       {error && <p className="error" role="alert">{error}</p>}
       <div className="dialog-actions"><button className="btn-secondary" disabled={busy} onClick={close}>{tr("common.close")}</button></div>

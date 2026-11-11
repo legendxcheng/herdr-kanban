@@ -4,6 +4,109 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { MachineDialog } from "./MachineDialog";
+import { useState } from "react";
+import type { Machine } from "./types";
+import { setLocale } from "./i18n";
+
+const remoteMachine: Machine = {
+  id: "remote", name: "devpc", kind: "ssh", profile_id: "profile", ssh_target: "devpc",
+  session: "default", platform: "windows", disabled: false, helper_name: "helper",
+};
+
+it.each([false, true])("rejects blank nicknames and cancels without writing for disabled=%s", async disabled => {
+  const close = vi.fn();
+  vi.mocked(invoke).mockImplementation(async command => command === "saved_machines" ? [] : undefined);
+  render(<MachineDialog machines={[{ ...remoteMachine, disabled }]} onChanged={vi.fn()} onClose={close} />);
+  fireEvent.click(screen.getByRole("button", { name: "修改昵称" }));
+  fireEvent.change(screen.getByLabelText("电脑昵称"), { target: { value: "   " } });
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  expect(screen.getByRole("alert").textContent).toContain("请输入电脑昵称");
+  fireEvent.change(screen.getByLabelText("电脑昵称"), { target: { value: "不保存的昵称" } });
+  fireEvent.click(screen.getByRole("button", { name: "取消" }));
+  expect(screen.queryByLabelText("电脑昵称")).toBeNull();
+  expect(screen.getByText("Remote · devpc")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "修改昵称" }));
+  expect((screen.getByLabelText("电脑昵称") as HTMLInputElement).value).toBe("devpc");
+  fireEvent.keyDown(screen.getByLabelText("电脑昵称"), { key: "Escape" });
+  expect(screen.queryByLabelText("电脑昵称")).toBeNull();
+  expect(close).not.toHaveBeenCalled();
+  expect(vi.mocked(invoke).mock.calls.some(([name]) => name === "rename_machine")).toBe(false);
+});
+
+it("edits the selected same-name computer in English, including when it is disabled", async () => {
+  setLocale("en-US");
+  vi.mocked(invoke).mockImplementation(async command => command === "saved_machines" ? [] : undefined);
+  try {
+    render(<MachineDialog machines={[remoteMachine, { ...remoteMachine, id: "other", disabled: true, ssh_target: "otherpc" }]}
+      onChanged={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit nickname" })[1]);
+    fireEvent.change(screen.getByLabelText("Computer nickname"), { target: { value: "Home PC" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByLabelText("Computer nickname")).toBeNull());
+    expect(invoke).toHaveBeenCalledWith("rename_machine", { id: "other", name: "Home PC" });
+    expect(screen.getByText("otherpc · default")).toBeTruthy();
+  } finally { act(() => setLocale("zh-CN")); }
+});
+
+it("edits a Chinese nickname through the application form and reads back the saved name", async () => {
+  let saved = { ...remoteMachine };
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "saved_machines") return [];
+    if (command === "list_machines") return [{ ...saved }];
+    if (command === "rename_machine") {
+      const input = args as { id: string; name: string };
+      expect(input.id).toBe("remote");
+      saved = { ...saved, name: input.name };
+    }
+  });
+  function ManagedMachines() {
+    const [machines, setMachines] = useState([remoteMachine]);
+    return <MachineDialog machines={machines} onChanged={() => {
+      void invoke<Machine[]>("list_machines").then(setMachines);
+    }} onClose={() => {}} />;
+  }
+  render(<ManagedMachines />);
+  fireEvent.click(screen.getByRole("button", { name: "修改昵称" }));
+  const input = screen.getByLabelText("电脑昵称") as HTMLInputElement;
+  expect(input.value).toBe("devpc");
+  expect(document.activeElement).toBe(input);
+  fireEvent.change(input, { target: { value: "  公司台式机（开发）  " } });
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  expect(await screen.findByText("Remote · 公司台式机（开发）")).toBeTruthy();
+  expect(saved.name).toBe("公司台式机（开发）");
+  expect(screen.getByText("devpc · default")).toBeTruthy();
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "修改昵称" }));
+});
+
+it("keeps a failed nickname draft for retry and prevents duplicate saves", async () => {
+  let attempts = 0;
+  let finish!: () => void;
+  vi.mocked(invoke).mockImplementation(async command => {
+    if (command === "saved_machines") return [];
+    if (command === "rename_machine") {
+      attempts++;
+      if (attempts === 1) throw new Error("disk is read-only");
+      await new Promise<void>(resolve => { finish = resolve; });
+    }
+  });
+  const changed = vi.fn();
+  render(<MachineDialog machines={[remoteMachine]} onChanged={changed} onClose={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "修改昵称" }));
+  fireEvent.change(screen.getByLabelText("电脑昵称"), { target: { value: "家里笔记本" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  expect((await screen.findByRole("alert")).textContent).toContain("disk is read-only");
+  expect((screen.getByLabelText("电脑昵称") as HTMLInputElement).value).toBe("家里笔记本");
+  expect(changed).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  const saving = screen.getByRole("button", { name: "保存中…" }) as HTMLButtonElement;
+  expect(saving.disabled).toBe(true);
+  expect((screen.getByRole("button", { name: "取消" }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.submit(saving.closest("form")!);
+  expect(attempts).toBe(2);
+  await act(async () => finish());
+  expect(screen.queryByLabelText("电脑昵称")).toBeNull();
+  expect(changed).toHaveBeenCalledOnce();
+});
 
 it("keeps a failed connection actionable and never asks for a password in the webview", async () => {
   const changed=vi.fn();

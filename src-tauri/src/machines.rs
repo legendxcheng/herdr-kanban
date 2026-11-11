@@ -357,6 +357,35 @@ mod tests {
         std::fs::remove_file(file).unwrap();
     }
     #[test]
+    fn nickname_survives_reopen_and_reconnect_without_changing_execution_identity() {
+        let file = std::env::temp_dir().join(format!("kanban-nickname-{}.db", uuid::Uuid::new_v4()));
+        let db = Connection::open(&file).unwrap();
+        crate::db::init(&db).unwrap();
+        let profile = SavedMachine {
+            id: "nickname-profile".into(), label: "devpc".into(), target: "devpc".into(),
+            session: "default".into(), enabled: true,
+        };
+        let machine = import_profile(&db, &profile, "windows").unwrap();
+        disable(&db, &machine.id).unwrap();
+        rename(&db, &machine.id, "  公司台式机（开发）  ").unwrap();
+        assert!(rename(&db, &machine.id, " \t\n").is_err());
+        drop(db);
+        let db = Connection::open(&file).unwrap();
+        crate::db::init(&db).unwrap();
+        let reopened = get(&db, &machine.id).unwrap();
+        assert_eq!(reopened.name, "公司台式机（开发）");
+        assert!(reopened.disabled);
+        let reconnected = import_profile(&db, &profile, "windows").unwrap();
+        assert_eq!(reconnected.name, "公司台式机（开发）");
+        assert_eq!(reconnected.id, machine.id);
+        assert_eq!(reconnected.ssh_target, machine.ssh_target);
+        assert_eq!(reconnected.profile_id, machine.profile_id);
+        assert_eq!(reconnected.session, machine.session);
+        assert!(!reconnected.disabled);
+        drop(db);
+        std::fs::remove_file(file).unwrap();
+    }
+    #[test]
     fn importing_a_saved_profile_is_idempotent_and_removal_keeps_identity() {
         let db = Connection::open_in_memory().unwrap();
         crate::db::init(&db).unwrap();
