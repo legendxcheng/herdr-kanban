@@ -395,8 +395,8 @@ impl NativeTerminalManager {
                     if machine.disabled {
                         return Err("machine.disabled".into());
                     }
-                    // view_task already checked the complete target and Codex session
-                    // on the retained, read-only view channel. Do not duplicate it here.
+                    // view_task already checked the target and viewing authorization.
+                    // Normal viewing does not require Codex session reporting.
                     // Setup may have published a newer helper under its own hash.
                     cli.remote = Some(crate::machines::get(
                         &*app.db.lock().map_err(err)?,

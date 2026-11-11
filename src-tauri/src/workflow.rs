@@ -441,7 +441,7 @@ pub(crate) fn ensure_available(conn: &Connection, target: &Target, task: &str) -
 
 impl Workflow {
     pub fn repair(&self, task: &str, pane: &str) -> Result<(), String> {
-        let (epoch, original, expected_session) = {
+        let (epoch, original) = {
             let db = self.db.lock().map_err(err)?;
             crate::lifecycle::ensure_idle(&db, task, None)?;
             crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
@@ -449,8 +449,7 @@ impl Workflow {
             if original.operation.is_some() {
                 return Err("dispatch.verify_required".into());
             }
-            (crate::task_reset::epoch(&db, task)?, original,
-             crate::lifecycle::view(&db, task)?.session_id)
+            (crate::task_reset::epoch(&db, task)?, original)
         };
         let workspace = self.workspace(task)?;
         let mut target = self
@@ -464,9 +463,9 @@ impl Workflow {
         if let Some(old) = original.target.as_ref().filter(|old| old.same_identity(&target)) {
             target.codex_resume_locks = old.codex_resume_locks.clone();
         }
-        // External identity reads must finish before taking the SQLite write lock.
-        let observed = self.herdr.view_identity(&target)?;
-        crate::task_view::check_session(expected_session.as_deref(), observed.as_deref())?;
+        // The user explicitly chose this terminal. Session reporting is not a
+        // prerequisite for attachment; only verify that the selected process exists.
+        self.herdr.validate(&workspace, &target)?;
         let mut conn = self.db.lock().map_err(err)?;
         let tx = conn.transaction().map_err(err)?;
         crate::lifecycle::ensure_idle(&tx, task, None)?;
@@ -477,14 +476,15 @@ impl Workflow {
         if current.operation.is_some() {
             return Err("dispatch.verify_required".into());
         }
-        if current.target != original.target || current.state != original.state
-            || crate::lifecycle::view(&tx, task)?.session_id != expected_session
-        {
+        if current.target != original.target || current.state != original.state {
             return Err("binding.identity_changed".into());
         }
         ensure_available(&tx, &target, task)?;
         tx.execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state,machine_id) VALUES (?1,?2,?3,?4,'valid',COALESCE(json_extract(?4,'$.machine_id'),'local')) ON CONFLICT(task_id) DO UPDATE SET machine_id=excluded.machine_id,session=excluded.session,pane_id=excluded.pane_id,target_json=excluded.target_json,state='valid'",
             params![task,target.session,pane,serde_json::to_string(&target).map_err(err)?]).map_err(err)?;
+        // This is an automatic-resume pointer, not the conversation history.
+        // Completion collects the selected terminal's actual session before closing it.
+        tx.execute("DELETE FROM task_sessions WHERE task_id=?1", [task]).map_err(err)?;
         tx.commit().map_err(err)
     }
     pub(crate) fn workspace(&self, task: &str) -> Result<String, String> {

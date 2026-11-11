@@ -15,7 +15,7 @@ fn err(e: impl std::fmt::Display) -> String {
 }
 
 /// Missing evidence is retryable; a positively identified different session is not.
-pub(crate) fn check_session(expected: Option<&str>, observed: Option<&str>) -> Result<(), String> {
+fn check_session(expected: Option<&str>, observed: Option<&str>) -> Result<(), String> {
     if let Some(expected) = expected {
         let observed = observed.ok_or("flow.session_unverified")?;
         uuid::Uuid::parse_str(observed).map_err(|_| "flow.session_invalid")?;
@@ -122,7 +122,8 @@ fn local(db: &Connection, task: &str) -> Result<Authorization, String> {
         read_only,
         epoch,
         operation,
-        session_id: flow.session_id,
+        // Normal terminal viewing follows the binding, not an automatic-resume pointer.
+        session_id: if read_only { flow.session_id } else { None },
     })
 }
 
@@ -150,20 +151,26 @@ impl Workflow {
         {
             return Err("machine.identity_changed".into());
         }
-        let session = self.herdr.view_identity(&authorization.target)?;
-        check_session(authorization.session_id.as_deref(), session.as_deref())?;
         if authorization.read_only {
+            let session = self.herdr.view_identity(&authorization.target)?;
+            check_session(authorization.session_id.as_deref(), session.as_deref())?;
             uuid::Uuid::parse_str(session.as_deref().ok_or("flow.session_unverified")?)
                 .map_err(|_| "flow.session_invalid")?;
+            authorization.session_id = session;
+        } else {
+            self.herdr.validate(&authorization.target.workspace_id, &authorization.target)?;
         }
-        authorization.session_id = session;
         self.check_view(task, &authorization)?;
         Ok(authorization)
     }
     pub fn validate_view(&self, task: &str, expected: &Authorization) -> Result<(), String> {
         self.check_view(task, expected)?;
-        let session = self.herdr.view_identity(&expected.target)?;
-        check_session(expected.session_id.as_deref(), session.as_deref())?;
+        if expected.read_only {
+            let session = self.herdr.view_identity(&expected.target)?;
+            check_session(expected.session_id.as_deref(), session.as_deref())?;
+        } else {
+            self.herdr.validate(&expected.target.workspace_id, &expected.target)?;
+        }
         self.check_view(task, expected)
     }
 }

@@ -66,8 +66,7 @@ fn live_completion_preserves_a_pane_with_ambiguous_resume_identity() {
         db.execute("INSERT INTO task_sessions(task_id,codex_session_id,cwd,updated_at) VALUES (?1,?2,?3,'now')",params![task.id,original,cwd]).unwrap();
         task
     };
-    assert_eq!(app.repair(&task.id, &targets[0].pane_id).unwrap_err(), "flow.session_unverified");
-    // Seed a historical binding to exercise completion independently of repair's new check.
+    // A historical binding must still retain its session if automatic cleanup cannot identify it.
     app.db.lock().unwrap().execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state) VALUES (?1,?2,?3,?4,'valid')",
         params![task.id,targets[0].session,targets[0].pane_id,serde_json::to_string(&targets[0]).unwrap()]).unwrap();
     let outcome = app.complete_task(&task.id, &operation()).unwrap();

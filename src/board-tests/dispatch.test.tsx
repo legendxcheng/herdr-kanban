@@ -70,6 +70,29 @@ describe("拖入开发中列", () => {
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("repair_binding", { taskId: "task-1", paneId: agent.pane_id }));
     expect(sendPrompt).not.toHaveBeenCalled();
   });
+  it("人工选择已有对话后直接打开终端，缺少会话 ID 不要求核实或重新启动", async () => {
+    board.storedTask.binding = { state: "repair", target: null, operation: null };
+    board.storedTask.flow = { session_id: "old-session", operation_id: "old-start", kind: "start", state: "succeeded", error: "", pane_id: "old-pane" };
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args, options) => {
+      if (command === "repair_binding") {
+        bindTask();
+        board.storedTask.flow!.session_id = null;
+        return;
+      }
+      return base(command, args, options);
+    });
+    await renderBoard("in_progress");
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Herdr 终端" })).getByRole("button", { name: "修复绑定" }));
+    expect(await screen.findByText(/无需等待会话 ID 上报/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("独立 Agent"), { target: { value: agent.pane_id } });
+    fireEvent.click(screen.getByRole("button", { name: "保存绑定" }));
+    await screen.findByText("Herdr 已打开");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("repair_binding", { taskId: "task-1", paneId: agent.pane_id });
+    expect(vi.mocked(invoke).mock.calls.some(([name]) => ["start_task", "resolve_dispatch", "dispatch_to_herdr"].includes(name))).toBe(false);
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
   it("选择开发中卡片连接其终端，编辑按钮不会触发重复连接", async () => {
     board.storedTask.binding = { state: "valid", operation: null, target: {
       session: "default", workspace_id: "w1", pane_id: "w1:p1", terminal_id: "term1",

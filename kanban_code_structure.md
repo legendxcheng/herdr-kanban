@@ -1,6 +1,6 @@
 # Kanban 代码结构与关键流程分析
 
-更新日期：2026-11-11。任务终端将暂未识别会话与已识别到不同会话分别报告，前者沿用有界只读重连。修复绑定先核对所选终端与任务保存的 Codex 会话，提交时复核原绑定、会话和执行代次；不覆盖历史会话。前端 335 项、生命周期 99 项及真实 SSH 只读修复/查看核验通过，生产前端构建通过；全量 Rust 首轮失败及复跑情况、未覆盖的桌面/安装边界见[会话重连验证](docs/verification/2026-11-11-session-binding-recovery.md)。
+更新日期：2026-11-11（人工绑定修正）。人工绑定以用户选定的终端为准，普通终端查看不再要求 Codex 会话 ID，也不比较旧会话；自动恢复与未决派发的只读核验保持独立。保存绑定时清除旧的自动恢复会话定位记录，完成任务时再采集当前会话。前端 336 项、生命周期 100 项、工作流 17 项通过；真实无会话 ID 的远端 `wP:p2` 已完成隔离桌面的保存绑定、原生终端打开、页面刷新与应用重启验收。未提交或重新打包，详情见[人工绑定验证](docs/verification/2026-11-11-manual-binding.md)。此前版本的强制会话匹配已撤销。
 
 更新日期：2026-11-09。GitHub #49 将已访问远端电脑的原生查看连接及共享只读连接保留至 Kanban 退出，取消远端 60/90 秒空闲回收和 3 组查看客户端淘汰；同机切换复用，传输 reset 后当前任务及普通终端有界重连。停用与连接检查按代次取消，自动重连不创建替代 shell 或重放业务输入。详情及独立提交、实际验证边界见 [SSH 连接生命周期验证](docs/verification/2026-11-09-ssh-connection-lifetime.md)。
 
@@ -522,7 +522,7 @@ flowchart TD
 | --- | --- |
 | `task_bindings` | task_id 主键；`UNIQUE(machine_id,session,pane_id)` 跨项目保障独占；保存完整目标身份和 valid/reserved 状态。Target JSON 的可选 `codex_resume_locks` 保存本应用精确恢复新进程时观测的写锁集合；旧 JSON 省略时反序列化为空，无数据库迁移 |
 | `dispatch_operations` | 操作 ID 主键；pending/unknown/sent/not_sent；保存目标、实际 prompt、时间与人工核实依据；部分唯一索引限制每任务一个未决操作 |
-| `task_sessions` | 按 task_id 保存 Codex 会话 UUID、目录和更新时间；与活跃 pane 独立 |
+| `task_sessions` | 按 task_id 保存用于自动恢复的 Codex 会话 UUID、目录和更新时间；人工绑定时清除旧定位记录，后续完成前从当前终端重新采集；不保存对话正文 |
 | `task_execution_resets`、`retired_execution_targets` | schema 16：重置请求与代次、原任务与历史执行作用域映射、旧快照／会话／目录，以及旧 terminal 隔离证据；不因删除原卡片而清除 |
 | `start_requests` | 启动操作快照：项目/workspace、目录、提示词文档、是否需要首次派发、原状态及阶段；按操作 ID 关联生命周期记录 |
 | `task_codex_settings`、`workspace_codex_settings` | 任务独立配置和按 project_id 保存的 Workspace 最近成功创建整组偏好；创建事务原子提交两者，任务删除不清空偏好，Project 删除级联清理其偏好；旧 last_codex_settings 单例表保留兼容历史结构，当前读写不再使用 |
@@ -611,7 +611,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `open_agent_status_logs` | 无 | 打开当前看板数据库所在目录，包含 agent-status.jsonl；支持 KANBAN_DATA_DIR，不接受外部指定目录 |
 | `dispatch_to_herdr` | taskId、agentName（pane ID）、promptText、operationId、可选 promptJson | 后端从项目解析 workspace；有图正文由后端冻结、解析及校验，再经原独占派发流程；旧无图文本调用兼容 |
 | `resolve_dispatch` | taskId、operationId、sent、evidence | 人工核实未知结果，evidence 备注可空，自动记录判断来源/目标/时间，不重发 |
-| `repair_binding` | taskId、paneId | 核对所选终端身份及已保存会话后替换独占绑定，不重发、不更换历史会话 |
+| `repair_binding` | taskId、paneId | 按人工选择替换独占终端绑定，检查目标存在和占用；不要求会话 ID，清除旧自动恢复定位，不发送提示词 |
 | `terminal_open` | taskId、connectionId、bounds、output Channel | 校验任务、定位 pane，并启动 WezTerm 中的官方 Herdr client；窗口发现后返回，Channel 仅通知关闭 |
 | `workspace_terminal_open` | projectId、connectionId、bounds、output Channel | 后端按 Project 路由电脑，创建或复用持久化普通终端，复用同一原生查看器；不创建任务、不启动或派发 Codex |
 | `terminal_bounds` | connectionId、bounds | 同步内容区 CSS 矩形、WebView 宽高和可见性；拒绝旧连接、非有限及越界值 |
@@ -1118,15 +1118,15 @@ Windows 进程查询可能先观察到 shell，而 Herdr 的 Agent 注册状态�
 
 ### 6.6.6 任务自动核验、原终端只读查看与自动重连（2026-11-07，GitHub #46）
 
-2026-11-11 会话识别与绑定修复：`task_view::check_session` 将缺少当前 ID 报为 `flow.session_unverified`，仅已取得不同 ID 时报告 `flow.session_mismatch`；Windows 精确 resume 写锁证据不足同样报告未核实，而非断言对话不同。`TerminalPanel` 对未核实会话沿用 2/5/10/30/60 秒有界重连，切换选择取消重试；不同会话不自动重试。精确 resume 的启动观察仍保留原有 5 秒上限。
+2026-11-11 人工绑定与查看修正：普通有效绑定的 `view_task` / `validate_view` 仅核对终端与进程身份，不查询或比较 Codex 会话；当前对话无 ID 上报、与旧恢复记录不同，都不阻止连接。`task_view::check_session` 仅用于未决操作的只读查看，缺少 ID 报 `flow.session_unverified`，明确不同 ID 报 `flow.session_mismatch`。自动精确 resume 仍保留会话和写锁核验及原有 5 秒观察上限；未核实状态沿用有界只读重连，不改变发送结果。
 
-`Workflow::repair` 在无 SQLite 锁时读取所选目标的完整身份与当前会话，有历史会话时必须精确一致；无历史会话的旧绑定仍可显式修复。仅同一进程沿用原绑定保存的启动写锁证据。保存事务再次检查未决操作、机器、占用、执行代次以及原绑定和会话未变化；失败不改绑定，成功不改 `task_sessions`，不发送或关闭终端。既有会话恢复到新的终端后可显式选择该终端完成修复；无法识别或错误会话不会出现保存成功后仍被同一会话检查拦住的情况。新测试位于 `lifecycle_tests/binding_recovery.rs`；未新增数据库迁移或 IPC。真实远端验证只覆盖会话上报正常的只读服务链，未验证 Windows 写锁异常或原生桌面点击流程，见[验证记录](docs/verification/2026-11-11-session-binding-recovery.md)。
+`Workflow::repair` 以用户选择的目标为准，在无 SQLite 锁时读取候选并确认终端/进程仍存在，不调用会话识别。保存事务检查未决操作、机器、占用、执行代次及原绑定未变化；绑定替换与删除旧 `task_sessions` 定位记录同时提交，失败回滚。只清除自动恢复指针，不删除 Codex 对话历史；完成任务时沿用 `save_session` 从实际终端采集当前会话，再决定能否关闭和供下次恢复。仅同一进程沿用原启动写锁证据，绑定本身不启动、发送或关闭终端。测试位于 `lifecycle_tests/manual_binding.rs`、`binding_recovery.rs`；无新数据库迁移或 IPC。真实无 ID 上报的远端及原生桌面验收见[验证记录](docs/verification/2026-11-11-manual-binding.md)。
 
 `lib → task_recovery::Recovery` 在应用生命周期内扫描有效 unknown 启动和派发，复用 Workflow 的精确回执、已 sent 记录和精确原会话恢复。扫描不依赖当前项目或列表读取；每轮立即检查，再分别退避 2/5/10/30/60 秒，至多六次。机器传输失败后，以独立 60 秒健康观察检测重新连通并启动新一轮；普通页面刷新不重置次数。健康观察和任务核验共用本机两槽、远端三槽，并在任务撤销后保留在途请求的容量占用。停用机器、归档、删除和执行代次变化继续撤销权限；未知完成/清理/Workspace 创建不纳入自动恢复。
 
 `task_recovery_status` 返回 task/operation、attempt、recovering/needs_attention 与稳定原因；`retry_task_recovery(taskId, operationId)` 仅重置当前有效操作的批次，不直接做外部写入。`useTaskRecovery` 展示本地快照，普通看板和 All Tasks 共用；变化沿用 `task-start-changed` 提示权威重读，不选择任务或抢焦点。恢复日志复用有界追加机制，保存标识与原因，不含提示词或凭据。
 
-`task_view::Authorization` 将终端查看独立为不可连接、只读或可交互判断，冻结完整目标、操作、执行代次及会话。原目标唯一且实时身份一致、没有活动写入或关闭/清理时，未知派发可只读查看；保留 unknown 和占用。`native_client_connection/native_client_wire` 在专用原生连接中执行只读消息允许列表，阻止键鼠、粘贴、endpoint 执行与写菜单；正常交互仍使用官方客户端。每帧检查本地租约，独立观察约每秒核对实际目标和会话；授权变化撤销旧查看，由当前选择重新连接，前端输出通道 `mode` 只由后端设置。
+`task_view::Authorization` 将终端查看独立为不可连接、只读或可交互判断，冻结完整目标、操作和执行代次；只读模式另冻结会话。原目标唯一且实时身份一致、没有活动写入或关闭/清理时，未知派发可只读查看；保留 unknown 和占用。`native_client_connection/native_client_wire` 在专用原生连接中执行只读消息允许列表，阻止键鼠、粘贴、endpoint 执行与写菜单；正常交互仍使用官方客户端。每帧检查本地租约，独立观察约每秒核对实际目标，只读模式另核对会话；授权变化撤销旧查看，由当前选择重新连接，前端输出通道 `mode` 只由后端设置。
 
 `taskHasTerminalView` 允许 Todo 的未知手动派发选择原终端，覆盖普通看板、汇总、上次选择恢复与列表刷新；业务状态和列投影仍由原规则决定。`TerminalPanel` 对当前任务的临时查看连接故障按同样六次规则重连，切任务/电脑/Workspace 清理旧定时器，永久身份错误不重试。普通 Workspace shell 的创建、恢复与按钮语义沿用原规则。
 

@@ -154,14 +154,16 @@ impl Herdr for Fake {
     }
     fn targets(&self, _: &str) -> Result<Vec<Target>, String> {
         if let Some(error) = self.0.lock().unwrap().lookup_error.clone() { return Err(error); }
-        Ok(self
+        let targets = self
             .0
             .lock()
             .unwrap()
             .panes
             .values()
             .map(|(t, _)| t.clone())
-            .collect())
+            .collect();
+        self.observe("targets");
+        Ok(targets)
     }
     fn available(&self, w: &str, _: &str) -> Result<Vec<Target>, String> {
         let candidates = self
@@ -446,6 +448,7 @@ mod completion;
 mod archive;
 mod recovery;
 mod binding_recovery;
+mod manual_binding;
 mod first_prompt;
 mod startup_prompt;
 mod reset;
