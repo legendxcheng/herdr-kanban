@@ -1,3 +1,7 @@
+mod session_cleanup;
+mod session_activity;
+mod runtime_processes;
+mod session_resources;
 mod agent_status;
 mod agent_diagnostics;
 mod codex_catalog;
@@ -119,6 +123,7 @@ pub fn run() {
         .manage(DbState(conn.clone()))
         .manage(startup)
         .setup(move |app| {
+            session_resources::start(recovery_workflow.clone());
             let recovery_handle = app.handle().clone();
             app.manage(task_recovery::Recovery::start(recovery_workflow.clone(), Arc::new(move |event| {
                 let _ = recovery_handle.emit("task-start-changed", serde_json::json!({
@@ -160,6 +165,13 @@ pub fn run() {
             work_commands::task_recovery_status,
             work_commands::retry_task_recovery,
             agent_diagnostics::open_agent_status_logs,
+            session_cleanup::preview_session_cleanup,
+            session_cleanup::execute_session_cleanup,
+            session_cleanup::retry_session_cleanup,
+            session_cleanup::session_cleanup_result,
+            session_cleanup::session_cleanup_history,
+            session_cleanup::session_resource_list,
+            session_cleanup::preview_session_resource,
             idle_cleanup::preview_idle_cleanup,
             idle_cleanup::execute_idle_cleanup,
             idle_cleanup::idle_cleanup_result,

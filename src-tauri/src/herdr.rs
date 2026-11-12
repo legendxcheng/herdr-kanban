@@ -39,6 +39,8 @@ mod codex_submit;
 pub(crate) use codex_submit::scripted_first_prompt;
 #[path = "herdr_idle_cleanup.rs"]
 mod idle_cleanup;
+#[path = "herdr_runtime.rs"]
+mod runtime;
 #[path = "herdr_workspace_terminal.rs"]
 mod workspace_terminal;
 #[path = "herdr_agent_discovery.rs"]
@@ -162,6 +164,10 @@ fn field<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
         .ok_or_else(|| "herdr.invalid_response".into())
 }
 impl Herdr for Cli {
+    fn capture_runtime(&self,target:&Target)->Result<crate::runtime_processes::Runtime,String>{self.runtime_capture(target)}
+    fn runtime_absent(&self,runtime:&crate::runtime_processes::Runtime)->Result<bool,String>{self.runtime_gone(runtime)}
+    fn close_runtime(&self,runtime:&crate::runtime_processes::Runtime,check:&dyn Fn()->Result<(),String>)->Result<(),SendError>{self.runtime_close(runtime,check)}
+
     fn startup_shell(&self, target: &Target, check: &dyn Fn()->Result<(),String>) -> Result<Target,String> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {

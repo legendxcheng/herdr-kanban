@@ -273,6 +273,7 @@ impl Workflow {
         tx.commit().map_err(err)
     }
     pub(crate) fn reserve_target(&self, task: &str, op: &str, target: &Target) -> Result<(), String> {
+        crate::session_resources::record(&*self.db.lock().map_err(err)?,task,target,"created")?;
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
         ensure_operation(&tx, task, op)?;
@@ -358,6 +359,7 @@ impl Workflow {
         context: Option<(String, String)>,
         progress: &dyn Fn(&str) -> Result<(), String>,
     ) -> Result<Outcome, String> {
+        let _activity = crate::session_activity::enter(self,task);
         let mut touched = false;
         let mut start_rejected = false;
         let result: Result<Outcome, String> = (|| {
@@ -491,6 +493,7 @@ impl Workflow {
         self.complete_started(task, op, false)
     }
     fn complete_started(&self, task: &str, op: &str, archive: bool) -> Result<Outcome, String> {
+        let _activity = crate::session_activity::enter(self,task);
         // Completion is a business decision, independent from external cleanup success.
         self.with_operation(task, op, |db| {
             db.execute("UPDATE tasks SET status='done',completed_at=CASE WHEN status='done' THEN completed_at ELSE ?2 END,updated_at=?2 WHERE id=?1", params![task, now()]).map_err(err)
@@ -508,13 +511,18 @@ impl Workflow {
                     // Refresh from this exact live occupant; an old saved ID is not sufficient.
                     self.save_session(task, op, &live, &cwd, None)?
                         .ok_or("flow.session_missing")?;
+                    let runtime=self.herdr.capture_runtime(&live)?;
+                    crate::session_resources::save_runtime(&*self.db.lock().map_err(err)?,&runtime)?;
                     close_attempted = true;
                     self.check_flow(task, op)?;
-                    self.herdr
-                        .close_pane(&live, &|| self.check_flow(task, op))?;
-                    if self.herdr.pane_exists(&live)? {
-                        return Err("flow.close_pending".into());
+                    self.herdr.close_runtime(&runtime, &|| self.check_flow(task, op)).map_err(|e|e.message)?;
+                    let mut released=false;
+                    for _ in 0..20 {
+                        if self.herdr.runtime_absent(&runtime)? {released=true;break;}
+                        std::thread::sleep(std::time::Duration::from_millis(100));
                     }
+                    if !released {return Err("flow.close_pending".into());}
+                    crate::session_resources::released(&*self.db.lock().map_err(err)?,&live)?;
                 }
             }
             // Keep the lifecycle claim until binding release and optional archive

@@ -58,8 +58,12 @@ pub(crate) fn ensure_unclaimed(
     target: &Target,
     except: Option<&str>,
 ) -> Result<(), String> {
+    crate::session_cleanup::ensure_unclaimed(db,target,None)?;
+    ensure_local_unclaimed(db,target,except)
+}
+pub(crate) fn ensure_local_unclaimed(db:&Connection,target:&Target,except:Option<&str>)->Result<(),String> {
     let busy:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM idle_cleanup_items i JOIN idle_cleanup_batches b ON b.id=i.batch_id
-        WHERE i.state IN ('claimed','closing','unknown') AND b.machine_id=?1 AND b.session=?2
+        WHERE i.state IN ('claimed','closing','unknown') AND NOT EXISTS(SELECT 1 FROM session_cleanup_idle_releases r WHERE r.batch_id=i.batch_id AND r.ordinal=i.ordinal) AND b.machine_id=?1 AND b.session=?2
         AND (json_extract(i.candidate_json,'$.pane.target.terminal_id')=?3 OR json_extract(i.candidate_json,'$.pane.target.pane_id')=?4)
         AND (?5 IS NULL OR b.id<>?5))",params![target.machine_id,target.session,target.terminal_id,target.pane_id,except],|r|r.get(0)).map_err(err)?;
     if busy {
@@ -70,9 +74,10 @@ pub(crate) fn ensure_unclaimed(
 }
 
 pub(crate) fn ensure_task_unclaimed(db: &Connection, task: &str) -> Result<(), String> {
+    crate::session_cleanup::ensure_task_unclaimed(db,task)?;
     // The cleanup snapshot owns the task guard. Do not parse legacy binding
     // payloads just to check whether an unrelated task mutation is permitted.
-    let busy: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM idle_cleanup_items WHERE state IN ('claimed','closing','unknown') AND json_extract(candidate_json,'$.owner.task')=?1)", [task], |r| r.get(0)).map_err(err)?;
+    let busy: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM idle_cleanup_items WHERE state IN ('claimed','closing','unknown') AND NOT EXISTS(SELECT 1 FROM session_cleanup_idle_releases r WHERE r.batch_id=idle_cleanup_items.batch_id AND r.ordinal=idle_cleanup_items.ordinal) AND json_extract(candidate_json,'$.owner.task')=?1)", [task], |r| r.get(0)).map_err(err)?;
     if busy {
         Err("cleanup.pending".into())
     } else {

@@ -156,6 +156,7 @@ impl Workflow {
         {
             return Err("binding.identity_changed".into());
         }
+        crate::session_resources::record(&*self.db.lock().map_err(err)?,task,&live,"created")?;
         cancelled()?;
         self.check_startup(task, &request)?;
         {

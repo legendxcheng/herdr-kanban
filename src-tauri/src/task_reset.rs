@@ -50,6 +50,7 @@ pub fn check_epoch(db: &Connection, task: &str, expected: i64) -> Result<(), Str
 /// All writers after external I/O must still own a current dispatch operation.
 pub fn check_dispatch(db: &Connection, task: &str, operation: &str) -> Result<(), String> {
     crate::tasks::ensure_active(db, task)?;
+    crate::idle_cleanup::ensure_task_unclaimed(db, task)?;
     let current: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM dispatch_operations WHERE id=?1 AND task_id=?2 AND state IN ('pending','unknown'))", params![operation,task], |r| r.get(0)).map_err(err)?;
     if !current {
         return Err("dispatch.operation_conflict".into());

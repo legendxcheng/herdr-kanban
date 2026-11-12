@@ -270,6 +270,17 @@ fn execute(cli: &crate::herdr::Cli, request: &Value) -> Result<Value, String> {
             _ => false,
         })),
         "workspaces" => serde_json::to_value(cli.workspaces()?).map_err(|e| e.to_string()),
+        "runtime_capture" => {
+            let mut target:crate::workflow::Target=serde_json::from_value(request["target"].clone()).map_err(|_|"machine.invalid_request")?;
+            target.machine_id=crate::machines::local_id();
+            serde_json::to_value(cli.capture_runtime(&target)?).map_err(|e|e.to_string())
+        }
+        "runtime_absent" | "runtime_close" => {
+            let mut runtime:crate::runtime_processes::Runtime=serde_json::from_value(request["runtime"].clone()).map_err(|_|"machine.invalid_request")?;
+            runtime.target.machine_id=crate::machines::local_id();
+            if request["method"]=="runtime_absent" { Ok(json!(cli.runtime_absent(&runtime)?)) }
+            else { Ok(match cli.close_runtime(&runtime,&||Ok(())) { Ok(())=>json!({"error":null,"uncertain":false}),Err(e)=>json!({"error":e.message,"uncertain":e.uncertain}) }) }
+        }
         "idle_cleanup_panes" => {
             serde_json::to_value(cli.idle_panes(text("workspace")?)?).map_err(|e| e.to_string())
         }

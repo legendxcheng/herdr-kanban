@@ -29,7 +29,9 @@ pub fn init(conn: &Connection) -> Result<()> {
     crate::startup_prompt::init(conn)?;
     crate::machines::init(conn)?;
     crate::project_visibility::init(conn)?;
-    crate::machines::migrate_connection_metadata(conn)
+    crate::machines::migrate_connection_metadata(conn)?;
+    crate::session_resources::init(conn)?;
+    crate::session_cleanup::init(conn)
 }
 
 pub(crate) fn init_before_machines(conn: &Connection) -> Result<()> {
@@ -203,6 +205,7 @@ pub(crate) fn init_before_machines(conn: &Connection) -> Result<()> {
 /// Only called once when opening the application, never during a live command.
 pub fn recover_interrupted(conn: &Connection) -> Result<()> {
     crate::idle_cleanup::recover(conn)?;
+    crate::session_cleanup::recover(conn)?;
     crate::task_titles::recover_at(conn, chrono::Utc::now().timestamp_millis())?;
     conn.execute("DELETE FROM image_drafts", [])?;
     let _ = crate::images::release_abandoned_preparations(conn, true);

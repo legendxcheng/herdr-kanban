@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-11-12（Session 资源跟踪与全局清理，GitHub #53–#60）。新增独立于任务卡片的运行资源记录，以及侧栏全局“清理未绑定会话”入口；本机和已登记 SSH 电脑所选 session 的全部 Workspace 均参与扫描，InProgress 绑定和普通 shell 保留。删除后的后台关闭、进程身份核验、持久化批次及显式重试见下方新增章节。实现与验证状态见[Session 清理验证](docs/verification/2026-11-12-session-cleanup.md)。
+
 更新日期：2026-11-12（完成后恢复失败的人工绑定）。已停止且没有提示词写入的恢复操作允许人工选择有效、未被占用的终端；保存绑定同事务保留原失败记录、追加人工恢复记录、恢复进行中状态并撤销旧执行代次。`Flow.can_repair_resume` 统一前后端可修复判断，真实 pending、未知派发和未知关闭仍走对应处理入口。生命周期 103 项、工作流 17 项、前端 347 项及生产构建通过；隔离原生桌面已验证 unknown 恢复记录的保存绑定、真实 SSH 终端打开、刷新及重启保留，派发数为零。未重新打包安装，见[恢复后绑定验证](docs/verification/2026-11-12-resume-binding.md)。
 
 更新日期：2026-11-11（电脑昵称，GitHub #50–#52）。管理电脑使用应用内昵称表单，支持保存／取消、空白校验、失败保留草稿及重试、保存中防重复；离线与停用电脑可编辑。复用 `Machine.name` 和 `rename_machine`，无需迁移。已导入的 Herdr 配置选择项按 profile ID 展示本地昵称，侧栏、Workspace 选择、任务来源和终端标题沿用共享机器状态刷新。344 项前端测试、4 项机器数据层测试、类型检查与构建通过；隔离桌面已验证实际写入失败重试、刷新／重启保留及 devpc 重连保留，具体证据与边界见[电脑昵称验证](docs/verification/2026-11-11-machine-nickname.md)。
@@ -1327,3 +1329,13 @@ Herdr 对外仍使用 `Cli` 与 `Herdr`。内部 `herdr_cli` 承担进程执行�
 远端刷新按机器合并在途请求，普通定时轮询不废弃慢响应；显式 CRUD 刷新淘汰旧快照并补刷。未决 Workspace 操作直接读取本地缓存，离线及停用后仍可见。终端标题和错误显示所属电脑，最大化时也保留。原生 SSH 桥接在启动官方二进制流前再次核验主机身份，不经过 PowerShell 文本管道。
 
 Windows npm 安装的 Codex 恢复：`herdr_codex` 严格识别 node + 官方 codex.js 的启动参数，`codex_process` 仅查询前景进程的唯一直接 codex.exe 子进程锁，并在读取前后复核归属；子进程不可查询、枚举错误、歧义或锁集合变化均拒绝确认。真实 devpc 已验证恢复原会话且派发次数不增加。
+
+## Session 资源跟踪与全局清理（2026-11-12）
+
+- `session_resources.rs`：schema 22 资源台账不引用 tasks 外键。绑定新增／变化、删除及解除绑定通过 SQLite trigger 同事务记录目标、来源任务、恢复指针及执行代次；创建与启动回执在任务有效性检查前留下记录。迁移补录绑定、生命周期／派发、Pane 分配和隔离执行中的明确目标，历史记录不授权自动关闭。删除任务只做本地事务；应用后台串行领取已知删除资源，每个目标做一次有界关闭，失败／未知保留记录。
+- `session_cleanup.rs`：持久化批次及固定目标清单，预览有效期十分钟。扫描已登记机器配置的 session 的所有实时 Workspace；离线、停用和逐 Pane 读取失败单独返回。执行前再次检查全库 InProgress 绑定，按 Workspace 协调创建与关闭，以领取记录阻止绑定和写入。真正运行的启动／派发／完成通过 `session_activity.rs` 区分于历史 unknown；已确认清理的旧执行改归 retired 审计范围，保留原状态和提示词，不重发。旧空闲清理的 unknown 可由明确确认的新清理接管，原审计事实保留。
+- `runtime_processes.rs`、`herdr_runtime.rs`：本机及 SSH 执行电脑采集 shell 及子进程 PID＋创建时间；只通过该电脑 Herdr 关闭精确 Pane。Pane 消失与进程退出分别核实；无进程时间戳的历史缺失目标仅标“Pane 已不存在”，不会标“已释放”。关闭回执丢失先只读核实；用户显式重试仍需重新检查目标身份。磁盘历史保留，缺少 UUID 不阻止全局清理，并提示缺少恢复定位。
+- 完成流程也保存进程证据并核实退出；业务 done 与关闭失败分离。全局清理释放旧绑定、实际消失的普通终端定位和精确匹配的原生任务查看租约，共享 Herdr／SSH 查看连接继续沿用原生命周期。
+- `SessionCleanupButton.tsx` 位于 `ProjectSidebar` 全局操作区，普通看板和 All Tasks 共用。提供按电脑／Workspace 列出的目标、工作中数量、取消／确认、逐项结果、历史批次核实、未知结果显式重试、资源记录单项处理以及中英文文案。UI 防重复提交，并防止迟到轮询覆盖最终结果。
+- 新 IPC：`preview_session_cleanup`、`execute_session_cleanup`、`retry_session_cleanup`、`session_cleanup_result`、`session_cleanup_history`、`session_resource_list`、`preview_session_resource`。单 Workspace 的旧空闲清理保留原资格规则。
+- 外部 Herdr 操作不受应用数据库锁原子控制；临近关闭时复核目标身份。进程采样证明已记录进程的退出，不能据此承诺固定内存下降值。完整验收及尚未覆盖项以验证记录为准。

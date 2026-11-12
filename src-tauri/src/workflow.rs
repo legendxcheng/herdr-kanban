@@ -52,6 +52,12 @@ pub(crate) fn ensure_project_target(
 }
 
 pub trait Herdr: Send + Sync {
+    fn capture_runtime(&self, target: &Target) -> Result<crate::runtime_processes::Runtime,String> { Ok(crate::runtime_processes::Runtime {target:self.validate(&target.workspace_id,target)?,processes:vec![]}) }
+    fn runtime_absent(&self, runtime: &crate::runtime_processes::Runtime) -> Result<bool,String> { self.cleanup_target_absent(&runtime.target) }
+    fn close_runtime(&self, runtime: &crate::runtime_processes::Runtime, check: &dyn Fn()->Result<(),String>) -> Result<(),SendError> {
+        self.close_pane(&runtime.target,check).map_err(|message|SendError{message,uncertain:true})
+    }
+
     fn startup_receipt_wait(&self) -> std::time::Duration { std::time::Duration::ZERO }
     fn startup_shell(&self, target: &Target, check: &dyn Fn()->Result<(),String>) -> Result<Target,String> { check()?; Ok(target.clone()) }
     /// One startup request, containing the first prompt. Never terminal input.
@@ -566,6 +572,7 @@ impl Workflow {
         lifecycle: Option<&str>,
         epoch: i64,
     ) -> Result<DispatchRecord, String> {
+        let _activity = crate::session_activity::enter(self,task);
         crate::task_reset::check_epoch(&*self.db.lock().map_err(err)?, task, epoch)?;
         if prompt.trim().is_empty() {
             return Err("dispatch.empty".into());

@@ -1,0 +1,8 @@
+.dialog.session-cleanup-dialog { width: min(900px, 92vw); max-width: 92vw; max-height: 88vh; overflow-y: auto; }
+.session-cleanup-list { max-height: 38vh; overflow: auto; margin: 14px 0; }
+.session-cleanup-list table { width: 100%; border-collapse: collapse; text-align: left; }
+.session-cleanup-list td, .session-cleanup-list th { padding: 8px; border-bottom: 1px solid var(--border-color, #4444); vertical-align: top; overflow-wrap: anywhere; }
+.session-cleanup-list small { display: block; opacity: .75; }
+.session-cleanup-warning { padding: 10px; border: 1px solid #c98c3b; border-radius: 8px; }
+.session-cleanup-dialog details { margin: 12px 0; }
+.session-cleanup-dialog details button { margin: 4px; }

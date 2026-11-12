@@ -222,6 +222,15 @@ impl NativeTerminalManager {
             }
         }
     }
+    /// Release only leases for the exact closed occupants; retain shared clients.
+    pub fn close_released(&self, targets:&[crate::workflow::Target]) {
+        let mut views=self.sessions.lock().map(|sessions|sessions.values().map(|s|s.selected().0).collect::<Vec<_>>()).unwrap_or_default();
+        if let Some(view)=self.slot.lock().ok().and_then(|s|s.clone()){views.push(view);}
+        for view in views {
+            let matches=view.task_lease.lock().ok().is_some_and(|lease|lease.as_ref().is_some_and(|lease|targets.iter().any(|target|target.same_identity(&lease.authorization.target))));
+            if matches {view.stop("terminal.closed");}
+        }
+    }
     pub fn close_all(&self) {
         let view = self.slot.lock().ok().and_then(|mut slot| slot.take());
         if let Some(view) = view {

@@ -1,3 +1,4 @@
+import { SessionCleanupButton } from "./SessionCleanupButton";
 import { useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { DragEvent } from "react";
@@ -101,6 +102,7 @@ export function ProjectSidebar({ machines = [], machineErrors = {}, machineBusy 
       <div className="sidebar-intro">{tr("sidebar.intro")}</div>
       {onSummary && <button className="sidebar-summary" aria-pressed={summarySelected} onClick={onSummary}><Icon name="board" />{tr("summary.title")}</button>}
       <div className="sidebar-header">
+        <SessionCleanupButton onChanged={onChanged} />
         <h2>{tr("sidebar.projects")} <span className="sidebar-count">{projects.length}</span></h2>
         {onOverview && <button onClick={onOverview} className="btn-icon" aria-label={tr("overview.title")} title={tr("overview.title")}><Icon name="board" /></button>}
         <button onClick={() => setShowNew(true)} className="btn-icon" aria-label={tr("workspace.add")} title={tr("workspace.add")}><Icon name="plus" /></button>
