@@ -23,7 +23,7 @@ impl Cli {
             );
         }
         Ok(self.cleanup_target_absent(&runtime.target)?
-            && crate::runtime_processes::absent(runtime)?)
+            && crate::runtime_processes::absent(&crate::runtime_processes::evidence(runtime)?)?)
     }
     pub(super) fn runtime_close(
         &self,
@@ -72,6 +72,7 @@ impl Cli {
         }) {
             return Err(certain("binding.identity_changed".into()));
         }
+        crate::runtime_processes::save_close_evidence(runtime, &current).map_err(certain)?;
         check().map_err(certain)?;
         self.request(&["pane", "close", &runtime.target.pane_id])
             .map(|_| ())

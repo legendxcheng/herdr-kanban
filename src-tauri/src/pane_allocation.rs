@@ -55,7 +55,7 @@ impl Workflow {
         target: &Target,
     ) -> Result<(), String> {
         let db = self.db.lock().map_err(|e| e.to_string())?;
-        crate::session_resources::record(&db,task,target,"created")?;
+        crate::session_resources::record_created(&db,task,op,target)?;
         super::ensure_operation(&db, task, op)?;
         db.execute(
             "UPDATE pane_allocations SET target_json=?2 WHERE operation_id=?1",

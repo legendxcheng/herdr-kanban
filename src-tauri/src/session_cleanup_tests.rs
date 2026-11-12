@@ -7,6 +7,7 @@ struct Fake {
     closed: Mutex<Vec<String>>,
     uncertain: Mutex<bool>,
     retain: Mutex<bool>,
+    verify_block: Mutex<Option<Arc<(std::sync::Barrier, std::sync::Barrier)>>>,
 }
 impl Herdr for Fake {
     fn workspaces(&self) -> Result<Vec<crate::projects::Workspace>, String> {
@@ -24,6 +25,7 @@ impl Herdr for Fake {
         Ok(Runtime {
             target: t.clone(),
             processes: vec![],
+            receipt_ids: vec![],
         })
     }
     fn cleanup_target_absent(&self, t: &Target) -> Result<bool, String> {
@@ -33,6 +35,15 @@ impl Herdr for Fake {
             .unwrap()
             .iter()
             .any(|p| p.terminal_id == t.terminal_id))
+    }
+    fn runtime_absent(&self, r: &Runtime) -> Result<bool, String> {
+        let blocked = self.verify_block.lock().unwrap().take();
+        if let Some(gates) = blocked {
+            gates.0.wait();
+            gates.1.wait();
+            return Err("machine.connection_failed".into());
+        }
+        self.cleanup_target_absent(&r.target)
     }
     fn close_runtime(
         &self,
@@ -44,7 +55,12 @@ impl Herdr for Fake {
             uncertain: false,
         })?;
         self.closed.lock().unwrap().push(r.target.pane_id.clone());
-        if !*self.retain.lock().unwrap() {self.targets.lock().unwrap().retain(|p|p.terminal_id!=r.target.terminal_id);}
+        if !*self.retain.lock().unwrap() {
+            self.targets
+                .lock()
+                .unwrap()
+                .retain(|p| p.terminal_id != r.target.terminal_id);
+        }
         if *self.uncertain.lock().unwrap() {
             Err(SendError {
                 message: "lost response".into(),
@@ -300,29 +316,167 @@ fn agent_in_a_workspace_terminal_is_cleaned_and_locator_is_reset() {
 }
 
 #[test]
-fn cleanup_claim_blocks_task_writes_until_result_is_verified(){
- let (app,fake)=fixture();let t=target("claim");bind(&app,&t);fake.targets.lock().unwrap().push(t);
- app.db.lock().unwrap().execute("UPDATE tasks SET status='todo'",[]).unwrap();
- assert!(crate::idle_cleanup::ensure_task_unclaimed(&app.db.lock().unwrap(),"t").is_ok());
- *fake.uncertain.lock().unwrap()=true;let batch=app.preview_session_cleanup().unwrap();app.execute_session_cleanup(&batch.id).unwrap();
- assert_eq!(crate::idle_cleanup::ensure_task_unclaimed(&app.db.lock().unwrap(),"t").unwrap_err(),"cleanup.pending");
- app.cleanup_result(&batch.id,true).unwrap();assert!(crate::idle_cleanup::ensure_task_unclaimed(&app.db.lock().unwrap(),"t").is_ok());
+fn cleanup_claim_blocks_task_writes_until_result_is_verified() {
+    let (app, fake) = fixture();
+    let t = target("claim");
+    bind(&app, &t);
+    fake.targets.lock().unwrap().push(t);
+    app.db
+        .lock()
+        .unwrap()
+        .execute("UPDATE tasks SET status='todo'", [])
+        .unwrap();
+    assert!(crate::idle_cleanup::ensure_task_unclaimed(&app.db.lock().unwrap(), "t").is_ok());
+    *fake.uncertain.lock().unwrap() = true;
+    let batch = app.preview_session_cleanup().unwrap();
+    app.execute_session_cleanup(&batch.id).unwrap();
+    assert_eq!(
+        crate::idle_cleanup::ensure_task_unclaimed(&app.db.lock().unwrap(), "t").unwrap_err(),
+        "cleanup.pending"
+    );
+    app.cleanup_result(&batch.id, true).unwrap();
+    assert!(crate::idle_cleanup::ensure_task_unclaimed(&app.db.lock().unwrap(), "t").is_ok());
 }
 
 #[test]
-fn unknown_live_target_requires_explicit_verified_retry(){
- let (app,fake)=fixture();fake.targets.lock().unwrap().push(target("still-alive"));*fake.uncertain.lock().unwrap()=true;*fake.retain.lock().unwrap()=true;
- let batch=app.preview_session_cleanup().unwrap();app.execute_session_cleanup(&batch.id).unwrap();
- assert_eq!(app.cleanup_result(&batch.id,true).unwrap().items[0].state,"unknown");assert_eq!(fake.closed.lock().unwrap().len(),1);
- *fake.uncertain.lock().unwrap()=false;*fake.retain.lock().unwrap()=false;
- let result=app.retry_session_cleanup(&batch.id).unwrap();assert_eq!(result.items[0].state,"closed");assert_eq!(fake.closed.lock().unwrap().len(),2);
- assert_eq!(result.items[0].warning,"session_cleanup.history_unavailable");
+fn unknown_live_target_requires_explicit_verified_retry() {
+    let (app, fake) = fixture();
+    fake.targets.lock().unwrap().push(target("still-alive"));
+    *fake.uncertain.lock().unwrap() = true;
+    *fake.retain.lock().unwrap() = true;
+    let batch = app.preview_session_cleanup().unwrap();
+    app.execute_session_cleanup(&batch.id).unwrap();
+    assert_eq!(
+        app.cleanup_result(&batch.id, true).unwrap().items[0].state,
+        "unknown"
+    );
+    assert_eq!(fake.closed.lock().unwrap().len(), 1);
+    *fake.uncertain.lock().unwrap() = false;
+    *fake.retain.lock().unwrap() = false;
+    let result = app.retry_session_cleanup(&batch.id).unwrap();
+    assert_eq!(result.items[0].state, "closed");
+    assert_eq!(fake.closed.lock().unwrap().len(), 2);
+    assert_eq!(
+        result.items[0].warning,
+        "session_cleanup.history_unavailable"
+    );
 }
 #[test]
-fn historical_idle_cleanup_unknown_is_not_permanent_protection(){
- let (app,fake)=fixture();let t=target("legacy-cleanup");fake.targets.lock().unwrap().push(t.clone());
- let c=serde_json::json!({"pane":{"target":t,"tab_id":"tab","cwd":"."},"owner":null});
- {let db=app.db.lock().unwrap();db.execute("INSERT INTO idle_cleanup_batches VALUES('legacy','p','local','default','w1','done','now')",[]).unwrap();db.execute("INSERT INTO idle_cleanup_items VALUES('legacy',0,?1,'unknown','lost')",[c.to_string()]).unwrap();}
- let batch=app.preview_session_cleanup().unwrap();assert_eq!(batch.items[0].state,"ready");assert_eq!(app.execute_session_cleanup(&batch.id).unwrap().items[0].state,"closed");
- let db=app.db.lock().unwrap();assert!(crate::idle_cleanup::ensure_unclaimed(&db,&t,None).is_ok());let state:String=db.query_row("SELECT state FROM idle_cleanup_items WHERE batch_id='legacy'",[],|r|r.get(0)).unwrap();assert_eq!(state,"unknown");
+fn historical_idle_cleanup_unknown_is_not_permanent_protection() {
+    let (app, fake) = fixture();
+    let t = target("legacy-cleanup");
+    fake.targets.lock().unwrap().push(t.clone());
+    let c = serde_json::json!({"pane":{"target":t,"tab_id":"tab","cwd":"."},"owner":null});
+    {
+        let db = app.db.lock().unwrap();
+        db.execute("INSERT INTO idle_cleanup_batches VALUES('legacy','p','local','default','w1','done','now')",[]).unwrap();
+        db.execute(
+            "INSERT INTO idle_cleanup_items VALUES('legacy',0,?1,'unknown','lost')",
+            [c.to_string()],
+        )
+        .unwrap();
+    }
+    let batch = app.preview_session_cleanup().unwrap();
+    assert_eq!(batch.items[0].state, "ready");
+    assert_eq!(
+        app.execute_session_cleanup(&batch.id).unwrap().items[0].state,
+        "closed"
+    );
+    let db = app.db.lock().unwrap();
+    assert!(crate::idle_cleanup::ensure_unclaimed(&db, &t, None).is_ok());
+    let state: String = db
+        .query_row(
+            "SELECT state FROM idle_cleanup_items WHERE batch_id='legacy'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(state, "unknown");
+}
+
+#[test]
+fn absent_old_resource_never_detaches_a_replacement_binding() {
+    let (app, fake) = fixture();
+    let old = target("reused-pane");
+    let mut new = old.clone();
+    new.terminal_id = "new-terminal".into();
+    new.process_id = "new-process".into();
+    bind(&app, &new);
+    fake.targets.lock().unwrap().push(new.clone());
+    let id = {
+        let db = app.db.lock().unwrap();
+        db.execute("UPDATE tasks SET status='done'", []).unwrap();
+        crate::session_resources::record(&db, "old-card", &old, "history").unwrap();
+        crate::session_resources::list(&db)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.target == old)
+            .unwrap()
+            .id
+    };
+    let batch = app.preview_session_resource(id).unwrap();
+    let result = app.execute_session_cleanup(&batch.id).unwrap();
+    assert_eq!(result.items[0].state, "absent");
+    assert_eq!(app.binding("t").unwrap().target, Some(new));
+    assert!(fake.closed.lock().unwrap().is_empty());
+    assert_eq!(
+        crate::task_reset::epoch(&app.db.lock().unwrap(), "t").unwrap(),
+        0
+    );
+}
+#[test]
+fn changed_agent_releases_old_unknown_claim_for_a_new_preview() {
+    let (app, fake) = fixture();
+    fake.targets.lock().unwrap().push(target("replace-unknown"));
+    *fake.uncertain.lock().unwrap() = true;
+    *fake.retain.lock().unwrap() = true;
+    let batch = app.preview_session_cleanup().unwrap();
+    app.execute_session_cleanup(&batch.id).unwrap();
+    fake.targets.lock().unwrap()[0].process_id = "replacement".into();
+    assert_eq!(
+        app.cleanup_result(&batch.id, true).unwrap().items[0].state,
+        "skipped"
+    );
+    let next = app.preview_session_cleanup().unwrap();
+    assert_eq!(next.items[0].state, "ready");
+    assert_eq!(fake.closed.lock().unwrap().len(), 1);
+}
+#[test]
+fn late_verification_error_does_not_revert_confirmed_release() {
+    let (app, fake) = fixture();
+    let app = Arc::new(app);
+    fake.targets.lock().unwrap().push(target("late-error"));
+    *fake.uncertain.lock().unwrap() = true;
+    let batch = app.preview_session_cleanup().unwrap();
+    app.execute_session_cleanup(&batch.id).unwrap();
+    let gates = Arc::new((std::sync::Barrier::new(2), std::sync::Barrier::new(2)));
+    *fake.verify_block.lock().unwrap() = Some(gates.clone());
+    let worker = app.clone();
+    let id = batch.id.clone();
+    let late = std::thread::spawn(move || worker.cleanup_result(&id, true));
+    gates.0.wait();
+    assert_eq!(
+        app.cleanup_result(&batch.id, true).unwrap().items[0].state,
+        "closed"
+    );
+    gates.1.wait();
+    assert_eq!(late.join().unwrap().unwrap().items[0].state, "closed");
+}
+#[test]
+fn late_creation_retains_the_original_execution_epoch_after_deletion() {
+    let (app, _) = fixture();
+    let t = target("late-create");
+    let mut db = app.db.lock().unwrap();
+    db.execute("UPDATE tasks SET execution_epoch=3", [])
+        .unwrap();
+    db.execute("INSERT INTO lifecycle_operations(id,task_id,kind,state,created_at) VALUES('launch','t','start','pending','now')",[]).unwrap();
+    crate::tasks::delete(&mut db, "t").unwrap();
+    crate::session_resources::record_created(&db, "t", "launch", &t).unwrap();
+    let (epoch, reason): (i64, String) = db
+        .query_row("SELECT epoch,reason FROM session_resources", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(epoch, 3);
+    assert_eq!(reason, "deleted");
 }

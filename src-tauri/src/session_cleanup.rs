@@ -81,18 +81,26 @@ impl Workflow {
         crate::machines::ensure_enabled(db, &t.machine_id)?;
         ensure_unclaimed(db, t, own)?;
         let idle_running:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM idle_cleanup_items i JOIN idle_cleanup_batches b ON b.id=i.batch_id WHERE b.state='running' AND i.state IN ('claimed','closing','unknown') AND b.machine_id=?1 AND b.session=?2 AND (json_extract(i.candidate_json,'$.pane.target.terminal_id')=?3 OR json_extract(i.candidate_json,'$.pane.target.pane_id')=?4))",params![t.machine_id,t.session,t.terminal_id,t.pane_id],|r|r.get(0)).map_err(err)?;
-        if idle_running {return Err("session_cleanup.busy".into());}
-        let mut q=db.prepare("SELECT b.task_id,t.status FROM task_bindings b JOIN tasks t ON t.id=b.task_id
+        if idle_running {
+            return Err("session_cleanup.busy".into());
+        }
+        let mut q=db.prepare("SELECT b.task_id,t.status,b.target_json FROM task_bindings b JOIN tasks t ON t.id=b.task_id
             WHERE b.machine_id=?1 AND b.session=?2 AND (b.pane_id=?3 OR json_extract(b.target_json,'$.terminal_id')=?4)").map_err(err)?;
         let owners = q
             .query_map(
                 params![t.machine_id, t.session, t.pane_id, t.terminal_id],
-                |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                    ))
+                },
             )
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
-        if owners.iter().any(|(_, state)| state == "in_progress") {
+        if owners.iter().any(|(_, state, _)| state == "in_progress") {
             return Err("session_cleanup.in_progress".into());
         }
         if owners.len() > 1 {
@@ -112,12 +120,17 @@ impl Workflow {
             .map_err(err)?;
         if tasks
             .iter()
-            .chain(owners.iter().map(|(id, _)| id))
+            .chain(owners.iter().map(|(id, _, _)| id))
             .any(|task| crate::session_activity::busy(self, task))
         {
             return Err("session_cleanup.busy".into());
         }
-        Ok(owners.first().map(|(id, _)| id.clone()))
+        Ok(owners.first().and_then(|(id, _, json)| {
+            serde_json::from_str::<Target>(json)
+                .ok()
+                .filter(|bound| bound.same_identity(t))
+                .map(|_| id.clone())
+        }))
     }
     fn new_cleanup_batch(
         &self,
@@ -270,7 +283,7 @@ impl Workflow {
         if verify && state == "done" {
             for item in items.iter().filter(|i| i.state == "unknown") {
                 if let Err(error) = self.verify_cleanup_item(item) {
-                    self.item_state(item, "unknown", &error)?;
+                    self.verification_error(item, &error)?;
                 }
             }
             return self.cleanup_result(id, false);
@@ -306,6 +319,10 @@ impl Workflow {
             .map_err(err)?;
         Ok(())
     }
+    fn verification_error(&self, item: &Item, error: &str) -> Result<(), String> {
+        self.db.lock().map_err(err)?.execute("UPDATE session_cleanup_items SET error=?2 WHERE id=?1 AND state='unknown' AND batch_id IN (SELECT id FROM session_cleanup_batches WHERE state='done')",params![item.id,error]).map_err(err)?;
+        Ok(())
+    }
     fn finish_session_cleanup_item(&self, item: &Item, state: &str) -> Result<(), String> {
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
@@ -322,7 +339,7 @@ impl Workflow {
                 [&task],
             )
             .map_err(err)?;
-            tx.execute("DELETE FROM task_bindings WHERE task_id=?1", [task])
+            tx.execute("DELETE FROM task_bindings WHERE task_id=?1 AND json_extract(target_json,'$.terminal_id')=?2 AND json_extract(target_json,'$.process_id')=?3", params![task,item.target.terminal_id,item.target.process_id])
                 .map_err(err)?;
         }
         tx.execute("UPDATE workspace_terminals SET state='failed',target_json=NULL WHERE machine_id=?1 AND session=?2 AND json_extract(target_json,'$.terminal_id')=?3",params![item.target.machine_id,item.target.session,item.target.terminal_id]).map_err(err)?;
@@ -364,6 +381,11 @@ impl Workflow {
         } else if adapter.cleanup_target_absent(&item.target)? {
             return self.finish_session_cleanup_item(item, "absent");
         }
+        if let Err(error) = adapter.validate(&item.target.workspace_id, &item.target) {
+            if error == "binding.identity_changed" {
+                self.db.lock().map_err(err)?.execute("UPDATE session_cleanup_items SET state='skipped',error=?2 WHERE id=?1 AND state='unknown'",params![item.id,error]).map_err(err)?;
+            }
+        }
         Ok(())
     }
     fn release_cleanup_item(&self, item: &Item) -> Result<(), String> {
@@ -385,11 +407,20 @@ impl Workflow {
         }
         if adapter.cleanup_target_absent(target)? {
             let stored:Option<String>=self.db.lock().map_err(err)?.query_row("SELECT runtime_json FROM session_resources WHERE machine_id=?1 AND session=?2 AND terminal_id=?3 AND runtime_json IS NOT NULL ORDER BY id DESC LIMIT 1",params![target.machine_id,target.session,target.terminal_id],|r|r.get(0)).optional().map_err(err)?;
-            if let Some(json)=stored {
-                let runtime:Runtime=serde_json::from_str(&json).map_err(err)?;
-                self.db.lock().map_err(err)?.execute("UPDATE session_cleanup_items SET runtime_json=?2 WHERE id=?1",params![item.id,json]).map_err(err)?;
-                if adapter.runtime_absent(&runtime)? {return self.finish_session_cleanup_item(item,"closed");}
-                return self.item_state(item,"unknown","session_cleanup.awaiting_exit");
+            if let Some(json) = stored {
+                let runtime: Runtime = serde_json::from_str(&json).map_err(err)?;
+                self.db
+                    .lock()
+                    .map_err(err)?
+                    .execute(
+                        "UPDATE session_cleanup_items SET runtime_json=?2 WHERE id=?1",
+                        params![item.id, json],
+                    )
+                    .map_err(err)?;
+                if adapter.runtime_absent(&runtime)? {
+                    return self.finish_session_cleanup_item(item, "closed");
+                }
+                return self.item_state(item, "unknown", "session_cleanup.awaiting_exit");
             }
             // An old PID without a birth stamp is not proof of process release.
             self.finish_session_cleanup_item(item, "absent")?;
@@ -408,6 +439,11 @@ impl Workflow {
             .map_err(err)?;
         if let Some(json) = prior {
             let old: Runtime = serde_json::from_str(&json).map_err(err)?;
+            for receipt in old.receipt_ids {
+                if !runtime.receipt_ids.contains(&receipt) {
+                    runtime.receipt_ids.push(receipt);
+                }
+            }
             for process in old.processes {
                 if !runtime
                     .processes
@@ -609,7 +645,15 @@ impl Workflow {
                 tx.commit().map_err(err)
             })();
             if let Err(error) = result {
-                self.item_state(item, "unknown", &error)?;
+                self.item_state(
+                    item,
+                    if error == "binding.identity_changed" {
+                        "skipped"
+                    } else {
+                        "unknown"
+                    },
+                    &error,
+                )?;
             }
         }
         {
@@ -618,12 +662,24 @@ impl Workflow {
         }
         self.execute_session_cleanup(id)
     }
-    pub fn preview_session_resource(&self,id:i64)->Result<Batch,String> {
-        let resource=crate::session_resources::list(&*self.db.lock().map_err(err)?)?.into_iter().find(|r|r.id==id).ok_or("cleanup.stale")?;
-        let target=&resource.target;
+    pub fn preview_session_resource(&self, id: i64) -> Result<Batch, String> {
+        let resource = crate::session_resources::list(&*self.db.lock().map_err(err)?)?
+            .into_iter()
+            .find(|r| r.id == id)
+            .ok_or("cleanup.stale")?;
+        let target = &resource.target;
         let previous:Option<String>=self.db.lock().map_err(err)?.query_row("SELECT batch_id FROM session_cleanup_items WHERE state IN ('unknown','claimed','closing') AND COALESCE(json_extract(target_json,'$.machine_id'),'local')=?1 AND json_extract(target_json,'$.session')=?2 AND json_extract(target_json,'$.terminal_id')=?3 ORDER BY rowid DESC LIMIT 1",params![target.machine_id,target.session,target.terminal_id],|r|r.get(0)).optional().map_err(err)?;
-        if let Some(id)=previous{return self.cleanup_result(&id,true);}
-        self.new_cleanup_batch(&[(target.clone(),target.machine_id.clone(),target.workspace_id.clone())],&[])
+        if let Some(id) = previous {
+            return self.cleanup_result(&id, true);
+        }
+        self.new_cleanup_batch(
+            &[(
+                target.clone(),
+                target.machine_id.clone(),
+                target.workspace_id.clone(),
+            )],
+            &[],
+        )
     }
     pub fn release_deleted_resource(&self, resource_id: i64) -> Result<Batch, String> {
         let resource = crate::session_resources::list(&*self.db.lock().map_err(err)?)?
@@ -732,4 +788,12 @@ fn release_views(native: &crate::native_terminal::NativeTerminalManager, batch: 
 }
 
 #[tauri::command]
-pub async fn preview_session_resource(app:tauri::State<'_,Arc<Workflow>>,resource_id:i64)->Result<Batch,String>{let app=app.inner().clone();tauri::async_runtime::spawn_blocking(move||app.preview_session_resource(resource_id)).await.map_err(err)?}
+pub async fn preview_session_resource(
+    app: tauri::State<'_, Arc<Workflow>>,
+    resource_id: i64,
+) -> Result<Batch, String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || app.preview_session_resource(resource_id))
+        .await
+        .map_err(err)?
+}

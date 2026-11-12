@@ -52,7 +52,7 @@ pub(crate) fn ensure_project_target(
 }
 
 pub trait Herdr: Send + Sync {
-    fn capture_runtime(&self, target: &Target) -> Result<crate::runtime_processes::Runtime,String> { Ok(crate::runtime_processes::Runtime {target:self.validate(&target.workspace_id,target)?,processes:vec![]}) }
+    fn capture_runtime(&self, target: &Target) -> Result<crate::runtime_processes::Runtime,String> { Ok(crate::runtime_processes::Runtime {target:self.validate(&target.workspace_id,target)?,processes:vec![],receipt_ids:vec![]}) }
     fn runtime_absent(&self, runtime: &crate::runtime_processes::Runtime) -> Result<bool,String> { self.cleanup_target_absent(&runtime.target) }
     fn close_runtime(&self, runtime: &crate::runtime_processes::Runtime, check: &dyn Fn()->Result<(),String>) -> Result<(),SendError> {
         self.close_pane(&runtime.target,check).map_err(|message|SendError{message,uncertain:true})

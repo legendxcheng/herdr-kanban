@@ -273,7 +273,7 @@ impl Workflow {
         tx.commit().map_err(err)
     }
     pub(crate) fn reserve_target(&self, task: &str, op: &str, target: &Target) -> Result<(), String> {
-        crate::session_resources::record(&*self.db.lock().map_err(err)?,task,target,"created")?;
+        crate::session_resources::record_created(&*self.db.lock().map_err(err)?,task,op,target)?;
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
         ensure_operation(&tx, task, op)?;

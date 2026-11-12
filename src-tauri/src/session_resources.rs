@@ -20,7 +20,10 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
         target_json TEXT NOT NULL, reason TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'tracked',
         error TEXT NOT NULL DEFAULT '', runtime_json TEXT, session_id TEXT, cwd TEXT, epoch INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(machine_id,session,terminal_id,process_id));")?;
+        UNIQUE(machine_id,session,terminal_id,process_id));
+        CREATE TABLE IF NOT EXISTS session_operation_epochs(operation_id TEXT PRIMARY KEY,epoch INTEGER NOT NULL);
+        CREATE TRIGGER IF NOT EXISTS resource_operation_epoch AFTER INSERT ON lifecycle_operations BEGIN
+          INSERT OR IGNORE INTO session_operation_epochs SELECT NEW.id,execution_epoch FROM tasks WHERE id=NEW.task_id; END;")?;
     let capture = |source: &str, task: &str, machine: &str, reason: &str| {
         format!(
         "INSERT INTO session_resources(task_id,machine_id,session,terminal_id,process_id,target_json,reason,session_id,cwd,epoch)
@@ -28,9 +31,9 @@ pub fn init(db: &Connection) -> rusqlite::Result<()> {
            (SELECT codex_session_id FROM task_sessions WHERE task_id={task}),
            (SELECT cwd FROM task_sessions WHERE task_id={task}),
            COALESCE((SELECT execution_epoch FROM tasks WHERE id={task}),0)
-         WHERE {source} IS NOT NULL AND json_valid({source}) AND json_extract({source},'$.terminal_id') IS NOT NULL
+         WHERE {source} IS NOT NULL AND json_valid({source}) AND json_extract({source},'$.terminal_id') IS NOT NULL AND json_extract({source},'$.process_id') IS NOT NULL AND json_extract({source},'$.session') IS NOT NULL
          ON CONFLICT(machine_id,session,terminal_id,process_id) DO UPDATE SET
-           target_json=excluded.target_json,task_id=excluded.task_id,reason=excluded.reason,state='tracked',
+           target_json=excluded.target_json,task_id=excluded.task_id,reason=excluded.reason,state='tracked',epoch=excluded.epoch,
            session_id=COALESCE(excluded.session_id,session_resources.session_id),cwd=COALESCE(excluded.cwd,session_resources.cwd),updated_at=CURRENT_TIMESTAMP;")
     };
     for (name, event) in [("insert", "INSERT"), ("update", "UPDATE OF target_json")] {
@@ -119,12 +122,23 @@ pub fn record(db: &Connection, task: &str, target: &Target, reason: &str) -> Res
     } else {
         reason
     };
-    db.execute("INSERT INTO session_resources(task_id,machine_id,session,terminal_id,process_id,target_json,reason)
-      VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(machine_id,session,terminal_id,process_id) DO UPDATE SET target_json=excluded.target_json",
+    db.execute("INSERT INTO session_resources(task_id,machine_id,session,terminal_id,process_id,target_json,reason,epoch)
+      VALUES(?1,?2,?3,?4,?5,?6,?7,COALESCE((SELECT execution_epoch FROM tasks WHERE id=?1),-1)) ON CONFLICT(machine_id,session,terminal_id,process_id) DO UPDATE SET target_json=excluded.target_json",
       params![task,target.machine_id,target.session,target.terminal_id,target.process_id,serde_json::to_string(target).map_err(|e|e.to_string())?,reason]).map_err(|e|e.to_string())?;
     Ok(())
 }
 
+/// Operation-scoped epochs survive reset and deletion before an external reply.
+pub fn record_created(
+    db: &Connection,
+    task: &str,
+    operation: &str,
+    target: &Target,
+) -> Result<(), String> {
+    record(db, task, target, "created")?;
+    db.execute("UPDATE session_resources SET epoch=COALESCE((SELECT epoch FROM session_operation_epochs WHERE operation_id=?1),epoch) WHERE machine_id=?2 AND session=?3 AND terminal_id=?4 AND process_id=?5",params![operation,target.machine_id,target.session,target.terminal_id,target.process_id]).map_err(|e|e.to_string())?;
+    Ok(())
+}
 pub fn save_runtime(
     db: &Connection,
     runtime: &crate::runtime_processes::Runtime,
