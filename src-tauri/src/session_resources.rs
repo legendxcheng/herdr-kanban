@@ -143,11 +143,11 @@ pub fn save_runtime(
     db: &Connection,
     runtime: &crate::runtime_processes::Runtime,
 ) -> Result<(), String> {
-    db.execute("UPDATE session_resources SET runtime_json=?4 WHERE machine_id=?1 AND session=?2 AND terminal_id=?3",params![runtime.target.machine_id,runtime.target.session,runtime.target.terminal_id,serde_json::to_string(runtime).map_err(|e|e.to_string())?]).map_err(|e|e.to_string())?;
+    db.execute("UPDATE session_resources SET runtime_json=?4 WHERE machine_id=?1 AND session=?2 AND terminal_id=?3 AND (runtime_json IS NULL OR process_id=?5)",params![runtime.target.machine_id,runtime.target.session,runtime.target.terminal_id,serde_json::to_string(runtime).map_err(|e|e.to_string())?,runtime.target.process_id]).map_err(|e|e.to_string())?;
     Ok(())
 }
 pub fn released(db: &Connection, target: &Target) -> Result<(), String> {
-    db.execute("UPDATE session_resources SET state='closed',error='' WHERE machine_id=?1 AND session=?2 AND terminal_id=?3",params![target.machine_id,target.session,target.terminal_id]).map_err(|e|e.to_string())?;
+    db.execute("UPDATE session_resources SET state='closed',error='' WHERE machine_id=?1 AND session=?2 AND terminal_id=?3 AND (process_id=?4 OR json_extract(runtime_json,'$.target.process_id')=?4)",params![target.machine_id,target.session,target.terminal_id,target.process_id]).map_err(|e|e.to_string())?;
     Ok(())
 }
 

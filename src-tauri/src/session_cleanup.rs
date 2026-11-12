@@ -351,7 +351,7 @@ impl Workflow {
         } else {
             ""
         };
-        tx.execute("UPDATE session_resources SET state=?4,error=?5,updated_at=CURRENT_TIMESTAMP WHERE machine_id=?1 AND session=?2 AND terminal_id=?3",params![item.target.machine_id,item.target.session,item.target.terminal_id,state,error]).map_err(err)?;
+        tx.execute("UPDATE session_resources SET state=?4,error=?5,updated_at=CURRENT_TIMESTAMP WHERE machine_id=?1 AND session=?2 AND terminal_id=?3 AND (process_id=?6 OR json_extract(runtime_json,'$.target.process_id')=?6)",params![item.target.machine_id,item.target.session,item.target.terminal_id,state,error,item.target.process_id]).map_err(err)?;
         tx.execute(
             "UPDATE session_cleanup_items SET state=?2,error=?3 WHERE id=?1",
             params![item.id, state, error],

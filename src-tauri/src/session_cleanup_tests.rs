@@ -480,3 +480,13 @@ fn late_creation_retains_the_original_execution_epoch_after_deletion() {
     assert_eq!(epoch, 3);
     assert_eq!(reason, "deleted");
 }
+
+#[test]
+fn closing_a_new_agent_does_not_erase_old_process_evidence_in_the_same_terminal(){
+ let (app,fake)=fixture();let old=target("restarted");let mut current=old.clone();current.process_id="new-process".into();fake.targets.lock().unwrap().push(current.clone());
+ let old_runtime=Runtime{target:old.clone(),processes:vec![crate::runtime_processes::Process{pid:99,birth:1}],receipt_ids:vec![]};
+ {let db=app.db.lock().unwrap();crate::session_resources::record(&db,"retired-task",&old,"history").unwrap();crate::session_resources::save_runtime(&db,&old_runtime).unwrap();}
+ let batch=app.preview_session_cleanup().unwrap();assert_eq!(app.execute_session_cleanup(&batch.id).unwrap().items[0].state,"closed");
+ let db=app.db.lock().unwrap();let (state,json):(String,String)=db.query_row("SELECT state,runtime_json FROM session_resources WHERE process_id=?1",[&old.process_id],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+ assert_ne!(state,"closed");let retained:Runtime=serde_json::from_str(&json).unwrap();assert_eq!(retained.target,old);assert_eq!(retained.processes[0].pid,99);
+}
