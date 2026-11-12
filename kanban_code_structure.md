@@ -1338,4 +1338,6 @@ Windows npm 安装的 Codex 恢复：`herdr_codex` 严格识别 node + 官方 co
 - 完成流程也保存进程证据并核实退出；业务 done 与关闭失败分离。全局清理释放旧绑定、实际消失的普通终端定位和精确匹配的原生任务查看租约，共享 Herdr／SSH 查看连接继续沿用原生命周期。
 - `SessionCleanupButton.tsx` 位于 `ProjectSidebar` 全局操作区，普通看板和 All Tasks 共用。提供按电脑／Workspace 列出的目标、工作中数量、取消／确认、逐项结果、历史批次核实、未知结果显式重试、资源记录单项处理以及中英文文案。UI 防重复提交，并防止迟到轮询覆盖最终结果。
 - 新 IPC：`preview_session_cleanup`、`execute_session_cleanup`、`retry_session_cleanup`、`session_cleanup_result`、`session_cleanup_history`、`session_resource_list`、`preview_session_resource`。单 Workspace 的旧空闲清理保留原资格规则。
+- 关闭前在执行电脑持久化新增子进程证据；回执丢失先读取该证据核实。资源的保存／释放／历史核实均匹配原进程身份，不借用同终端后继进程的退出证据。
+- 已完成本机和 SSH 各 20 轮目标退出验证、19 项清理专项及双轴复核；自动历史恢复核验、完整宿主内存与全部桌面矩阵仍有验收缺口。详见 [Session 清理验证记录](docs/verification/2026-11-12-session-cleanup.md)。
 - 外部 Herdr 操作不受应用数据库锁原子控制；临近关闭时复核目标身份。进程采样证明已记录进程的退出，不能据此承诺固定内存下降值。完整验收及尚未覆盖项以验证记录为准。
