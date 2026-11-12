@@ -351,7 +351,7 @@ impl Workflow {
         } else {
             ""
         };
-        tx.execute("UPDATE session_resources SET state=?4,error=?5,updated_at=CURRENT_TIMESTAMP WHERE machine_id=?1 AND session=?2 AND terminal_id=?3 AND (process_id=?6 OR json_extract(runtime_json,'$.target.process_id')=?6)",params![item.target.machine_id,item.target.session,item.target.terminal_id,state,error,item.target.process_id]).map_err(err)?;
+        tx.execute("UPDATE session_resources SET state=?4,error=?5,updated_at=CURRENT_TIMESTAMP WHERE machine_id=?1 AND session=?2 AND terminal_id=?3 AND process_id=?6",params![item.target.machine_id,item.target.session,item.target.terminal_id,state,error,item.target.process_id]).map_err(err)?;
         tx.execute(
             "UPDATE session_cleanup_items SET state=?2,error=?3 WHERE id=?1",
             params![item.id, state, error],
@@ -406,7 +406,7 @@ impl Workflow {
             tx.commit().map_err(err)?;
         }
         if adapter.cleanup_target_absent(target)? {
-            let stored:Option<String>=self.db.lock().map_err(err)?.query_row("SELECT runtime_json FROM session_resources WHERE machine_id=?1 AND session=?2 AND terminal_id=?3 AND runtime_json IS NOT NULL ORDER BY id DESC LIMIT 1",params![target.machine_id,target.session,target.terminal_id],|r|r.get(0)).optional().map_err(err)?;
+            let stored:Option<String>=self.db.lock().map_err(err)?.query_row("SELECT runtime_json FROM session_resources WHERE machine_id=?1 AND session=?2 AND terminal_id=?3 AND process_id=?4 AND runtime_json IS NOT NULL ORDER BY id DESC LIMIT 1",params![target.machine_id,target.session,target.terminal_id,target.process_id],|r|r.get(0)).optional().map_err(err)?;
             if let Some(json) = stored {
                 let runtime: Runtime = serde_json::from_str(&json).map_err(err)?;
                 self.db

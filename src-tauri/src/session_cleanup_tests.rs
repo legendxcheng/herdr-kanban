@@ -490,3 +490,21 @@ fn closing_a_new_agent_does_not_erase_old_process_evidence_in_the_same_terminal(
  let db=app.db.lock().unwrap();let (state,json):(String,String)=db.query_row("SELECT state,runtime_json FROM session_resources WHERE process_id=?1",[&old.process_id],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
  assert_ne!(state,"closed");let retained:Runtime=serde_json::from_str(&json).unwrap();assert_eq!(retained.target,old);assert_eq!(retained.processes[0].pid,99);
 }
+
+#[test]
+fn an_old_instance_without_evidence_does_not_borrow_its_successors_receipt() {
+    let (app, fake) = fixture();
+    let old = target("reused");
+    let mut current = old.clone();
+    current.process_id = "successor".into();
+    fake.targets.lock().unwrap().push(current);
+    { let db = app.db.lock().unwrap(); crate::session_resources::record(&db, "retired-task", &old, "history").unwrap(); }
+    let batch = app.preview_session_cleanup().unwrap();
+    assert_eq!(app.execute_session_cleanup(&batch.id).unwrap().items[0].state, "closed");
+    let id: i64 = { let db = app.db.lock().unwrap();
+        let (id,state,json): (i64,String,Option<String>) = db.query_row("SELECT id,state,runtime_json FROM session_resources WHERE process_id=?1", [&old.process_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        assert_ne!(state,"closed"); assert!(json.is_none()); id
+    };
+    let preview = app.preview_session_resource(id).unwrap();
+    assert_eq!(app.execute_session_cleanup(&preview.id).unwrap().items[0].state,"absent");
+}
