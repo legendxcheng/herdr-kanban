@@ -13,6 +13,8 @@ mod delete_cli_tests;
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Flow {
     #[serde(default)]
+    pub can_repair_resume: bool,
+    #[serde(default)]
     pub can_continue_first_prompt: bool,
     pub session_id: Option<String>,
     pub operation_id: Option<String>,
@@ -69,6 +71,7 @@ pub fn view(db: &Connection, task: &str) -> Result<Flow, String> {
         .optional()
         .map_err(err)?;
     let mut flow = Flow {
+        can_repair_resume: repairable_resume(db, task)?.is_some(),
         can_continue_first_prompt: false,
         session_id,
         operation_id: None,
@@ -109,6 +112,25 @@ pub fn view(db: &Connection, task: &str) -> Result<Flow, String> {
             .map(|t| t.pane_id);
     }
     Ok(flow)
+}
+
+/// Only an interrupted resume without a prompt write may be resolved by attachment.
+/// Legacy starts have no request snapshot; their saved session and prior dispatch
+/// distinguish them from a first launch. This query is shared by projection and repair.
+pub(crate) fn repairable_resume(db: &Connection, task: &str) -> Result<Option<String>, String> {
+    db.query_row(
+        "SELECT o.id FROM lifecycle_operations o JOIN tasks t ON t.id=o.task_id
+         LEFT JOIN start_requests r ON r.operation_id=o.id
+         WHERE o.task_id=?1 AND o.rowid=(SELECT MAX(rowid) FROM lifecycle_operations WHERE task_id=?1)
+         AND o.kind='start' AND o.state IN ('unknown','failed')
+         AND ((r.operation_id IS NOT NULL AND r.needs_prompt=0)
+              OR (r.operation_id IS NULL AND t.dispatched_at IS NOT NULL
+                  AND EXISTS(SELECT 1 FROM task_sessions WHERE task_id=?1)))
+         AND NOT EXISTS(SELECT 1 FROM dispatch_operations WHERE task_id=?1 AND state IN ('pending','unknown'))
+         AND NOT EXISTS(SELECT 1 FROM dispatch_operations WHERE id=o.id || ':dispatch')
+         AND NOT EXISTS(SELECT 1 FROM startup_prompt_operations WHERE operation_id=o.id)",
+        [task], |r| r.get(0),
+    ).optional().map_err(err)
 }
 
 pub(crate) fn begin_flow_in(
@@ -195,7 +217,10 @@ impl Workflow {
             .lock()
             .map_err(err)?
             .execute(
-                "UPDATE lifecycle_operations SET state=?2,error=?3 WHERE id=?1 AND EXISTS(SELECT 1 FROM tasks WHERE id=lifecycle_operations.task_id)",
+                "UPDATE lifecycle_operations SET state=?2,error=?3 WHERE id=?1
+                 AND EXISTS(SELECT 1 FROM tasks WHERE id=lifecycle_operations.task_id)
+                 AND NOT EXISTS(SELECT 1 FROM lifecycle_operations newer
+                     WHERE newer.task_id=lifecycle_operations.task_id AND newer.rowid>lifecycle_operations.rowid)",
                 params![id, state, error],
             )
             .map_err(err)?;

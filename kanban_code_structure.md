@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+更新日期：2026-11-12（完成后恢复失败的人工绑定）。已停止且没有提示词写入的恢复操作允许人工选择有效、未被占用的终端；保存绑定同事务保留原失败记录、追加人工恢复记录、恢复进行中状态并撤销旧执行代次。`Flow.can_repair_resume` 统一前后端可修复判断，真实 pending、未知派发和未知关闭仍走对应处理入口。生命周期 103 项、工作流 17 项、前端 347 项及生产构建通过；隔离原生桌面已验证 unknown 恢复记录的保存绑定、真实 SSH 终端打开、刷新及重启保留，派发数为零。未重新打包安装，见[恢复后绑定验证](docs/verification/2026-11-12-resume-binding.md)。
+
 更新日期：2026-11-11（电脑昵称，GitHub #50–#52）。管理电脑使用应用内昵称表单，支持保存／取消、空白校验、失败保留草稿及重试、保存中防重复；离线与停用电脑可编辑。复用 `Machine.name` 和 `rename_machine`，无需迁移。已导入的 Herdr 配置选择项按 profile ID 展示本地昵称，侧栏、Workspace 选择、任务来源和终端标题沿用共享机器状态刷新。344 项前端测试、4 项机器数据层测试、类型检查与构建通过；隔离桌面已验证实际写入失败重试、刷新／重启保留及 devpc 重连保留，具体证据与边界见[电脑昵称验证](docs/verification/2026-11-11-machine-nickname.md)。
 
 更新日期：2026-11-11（人工绑定修正）。人工绑定以用户选定的终端为准，普通终端查看不再要求 Codex 会话 ID，也不比较旧会话；自动恢复与未决派发的只读核验保持独立。保存绑定时清除旧的自动恢复会话定位记录，完成任务时再采集当前会话。前端 336 项、生命周期 100 项、工作流 17 项通过；真实无会话 ID 的远端 `wP:p2` 已完成隔离桌面的保存绑定、原生终端打开、页面刷新与应用重启验收。未提交或重新打包，详情见[人工绑定验证](docs/verification/2026-11-11-manual-binding.md)。此前版本的强制会话匹配已撤销。
@@ -545,6 +547,8 @@ flowchart TD
 
 Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tasks 表。`flow` 包含保存的会话 ID、最近生命周期操作及错误。无活跃绑定但有会话记录时返回 dormant；没有会话记录的旧开发中任务返回 repair，旧共享目标不会自动认领。完成后成功关闭才解除 pane 绑定；缺会话 ID、身份变化或关闭失败时保留目标并提供重试关闭。普通移回未开发保留绑定；明确“放弃本次执行，退回 Todo”会隔离旧执行并清除当前绑定／会话，下次新建会话，详见 6.2.8；删除解除绑定，保留操作审计记录。`DispatchRecord` 仍是命令返回值，最近一次快照也继续保存在 Task 上。
 
+`flow.can_repair_resume` 是后端派生的人工恢复能力：最近 start 为 failed/unknown，启动快照明确无需提示词，或无快照的旧记录同时具有已派发时间与保存会话；该次操作没有派发记录或启动输入记录，且任务没有未决派发。字段默认 false，无数据库迁移。正常绑定仍按既有规则开放；pending 和其他 unknown 不因人工选择跳过未决操作处理。
+
 ### 4.3 数据路径、迁移与约束
 
 2026-10-26 升级兼容修复：`db::init` 在 schema 13 后执行 `machines::migrate_connection_metadata`（schema 14）。早期 schema 12 的 machines 表可能没有 `helper_name` / `host_identity`；迁移通过 `PRAGMA table_info` 识别缺列，在同一事务中仅补缺列并写入版本 14，保留已有连接身份和已验证元数据。缺失的元数据保持 NULL，由正式连接检查填充；不清库、不重建项目及任务。覆盖两列缺失、单列缺失、两列已存在、重复初始化与保留历史的回归；故障真实数据库副本已完成 Tauri → Devpc 连接 → Workspace 列表验证，见本次 Workspace 验证记录。
@@ -1039,6 +1043,8 @@ Herdr 侧栏默认收起且完全隐藏，保留原生快捷键主动展开。�
 ### 6.6 自动分配、完成关闭与恢复（GitHub #10）
 
 `KanbanBoard → api → work_commands → lifecycle.rs` 复用 Workflow、SQLite 和 Herdr trait，外部请求不持有数据库 Mutex。
+
+2026-11-12 人工接管失败恢复：`Workflow::repair` 与自动核验共用每任务锁，通过 `lifecycle::repairable_resume` 判断可接管的恢复；目标观察前后核对原操作、绑定、执行代次、机器及占用。在保存新绑定、清除旧 `task_sessions` 的同一事务中，把原恢复记为 failed 并保留原错误／目标，新增 succeeded 的 start 记录，证据 source 为 `manual_binding` 并关联旧操作和人工选定目标；任务转为 in_progress、清除完成时间并增加 execution_epoch。该成功记录表示人工连接成功，不表示自动核验了旧会话。旧操作不能再次激活任务，`end_flow` 不再回写已有后续生命周期的历史操作。不会发送提示词、启动或关闭 Agent。`BindingDialog` 使用后端能力控制保存，终端修复入口对其他 unknown 转入原核验／关闭重试。实际验证边界见[恢复后绑定验证](docs/verification/2026-11-12-resume-binding.md)。
 
 - 首次启动先写 pending 生命周期意图。按电脑、session + 稳定 workspace ID 查找唯一、名称精确为 `kanban` 的 Tab，每次自动分配都创建新 pane，不选择旧空闲 shell/Codex。不存在该 Tab 时创建一个；已有 Tab 时，在面积最大的 pane 旁按宽高选择右分屏或下分屏。创建及分屏显式指定目录并使用 `--no-focus`；同名 Tab 歧义拒绝创建。
 - 创建前清单、创建回执及唯一预占按电脑/session/workspace 在进程内串行，并与确认清理共用分配锁；外部调用不持 SQLite Mutex，Agent 准备与发送在释放分配锁后继续。不同 workspace 独立分配。旧任务保留原 Tab 中的有效绑定；关闭后再次启动时使用新 pane。手动派发与修复仍使用用户明确选择的目标，并拒绝清理占用或待核实的 pane。

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { HerdrAgent, Project, Task } from "./types";
 import * as api from "./api";
 import { tr, useLocalizedMessage } from "./i18n";
+import { bindingRepairBlocked } from "./taskFlow";
 
 export function BindingDialog({ task, project, onClose, onSaved }: { task: Task; project: Project; onClose: () => void; onSaved: () => void }) {
   const [agents, setAgents] = useState<HerdrAgent[]>([]);
@@ -10,6 +11,7 @@ export function BindingDialog({ task, project, onClose, onSaved }: { task: Task;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useLocalizedMessage();
   const [refresh, setRefresh] = useState(0);
+  const blocked = bindingRepairBlocked(task);
   useEffect(() => {
     let active = true;
     setLoading(true); setError("");
@@ -19,6 +21,7 @@ export function BindingDialog({ task, project, onClose, onSaved }: { task: Task;
     return () => { active = false; };
   }, [project.id, project.workspace_id, refresh]);
   async function save() {
+    if (blocked) return;
     setBusy(true); setError("");
     try { await api.repairBinding(task.id, selected); onSaved(); }
     catch (e) { setError(String(e)); }
@@ -35,11 +38,12 @@ export function BindingDialog({ task, project, onClose, onSaved }: { task: Task;
       })}
     </select></label>
     <p className="hint">{tr("binding.prepare")}</p>
+    {blocked && <p role="status">{tr(task.binding?.operation ? "dispatch.verify_required" : "flow.verify_required")}</p>}
     <button className="btn-ghost" disabled={busy || loading} onClick={() => setRefresh((n) => n + 1)}>{tr("binding.refresh")}</button>
     {error && <p role="alert" className="error">{error}</p>}
     <div className="dialog-actions">
       <button className="btn-secondary" disabled={busy} onClick={onClose}>{tr("common.cancel")}</button>
-      <button className="btn-primary" disabled={busy || loading || !selected || !!task.binding?.operation} onClick={save}>{tr("binding.save")}</button>
+      <button className="btn-primary" disabled={busy || loading || !selected || blocked} onClick={save}>{tr("binding.save")}</button>
     </div>
   </section></div>;
 }

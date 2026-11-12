@@ -5,6 +5,29 @@ import { describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 
 describe("拖入开发中列", () => {
+  it("完成后恢复待核实可人工绑定，保存后回到进行中并打开终端", async () => {
+    board.storedTask.binding = { state: "reserved", target: null, operation: null };
+    board.storedTask.flow = { can_repair_resume: true, session_id: "old-session", operation_id: "resume", kind: "start", state: "unknown", error: "flow.session_mismatch", pane_id: null, requested_status: "in_progress" };
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args, options) => {
+      if (command === "repair_binding") {
+        board.storedTask.status = "in_progress";
+        bindTask();
+        board.storedTask.flow = { session_id: null, operation_id: "manual-binding", kind: "start", state: "succeeded", error: "", pane_id: agent.pane_id };
+        return;
+      }
+      return base(command, args, options);
+    });
+    await renderBoard("done");
+    fireEvent.click(within(screen.getByRole("complementary", { name: "Herdr 终端" })).getByRole("button", { name: "修复绑定" }));
+    fireEvent.change(await screen.findByLabelText("独立 Agent"), { target: { value: agent.pane_id } });
+    fireEvent.click(screen.getByRole("button", { name: "保存绑定" }));
+    await screen.findByText("Herdr 已打开");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(within(column("in_progress")).getByText(board.storedTask.name)).toBeTruthy();
+    expect(vi.mocked(invoke).mock.calls.some(([name]) => ["start_task", "resolve_dispatch", "dispatch_to_herdr", "recover_lifecycle"].includes(name))).toBe(false);
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
   it("连接等待期间改变布局，连接成功后同步最新区域", async () => {
     board.storedTask.binding = { state: "valid", operation: null, target: {
       session: "default", workspace_id: "w1", pane_id: "w1:p1", terminal_id: "term1", agent: "codex", process_id: "100", title: "A", status: "idle",

@@ -441,15 +441,18 @@ pub(crate) fn ensure_available(conn: &Connection, target: &Target, task: &str) -
 
 impl Workflow {
     pub fn repair(&self, task: &str, pane: &str) -> Result<(), String> {
-        let (epoch, original) = {
+        let gate = crate::task_recovery::gate(self, task)?;
+        let _guard = gate.lock().map_err(err)?;
+        let (epoch, original, resume) = {
             let db = self.db.lock().map_err(err)?;
-            crate::lifecycle::ensure_idle(&db, task, None)?;
+            let resume = crate::lifecycle::repairable_resume(&db, task)?;
+            crate::lifecycle::ensure_idle(&db, task, resume.as_deref())?;
             crate::machines::ensure_enabled(&db, self.herdr.machine_id())?;
             let original = binding(&db, task)?;
             if original.operation.is_some() {
                 return Err("dispatch.verify_required".into());
             }
-            (crate::task_reset::epoch(&db, task)?, original)
+            (crate::task_reset::epoch(&db, task)?, original, resume)
         };
         let workspace = self.workspace(task)?;
         let mut target = self
@@ -468,7 +471,10 @@ impl Workflow {
         self.herdr.validate(&workspace, &target)?;
         let mut conn = self.db.lock().map_err(err)?;
         let tx = conn.transaction().map_err(err)?;
-        crate::lifecycle::ensure_idle(&tx, task, None)?;
+        if crate::lifecycle::repairable_resume(&tx, task)? != resume {
+            return Err("dispatch.operation_conflict".into());
+        }
+        crate::lifecycle::ensure_idle(&tx, task, resume.as_deref())?;
         crate::machines::ensure_enabled(&tx, self.herdr.machine_id())?;
         crate::task_reset::check_epoch(&tx, task, epoch)?;
         ensure_project_target(&tx, task, &target, self.herdr.session())?;
@@ -485,6 +491,21 @@ impl Workflow {
         // This is an automatic-resume pointer, not the conversation history.
         // Completion collects the selected terminal's actual session before closing it.
         tx.execute("DELETE FROM task_sessions WHERE task_id=?1", [task]).map_err(err)?;
+        if let Some(resume) = resume {
+            // Keep the failed automatic attempt and its error. A separate successful
+            // record describes the user's attachment, not an automatically verified resume.
+            let attached = uuid::Uuid::new_v4().to_string();
+            let at = chrono::Utc::now().to_rfc3339();
+            let evidence = serde_json::json!({"source":"manual_binding", "previous_operation_id":resume,
+                "operation_id":attached, "target":target, "at":at}).to_string();
+            tx.execute("UPDATE lifecycle_operations SET state='failed' WHERE id=?1 AND task_id=?2 AND state IN ('unknown','failed')",
+                params![resume,task]).map_err(err)?;
+            tx.execute("INSERT INTO lifecycle_operations(id,task_id,kind,state,target_json,evidence,created_at)
+                VALUES(?1,?2,'start','succeeded',?3,?4,?5)",
+                params![attached,task,serde_json::to_string(&target).map_err(err)?,evidence,at]).map_err(err)?;
+            tx.execute("UPDATE tasks SET status='in_progress',completed_at=NULL,execution_epoch=execution_epoch+1,updated_at=?2 WHERE id=?1",
+                params![task,at]).map_err(err)?;
+        }
         tx.commit().map_err(err)
     }
     pub(crate) fn workspace(&self, task: &str) -> Result<String, String> {

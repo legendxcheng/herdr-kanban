@@ -609,6 +609,8 @@ export function TaskBoard({ project, projects, machines = [], machineName, termi
         }} onSaved={async () => { await load(); }} /> :
       <TerminalPanel task={shellWorkspace ? null : selectedTask} workspace={shellWorkspace} machineName={shellWorkspace ? machineName ?? machineLabel(shellWorkspace.machine_id ?? "local", undefined) : machineFor(selectedTask)} maximized={terminalMaximized} onToggleMaximized={onToggleTerminalMaximized} onRepair={!shellWorkspace && selectedTask ? () => {
         if (selectedTask.binding?.operation) setRecoveringTaskId(selectedTask.id);
+        else if (selectedTask.flow?.state === "unknown" && !selectedTask.flow.can_repair_resume) void recoverFlow(selectedTask);
+        else if (selectedTask.flow?.state === "pending") return;
         else setRepairingTaskId(selectedTask.id);
       } : undefined} />}
       {creatingTask && project && <TaskFormDialog project={project} onClose={() => setCreatingTask(false)} onSaved={async () => { await load(); }} />}
